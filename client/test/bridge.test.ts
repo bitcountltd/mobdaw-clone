@@ -266,6 +266,27 @@ describe('schema v2', () => {
     expect(rr).toMatchObject({ start: 400, length: 700, sourceOffset: 350, fadeOut: 20, sourceHash: 'h' })
   })
 
+  it('splits a looping audio clip by advancing the phase, and forever goes right', () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 'a')
+    const c = addAudioClip(doc, { trackId: t, sourceHash: 'h', start: 0, length: 5000, sourceOffset: 50, loopLength: 1000, loopPhase: 800, forever: true })
+    const r = splitClip(doc, c, 700)!
+    expect(clipsMap(doc).get(c)!.toJSON()).toMatchObject({ length: 700, sourceOffset: 50, loopLength: 1000, loopPhase: 800, forever: false })
+    expect(clipsMap(doc).get(r)!.toJSON()).toMatchObject({ start: 700, length: 4300, sourceOffset: 50, loopLength: 1000, loopPhase: 500, forever: true })
+  })
+
+  it('sends loop length and phase for audio clips, and a long length for forever ones', () => {
+    const { doc, take } = setup()
+    const t = addTrack(doc, 'a')
+    take()
+    const c = addAudioClip(doc, { trackId: t, sourceHash: 'h', start: 0, length: 5000, loopLength: 1000, loopPhase: 200 })
+    expect(take()[0].slice(4)).toEqual([0, 5000, 0, 1, 0, 0, 0, 1000, 200])
+    updateClip(doc, c, { forever: true })
+    expect(take()[0].slice(5, 6)).toEqual([48000 * 24 * 3600])
+    updateClip(doc, c, { loopLength: 0 })
+    expect(take()[0].slice(5)).toEqual([5000, 0, 1, 0, 0, 0, 0, 0])
+  })
+
   it('cascades deletes in one transaction', () => {
     const doc = new Y.Doc()
     const t = addTrack(doc, 'm', 'midi')
@@ -559,5 +580,92 @@ describe('metronome, looping clips and note ranges', () => {
     deleteDevice(doc, a)
     expect(nextDrumKey(doc, t)).toBe(36) // the freed key comes back
     expect(getDevices(doc).find((d) => d.id === b)!.name).toBe('rim')
+  })
+
+  describe('live sources and engine-only clips', () => {
+    const live = () => {
+      const calls: [string, ...number[]][] = []
+      const at: [number, string, ...number[]][] = []
+      const loads: string[] = []
+      const doc = new Y.Doc()
+      const bridge = new Bridge(doc, {
+        call: (fn, ...a) => void calls.push([fn, ...a]),
+        source: () => {},
+        callAt: (t, fn, ...a) => void at.push([t, fn, ...a]),
+      }, async (hash) => (loads.push(hash), [new Float32Array(4)]), 48000, () => 0)
+      return { doc, bridge, calls, at, loads, take: () => calls.splice(0) }
+    }
+
+    it('reserves a live source with headroom, and binding a hash finalizes it instead of loading', async () => {
+      const { doc, bridge, take, loads } = live()
+      const h = bridge.liveSource(2)
+      expect(take()).toEqual([['engine_source_live_alloc', h, 2, 30 * 48000]])
+      expect(bridge.bindLiveSource('take', h)).toBe(true)
+      expect(take()).toEqual([['engine_source_live_finalize', h]])
+      const t = addTrack(doc, 'a')
+      take()
+      addSample(doc, meta('take'))
+      const c = addAudioClip(doc, { trackId: t, sourceHash: 'take', start: 10, length: 20 })
+      await Promise.resolve()
+      expect(loads).toEqual([])
+      const up = take().find((x) => x[0] === 'engine_clip_audio_upsert')!
+      expect(up.slice(3, 4)).toEqual([h]) // the clip plays the live source's handle
+      expect(c).toBeTruthy()
+      // a hash that already has a source of its own is not rebound
+      expect(bridge.bindLiveSource('take', bridge.liveSource())).toBe(false)
+    })
+
+    it('upserts an engine-only clip now or at a sample, and updates it', () => {
+      const { doc, bridge, take, at } = live()
+      const t = addTrack(doc, 'a')
+      take()
+      const now = bridge.liveClip(t, { source: 9, start: 100, length: 50, loopLength: 25, loopPhase: 5 })
+      expect(take()).toEqual([['engine_clip_audio_upsert', now, 2 - 1, 9, 100, 50, 0, 1, 0, 0, 0, 25, 5]])
+      const later = bridge.liveClip(t, { source: 9, start: 100, length: 50 }, 4000)
+      expect(take()).toEqual([])
+      expect(at).toEqual([[4000, 'engine_clip_audio_upsert', later, 1, 9, 100, 50, 0, 1, 0, 0, 0, 0, 0]])
+      expect(bridge.updateLiveClip(later, { length: 80 }, 5000)).toBe(true)
+      expect(at[1].slice(0, 2)).toEqual([5000, 'engine_clip_audio_upsert'])
+      expect(at[1][6]).toBe(80)
+      bridge.removeLiveClip(later, 6000)
+      expect(at[2]).toEqual([6000, 'engine_clip_remove', later])
+      expect(bridge.updateLiveClip(later, { length: 1 })).toBe(false)
+    })
+
+    it('a doc clip adopts the matching engine-only clip: same handle, identical upsert, no second clip', () => {
+      const { doc, bridge, take } = live()
+      const t = addTrack(doc, 'a')
+      const src = bridge.liveSource()
+      bridge.bindLiveSource('take', src)
+      addSample(doc, meta('take'))
+      take()
+      const h = bridge.liveClip(t, { source: src, start: 1000, length: 480, sourceOffset: 70, loopLength: 480, loopPhase: 0 })
+      const [first] = take()
+      const id = addAudioClip(doc, { trackId: t, sourceHash: 'take', start: 1000, length: 480, sourceOffset: 70, loopLength: 480, loopPhase: 0 })
+      const after = take()
+      expect(after.filter((x) => x[0] === 'engine_clip_audio_upsert')).toEqual([first]) // the very same call on the same handle
+      expect(after.some((x) => x[0] === 'engine_clip_remove')).toBe(false)
+      updateClip(doc, id, { start: 1001 })
+      expect(take()[0].slice(0, 2)).toEqual(['engine_clip_audio_upsert', h])
+      deleteClip(doc, id)
+      expect(take()).toEqual([['engine_clip_remove', h]])
+    })
+
+    it('adoptLiveClip by id works before the clip exists, and after (switching to the live handle)', () => {
+      const { doc, bridge, take } = live()
+      const t = addTrack(doc, 'a')
+      const src = bridge.liveSource()
+      bridge.bindLiveSource('take', src)
+      addSample(doc, meta('take'))
+      const h = bridge.liveClip(t, { source: src, start: 5, length: 10 })
+      const id = addAudioClip(doc, { trackId: t, sourceHash: 'take', start: 99, length: 10 }) // does not match: gets its own handle
+      const own = take().find((x) => x[0] === 'engine_clip_audio_upsert' && x[1] !== h)![1]
+      expect(own).not.toBe(h)
+      expect(bridge.adoptLiveClip(h, id)).toBe(true)
+      const after = take()
+      expect(after).toContainEqual(['engine_clip_remove', own])
+      expect(after.find((x) => x[0] === 'engine_clip_audio_upsert')![1]).toBe(h)
+      expect(bridge.adoptLiveClip(h, id)).toBe(false)
+    })
   })
 })

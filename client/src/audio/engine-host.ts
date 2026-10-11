@@ -53,6 +53,7 @@ export class EngineHost {
       else if (ev.data?.type === 'recstart') host.onrecstart?.(ev.data)
       else if (ev.data?.type === 'rec') host.onrec?.(ev.data)
       else if (ev.data?.type === 'level') host.onlevel?.(ev.data)
+      else if (ev.data?.type === 'cpu') host.oncpu?.(ev.data)
     }
     return host
   }
@@ -69,8 +70,8 @@ export class EngineHost {
     })
   }
 
-  /** Called with the processor's {type:'pos'} messages. */
-  onpos: ((m: { pos: number; playing: boolean }) => void) | null = null
+  /** Called with the processor's {type:'pos'} messages; `frame` is the context frame at which the engine stood at `pos`. */
+  onpos: ((m: { pos: number; frame: number; playing: boolean }) => void) | null = null
   /** Called with the processor's {type:'preview'} messages (one per playing preview). */
   onpreview: ((m: { h: number; pos: number; playing: boolean }) => void) | null = null
 
@@ -85,6 +86,9 @@ export class EngineHost {
   /** Input level: `peaks` are max |x| per 64 frames (BUCKET); `rec` when those frames went into the take. */
   onlevel: ((m: { peaks: Float32Array; rec: boolean }) => void) | null = null
 
+  /** DSP load, twice a second: `load` is the mean fraction of the audio deadline used, `peak` the worst single call's. */
+  oncpu: ((m: { load: number; peak: number }) => void) | null = null
+
   /** Report the input's level (while a microphone is armed). */
   meter(on: boolean) {
     this.node.port.postMessage({ type: 'meter', on })
@@ -95,9 +99,33 @@ export class EngineHost {
     this.node.port.postMessage({ type: 'monitor', h: h ?? 0, on: h != null })
   }
 
-  /** Start (`on`, with the channel count to capture) or end capturing the node's input. Capture begins once the engine plays. */
-  record(on: boolean, channels = 1) {
-    this.node.port.postMessage({ type: 'record', on, channels })
+  /**
+   * Start (`on`, with the channel count to capture) or end capturing the node's input. Capture begins once the engine plays.
+   * With `live` (a handle made by `engine_source_live_alloc`) every captured block is also appended to that source, so
+   * clips can play the take while it is recorded. Frame i of the live source is the input captured at timeline sample
+   * `recstart + i` (see `onrecstart`); the audio the performer *played* at timeline T is in frame `T - recstart + latency`.
+   */
+  record(on: boolean, channels = 1, live = 0) {
+    this.node.port.postMessage({ type: 'record', on, channels, live })
+  }
+
+  /**
+   * Call `exports[fn](enginePtr, ...args)` at timeline sample `at`: the worklet cuts its render block there, so the call
+   * takes effect on exactly that sample. If the engine's position is already at or past `at` (or a seek jumps over it),
+   * the call is applied at once. A call whose `at` is still ahead while the transport is stopped waits for the position to
+   * reach it. Calls with the same `at` run in the order they were sent.
+   *
+   * Ordering with `call`: ordinary calls apply the moment the worklet receives them, before the next render, whatever
+   * `at` the scheduled ones carry; only scheduled calls are ordered among themselves (by `at`, then by arrival). So send
+   * everything a scheduled call depends on with `call` first, or schedule it too.
+   */
+  callAt(at: number, fn: string, args: number[] = []) {
+    this.node.port.postMessage({ type: 'callAt', at, fn, args })
+  }
+
+  /** Forget the scheduled calls that have not run yet. */
+  clearScheduled() {
+    this.node.port.postMessage({ type: 'callAtClear' })
   }
 
   /** Call `exports[fn](enginePtr, ...args)` in the worklet; calls apply in order. */

@@ -1,6 +1,6 @@
 // Drum grid for one MIDI clip: the same notes as the piano roll, a row per drum (an instrument on a single note) and
 // a column per step (4 to a beat). Click a cell to toggle a hit. Notes on pitches with no drum row are kept, just not shown.
-import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isForever, isLooping, patternTicks, setMidiView, updateClip, type Device, type MidiClip, type Note } from '@mobdaw/shared'
+import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isLooping, patternTicks, setMidiView, updateClip, type Device, type MidiClip, type Note } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
 import { noteName } from './noteName'
@@ -17,9 +17,6 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
 
   const bpm = h('input', { type: 'number', min: 20, max: 400, step: 1, title: 'clip bpm', disabled: readOnly })
   const beats = h('input', { type: 'number', min: 1, step: 1, title: 'pattern length in beats (3 for 3/4)', disabled: readOnly })
-  const loop = h('button', { title: 'repeat the pattern to the end of the clip (drag the clip\'s right edge to extend it)', disabled: readOnly }, 'loop')
-  const forever = h('button', { title: 'keep repeating the pattern past the end of the clip, for as long as the transport runs', disabled: readOnly, hidden: true,
-    onclick: () => clip && updateClip(doc, clip.id, { forever: !clip.forever }) }, 'forever')
   const view = h('button', { title: 'show this clip as a piano roll', disabled: readOnly, onclick: () => clip && setMidiView(doc, clip.id, 'piano') }, 'drum grid ▾')
   bpm.onchange = () => clip && Number(bpm.value) > 0 && updateClip(doc, clip.id, { bpm: Number(bpm.value) })
   // The pattern is the loop when the clip loops, else the whole clip.
@@ -28,8 +25,7 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
     if (!clip || !(n >= 1)) return
     updateClip(doc, clip.id, isLooping(clip) ? { loopTicks: n * clip.ppq } : { lengthTicks: n * clip.ppq })
   }
-  loop.onclick = () => clip && updateClip(doc, clip.id, { loopTicks: isLooping(clip) ? 0 : clip.lengthTicks })
-  const head = h('div', { className: 'ne-head' }, view, h('label', {}, 'bpm ', bpm), h('label', {}, 'beats ', beats), loop, forever)
+  const head = h('div', { className: 'ne-head' }, view, h('label', {}, 'bpm ', bpm), h('label', {}, 'beats ', beats))
   // inputs must not start a clip drag / zoom-out click on the clip underneath
   head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button') && e.stopPropagation()
   const grid = h('div', { className: 'dg' })
@@ -65,9 +61,6 @@ export function drumGrid({ doc, undo, readOnly }: DrumGridDeps) {
     const looping = isLooping(c)
     if (document.activeElement !== bpm) bpm.value = String(c.bpm)
     if (document.activeElement !== beats) beats.value = String(pattern / c.ppq)
-    loop.classList.toggle('on', looping)
-    forever.hidden = !looping
-    forever.classList.toggle('on', isForever(c))
 
     // a row per drum, in the synths lane's order (a wide-range instrument has none)
     const drums = instruments.filter(isDrum)

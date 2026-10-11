@@ -3,7 +3,7 @@
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addClickTrack, addDevice, addDrum, isLooping, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
-  deleteDevice, deleteLooper, addNextLooper, isDrum, isForever, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples, metaMap,
+  deleteDevice, deleteLooper, addNextLooper, isDrum, isForever, passLength, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples, metaMap,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type SampleMeta, type Track,
@@ -13,6 +13,9 @@ import { homeLink } from '../router'
 import { drawWave, onPeaks, peaksFor, storedPeaks } from '../audio/peaks'
 import { shape } from '../audio/probe'
 import { getInputOffset, setInputOffset, type Captured } from '../audio/recording'
+import { ACTIONS, type Action } from '../audio/pedal'
+import { actionFor, getBindings, getMidiInput, midiSupported, onPress, openMidi } from '../midi'
+import { pedalSession } from './pedalSession'
 import type { PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
 import { renderProject } from '../audio/render'
@@ -29,7 +32,7 @@ import type { FilterChange, FilterMember } from './filterCurve'
 import { LOOP_COLORS, looperCard } from './loopers'
 import { drumGrid } from './drumGrid'
 import { noteEditor } from './noteEditor'
-import { clamp, dragPointer, grabAt, rotateTick, snapTracker, trimBlock, trimMidiLeft, type Grab } from './blocks'
+import { clamp, dragPointer, grabAt, passBoundaries, rotatePhase, rotateTick, snapTracker, trimBlock, trimMidiLeft, type Grab } from './blocks'
 import { closedBy, deleteMenu, popover } from './popover'
 import { fmt, transportControls, type TransportControls } from './transport'
 import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
@@ -86,6 +89,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let monitored: string | null = null // the track the engine is currently monitoring
   let take: { trackId: string; trackName: string; start: number; journal: ReturnType<typeof takeJournal> } | null = null // the take being recorded
   let locks = new Map<string, string>() // track id -> who is recording on it (someone else)
+  let pedalOn = false // loop pedal mode (local UI state): MIDI presses and the keys 1-4 drive loops
+  let pedal: ReturnType<typeof pedalSession> | null = null
+  let offPedal = () => {} // stops listening to the MIDI input
+  const pedalEls = new Map<string, HTMLElement>() // the layer being recorded and the live loops, drawn in their lanes
   const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
   const recRegions = new Map<string, HTMLElement>()
   let armed: string | null = null // looper whose region is being drawn (local UI state)
@@ -99,7 +106,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let autoInfos = new Map<string, Map<string, AutoInfo>>() // owner id -> param -> what drives it
   const lanes = new Map<string, Lane>()
   const clipEls = new Map<string, HTMLElement>()
-  const waves = new Map<string, { cv: HTMLCanvasElement; label: HTMLElement; sig: string; pk?: Float32Array; v0: number; v1: number }>()
+  const waves = new Map<string, { cv: HTMLCanvasElement; seams: HTMLElement; first: HTMLElement; label: HTMLElement; sig: string; pk?: Float32Array; v0: number; v1: number }>()
   let remoteDrags = new Map<string, Map<number, number>>()
   /** A card is being dragged by its title bar: merged filter views split until it lands. */
   let reordering = false
@@ -112,6 +119,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     record: readOnly ? undefined : { onToggle: () => void toggleRecord(), onMenu: (e) => offsetMenu(e) },
   })
   const status = h('span', { className: 'dim' })
+  const cpu = h('span', { className: 'cpu', title: 'audio engine load: share of the real-time budget used by DSP (peak call in the last half second)' })
+  const showCpu = (m: { load: number; peak: number }) => {
+    const pct = Math.round(m.load * 100)
+    cpu.textContent = `cpu ${pct}%`
+    cpu.classList.toggle('hot', m.peak >= 0.8)
+  }
+  const pedalText = h('span', { className: 'pedal-st', title: 'loop pedal: the number of loops going; red while a layer is recording' })
   const presence = h('span', { className: 'presence' })
   const chatBtn = h('button', { className: 'chat-btn', title: 'chat', onclick: () => {
     chat.setOpen(!chat.open)
@@ -136,6 +150,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
           set: (r) => isBlank() && metaMap(doc).set('sampleRate', r),
         },
         onInputChanged: () => void reopenInput(),
+        onPedalChanged: readOnly ? undefined : () => {
+          if (pedalOn && !getMidiInput()) void setPedal(false)
+          else if (pedalOn) listenPedal() // the input may have changed
+          syncPedalBtn()
+        },
       })
     } }, projectName)
     return el
@@ -149,12 +168,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function rateChanged() {
     const next = getSampleRate(doc)
     if (!pb || next === rate) return
+    setPedal(false)
     pb.destroy()
     rate = next
     armedTrack = null
     try {
       pb = openPlayback(doc, s.projectId, rate, s.userId)
       pb.recorder.onlevel = drawLevel
+      pb.oncpu = showCpu
     } catch (err) {
       pb = null
       status.textContent = `sample rate: ${(err as Error).message}`
@@ -192,13 +213,23 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (t) updateTrack(doc, t.id, { muted: !t.muted })
     else addClickTrack(doc)
   } })
-  transport.el.append(clickBtn) // sits right of the time readout
+  const pedalBtn = h('button', { className: 'pedal-btn', onclick: () => void setPedal(!pedalOn) }, 'pedal')
+  transport.el.append(clickBtn, pedalBtn) // sit right of the time readout
+  /** The pedal needs Web MIDI (not in Safari) and a chosen input; otherwise the button says why it is off. */
+  function syncPedalBtn() {
+    const why = readOnly ? 'you can only view this project' : !midiSupported() ? 'loop pedal: this browser has no Web MIDI (try Chrome or Firefox)'
+      : !getMidiInput() ? 'loop pedal: choose a MIDI input in the project settings first' : ''
+    pedalBtn.disabled = !!why && !pedalOn
+    pedalBtn.title = why || 'loop pedal: foot switches record, loop and overdub on the beat (keys 1-4 do the same). Learn the switches in the project settings'
+    pedalBtn.classList.toggle('on', pedalOn)
+  }
+  syncPedalBtn()
   const bar = h('header', { className: 'bar' },
     h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), projectTitle(),
       readOnly ? h('span', { className: 'dim' }, 'view only') : null,
       s.local ? h('span', { className: 'dim', title: 'saved in this browser, on this device' }, 'local') : null),
     transport.el,
-    h('div', { className: 'bar-r' }, status, presence, h('div', { className: 'bar-btns' }, exportBtn, s.local ? null : chatBtn)))
+    h('div', { className: 'bar-r' }, pedalText, cpu, status, presence, h('div', { className: 'bar-btns' }, exportBtn, s.local ? null : chatBtn)))
   const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }))
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)
@@ -280,16 +311,18 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   function toggle() {
     if (!pb) return
     if (pb.playing) stop()
-    else {
-      pb.play()
-      transport.setPlaying(true)
-      tick()
-      ensurePreviewTick() // the loopers' playheads
-    }
+    else startTransport()
+  }
+  function startTransport() {
+    pb?.play()
+    transport.setPlaying(true)
+    tick()
+    ensurePreviewTick() // the loopers' playheads
   }
   function stop() {
     const t = take
     take = null
+    void pedal?.end() // (the take must end before the engine stops)
     const captured = t ? pb?.recorder.stop() : undefined // (asks the worklet to end the take before the engine stops)
     pb?.stop()
     transport.setPlaying(false)
@@ -323,6 +356,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   let preparing = false // asking for the microphone: ignore further presses
   async function toggleRecord() {
     if (!pb || readOnly || preparing) return
+    if (pedal?.active) return void (status.textContent = 'record: the loop pedal is recording')
     if (take) return stop()
     if (!armedTrack || !tracksMap(doc).has(armedTrack) || !pb.recorder.armed) {
       preparing = true
@@ -377,6 +411,86 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   const takeCtx = (): TakeCtx => ({ doc, projectId: s.projectId, me: s.userId == null ? null : { id: s.userId, name: s.user.username }, rate })
+
+  // --- loop pedal (docs/engine.md §9.2, audio/pedal.ts): MIDI presses are placed on the timeline where they were heard
+  /** Pedal mode on (the microphone and the MIDI input are opened) or off (the session, if any, ends). */
+  async function setPedal(on: boolean) {
+    if (on === pedalOn) return
+    if (!on) {
+      pedalOn = false
+      offPedal()
+      const ended = pedal?.end()
+      pedal = null
+      void ended?.then(() => !pedalOn && !armedTrack && !take && pb?.recorder.disarm())
+      if (!ended && !armedTrack && !take) pb?.recorder.disarm()
+      return afterPedal()
+    }
+    if (!pb || readOnly || take || !midiSupported() || !getMidiInput()) return
+    try {
+      await openMidi()
+      await pb.recorder.arm()
+    } catch (err) {
+      status.textContent = `pedal: ${(err as Error).message}`
+      return
+    }
+    if (destroyed || pedalOn || !pb) return
+    pedalOn = true
+    status.textContent = ''
+    pedal = pedalSession({
+      doc, undo, pb, rate, projectId: s.projectId, takeCtx, play: startTransport, changed: afterPedal,
+      fail: (m) => (status.textContent = m),
+    })
+    listenPedal()
+    afterPedal()
+  }
+  function listenPedal() {
+    offPedal()
+    offPedal = onPress(getMidiInput(), (t, at) => {
+      const a = actionFor(getBindings(), t)
+      if (a) pedalPress(a, at)
+    })
+  }
+  function pedalPress(a: Action, at: number) {
+    if (!pedal || destroyed) return
+    if (take) return void (status.textContent = 'pedal: stop recording first')
+    pedal.press(a, at)
+  }
+  const afterPedal = () => (syncPedalBtn(), draw())
+
+  /** The pedal's layer and loops, drawn into their lanes like the take in progress; the text beside the CPU meter says what is going on. */
+  function drawPedal() {
+    const v = pedal?.view()
+    const want = new Map<string, { trackId: string; start: number; end: number; pass: number; cls: string; label: string }>()
+    const now = position()
+    if (v?.layer) want.set('layer', { trackId: v.layer.trackId, start: v.layer.start, end: now, pass: 0, cls: 'clip recording', label: 'recording' })
+    for (const l of v?.loops ?? []) {
+      // a loop with no end is drawn to the seam after the playhead, so its leading edge stays ahead of it
+      const end = l.stopAt ?? l.start + Math.max(1, Math.ceil((now - l.start) / l.pass)) * l.pass
+      want.set(`loop:${l.id}`, { trackId: l.trackId, start: l.start, end, pass: l.pass, cls: `clip live-loop${l.stopAt == null ? ' forever' : ''}`, label: `loop ${l.id}` })
+    }
+    for (const [k, e] of pedalEls) if (!want.has(k)) { e.remove(); pedalEls.delete(k) }
+    for (const [k, w] of want) {
+      const body = lanes.get(w.trackId)?.body
+      if (!body) continue
+      let e = pedalEls.get(k)
+      if (!e) pedalEls.set(k, (e = h('div', { className: w.cls }, h('i', { className: 'seams' }), h('span', { className: 'label' }, w.label))))
+      if (e.parentElement !== body) body.append(e)
+      const width = x(Math.max(0, w.end - w.start))
+      e.hidden = width < 1
+      e.style.left = `${x(w.start)}px`
+      e.style.width = `${width}px`
+      const seams = e.firstElementChild as HTMLElement
+      const pass = x(w.pass)
+      seams.style.display = w.pass && width > pass ? '' : 'none'
+      seams.style.left = `${pass}px`
+      seams.style.width = `${Math.max(0, width - pass)}px`
+      seams.style.backgroundSize = `${pass}px 100%`
+    }
+    const n = (v?.loops ?? []).filter((l) => l.stopAt == null || l.stopAt > now).length
+    const text = !pedalOn ? '' : v?.layer ? 'pedal · rec' : v ? `pedal · ${n ? `${n} loop${n > 1 ? 's' : ''}` : 'ready'}` : 'pedal · ready'
+    if (pedalText.textContent !== text) pedalText.textContent = text
+    pedalText.classList.toggle('rec', !!v?.layer)
+  }
 
   /** Right-click on ●: the manual input delay for the microphone in use (added to the automatic compensation). */
   function offsetMenu(e: MouseEvent) {
@@ -447,6 +561,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       status.textContent = 'take stopped: it reached the longest take that can be played back yet'
       return
     }
+    if (pedal?.active && (position() - pedal.since) * pb.recorder.info!.channels * 2 >= PLAYBACK_MAX_BYTES - 1024 * 1024) {
+      stop()
+      status.textContent = 'pedal take stopped: it reached the longest take that can be played back yet'
+      return
+    }
     drawPlayhead()
     const now = performance.now()
     if (now - lastAware > 100) {
@@ -462,9 +581,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     rulerHead.style.left = `${x(p)}px`
     transport.setTime(p / rate)
     drawRecRegions()
+    drawPedal()
   }
   function seek(smp: number) {
-    if (take) return // a take is one continuous stretch of the timeline
+    if (take || pedal?.active) return // a take is one continuous stretch of the timeline
     pb?.seek(smp)
     drawPlayhead()
   }
@@ -1250,11 +1370,17 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (!e) {
         e = h('div', { className: 'clip' })
         if (c.kind === 'audio') {
-          const w = { cv: h('canvas', { className: 'wave' }), label: h('span', { className: 'label' }), sig: '', v0: 0, v1: 0 }
+          const w = { cv: h('canvas', { className: 'wave' }), seams: h('i', { className: 'seams' }), first: h('i', { className: 'seam-first' }), label: h('span', { className: 'label' }), sig: '', v0: 0, v1: 0 }
           waves.set(c.id, w)
-          e.append(w.cv, w.label)
+          e.append(w.cv, w.seams, w.first, w.label)
         }
         e.onpointerdown = (ev) => clipDown(ev, c.id)
+        e.onpointermove = (ev) => { // which handle is under the pointer drives the cursor and the edge highlight (CSS, by data-zone)
+          if (ev.buttons) return
+          const cur = clipsMap(doc).get(c.id)?.toJSON() as Clip | undefined
+          const zone = cur && !readOnly && !lanes.get(cur.trackId)?.src && !locks.has(cur.trackId) ? clipZone(ev, e!, cur) : 'move'
+          if (e!.dataset.zone !== zone) e!.dataset.zone = zone
+        }
         e.addEventListener('contextmenu', (ev) => {
           ev.preventDefault()
           ev.stopPropagation() // not the lane's background menu underneath
@@ -1268,10 +1394,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (e.parentElement !== host) host.append(e)
       e.style.left = `${(c.start / rate) * cpps}px`
       // a `forever` clip is drawn out to the end of the scroll area, which its finite part alone decides
-      const forever = c.kind === 'midi' && isForever(c)
+      const forever = isForever(c)
       const width = Math.max(2, ((forever ? Math.max(clipLength(c, rate), total - c.start) : clipLength(c, rate)) / rate) * cpps)
       e.style.width = `${width}px`
       e.classList.toggle('forever', forever)
+      e.classList.toggle('looping', isLooping(c))
+      e.classList.toggle('loopable', !readOnly && !lane.src && !locks.has(c.trackId))
       let canPlay = true
       if (c.kind === 'audio') {
         const meta = samples[c.sourceHash]
@@ -1284,6 +1412,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         e.classList.toggle('missing', st === 'missing')
         const w = waves.get(c.id)!
         if (w.label.textContent !== label) w.label.textContent = label
+        drawSeams(c, w, width, cpps)
         const pk = !pb || !canPlay ? undefined : st ? storedPeaks(meta, rate) : peaksFor(s.projectId, c.sourceHash, rate)
         if (pk) drawVisibleWave(c, w, pk, width, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps, scroller: scroll, off: HEADER })
         else w.cv.style.display = 'none'
@@ -1329,7 +1458,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const left = f.off + (c.start / rate) * f.pps // clip's left edge in scroller-content px
     const need0 = Math.max(0, f.scroller.scrollLeft + f.off - left), need1 = Math.min(width, f.scroller.scrollLeft + viewW - left)
     if (need1 <= need0) { w.cv.style.display = 'none'; return }
-    const sig = `${f.pps}|${c.sourceOffset}|${c.length}|${dpr}`
+    const pass = isLooping(c) ? c.loopLength! : 0
+    const phase = pass ? c.loopPhase ?? 0 : 0
+    const sig = `${f.pps}|${c.sourceOffset}|${c.length}|${pass}|${phase}|${width}|${dpr}`
     if (w.sig === sig && w.pk === pk && w.v0 <= need0 && w.v1 >= need1) { w.cv.style.display = ''; return }
     const v0 = Math.max(0, Math.floor(need0 - viewW)), v1 = Math.min(width, Math.ceil(need1 + viewW))
     Object.assign(w, { sig, pk, v0, v1 })
@@ -1339,7 +1470,41 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     w.cv.width = Math.max(1, Math.round((v1 - v0) * dpr))
     w.cv.height = Math.round(LANE_H * dpr)
     const fpp = rate / f.pps // source frames per css px
-    drawWave(w.cv, pk, c.sourceOffset + v0 * fpp, (v1 - v0) * fpp)
+    const passPx = pass / fpp
+    if (!pass || passPx < 2) return drawWave(w.cv, pk, c.sourceOffset + v0 * fpp, (v1 - v0) * fpp)
+    // A looping clip draws the pass once per repeat: pass k covers clip px [k * passPx - phasePx, (k + 1) * passPx - phasePx),
+    // the first (cut by the clip's start) from `phase` into the pass, the repeats faded. Each piece is drawn on a scratch
+    // canvas (it must be in the document for drawWave to read the colour) and copied in.
+    const phasePx = phase / fpp
+    const g = w.cv.getContext('2d')!
+    const tmp = h('canvas', { className: 'wave' })
+    w.cv.after(tmp)
+    g.clearRect(0, 0, w.cv.width, w.cv.height)
+    for (let k = Math.max(0, Math.floor((v0 + phasePx) / passPx)); k * passPx - phasePx < v1; k++) {
+      const s0 = Math.max(0, k * passPx - phasePx) // the piece in clip px, cut to the clip's start and to what the canvas holds
+      const a = Math.max(s0, v0), b = Math.min((k + 1) * passPx - phasePx, v1)
+      if (b - a < 1 / dpr) continue
+      tmp.width = Math.max(1, Math.round((b - a) * dpr))
+      tmp.height = w.cv.height
+      drawWave(tmp, pk, c.sourceOffset + (a + phasePx - k * passPx) * fpp, (b - a) * fpp)
+      g.globalAlpha = k ? 0.35 : 1
+      g.drawImage(tmp, Math.round((a - v0) * dpr), 0)
+    }
+    g.globalAlpha = 1
+    tmp.remove()
+  }
+
+  /** A looping audio clip's seams: a faint line where each pass ends, drawn as one repeating background from the first seam on. */
+  function drawSeams(c: Clip & { kind: 'audio' }, w: { seams: HTMLElement; first: HTMLElement }, width: number, cpps: number) {
+    const passPx = ((c.loopLength ?? 0) / rate) * cpps
+    const first = (((c.loopLength ?? 0) - (c.loopPhase ?? 0)) / rate) * cpps
+    const on = isLooping(c) && passPx >= 3 && first < width
+    w.seams.style.display = on ? '' : 'none'
+    if (!on) return
+    w.seams.style.left = `${first}px`
+    w.seams.style.width = `${width - first}px`
+    w.seams.style.backgroundSize = `${passPx}px 100%`
+    w.first.style.left = `${first - 1}px`
   }
 
   /**
@@ -1371,6 +1536,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         const edge = h('i', { className: 'loop-edge' })
         edge.style.left = `${((k * lp) / extent) * 100}%`
         marks.push(edge)
+        if (k === 1) { // the pass handle lights up here when hovered
+          const first = h('i', { className: 'seam-first' })
+          first.style.left = `calc(${(lp / extent) * 100}% - 1px)`
+          marks.push(first)
+        }
       }
       for (const n of shown) {
         const tick = k * lp + n.tick
@@ -1403,13 +1573,46 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     draw()
   }
 
+  /**
+   * Where each looping clip's pass restarts (samples): one per repeat boundary inside the clip, so a clip
+   * can be trimmed to land on the repeats (a `forever` clip's seams go on for ten minutes past its start).
+   */
+  function repeatSeams(clips: Clip[]): number[] {
+    const out: number[] = []
+    for (const c of clips) {
+      if (!isLooping(c)) continue
+      const period = passLength(c, rate)
+      const phase = c.kind === 'audio' ? c.loopPhase ?? 0 : 0
+      const end = c.start + (isForever(c) ? Math.max(clipLength(c, rate), 600 * rate) : clipLength(c, rate))
+      out.push(...passBoundaries(c.start, period, phase, end - 1))
+    }
+    return out
+  }
+
+  /** The source's length in frames (audio clips can't reach past it); infinite for MIDI and unknown sources. */
+  const sourceFrames = (c: Clip) => (c.kind === 'audio' ? (getSamples(doc)[c.sourceHash]?.duration ?? Infinity) * rate : Infinity)
+
+  /**
+   * Which handle of clip `c` (drawn as `el`) is under the pointer. The right edge loops (the whole height once the clip
+   * loops or is open as an editor, else its upper half; the lower half trims); a looping clip's first seam has the pass
+   * handle on its lower half.
+   */
+  function clipZone(ev: PointerEvent, el: HTMLElement, c: Clip): Grab {
+    const box = el.getBoundingClientRect()
+    const looping = isLooping(c)
+    const open = c.kind === 'midi' && c.id === editing
+    const cpps = lanes.get(c.trackId)?.src?.pps ?? pps
+    const seam = looping && !open ? box.left + ((passLength(c, rate) - (c.kind === 'audio' ? c.loopPhase ?? 0 : 0)) / rate) * cpps : undefined
+    return grabAt(ev.clientX, box, { y: ev.clientY, looping: looping || open, seam })
+  }
+
   // --- clip dragging (live Yjs updates, rAF-throttled, one undo step per drag)
   function clipDown(ev: PointerEvent, id: string) {
     if (ev.button !== 0) return
     const clip = getClips(doc).find((c) => c.id === id)
     if (!clip) return
     const box = (ev.currentTarget as HTMLElement).getBoundingClientRect()
-    const mode = grabAt(ev.clientX, box)
+    const mode = clipZone(ev, ev.currentTarget as HTMLElement, clip)
     noteSel = null
     padSel = null
     const lane0 = lanes.get(clip.trackId)
@@ -1426,20 +1629,47 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     ev.preventDefault()
     const grab = ev.clientX - box.left // where in the clip it was picked up
     let curTrack = clip.trackId
-    const srcFrames = clip.kind === 'audio' ? (getSamples(doc)[clip.sourceHash]?.duration ?? Infinity) * rate : Infinity
+    const srcFrames = sourceFrames(clip)
     const notes0 = clip.kind === 'midi' ? getNotes(doc).filter((n) => n.clipId === id) : []
     // snap targets: the timeline start, the playhead and the edges of every other clip and pad (source lanes keep their own time)
+    const clips = getClips(doc).filter((c) => c.id !== id && !lanes.get(c.trackId)?.src)
+    const length = clipLength(clip, rate)
+    // a `forever` clip's real extent is off screen: the loop handle at its drawn end sets the extent from there
+    const drawn = isForever(clip) ? (box.width / cpps) * rate : length
+    const pass0 = passLength(clip, rate)
+    const phase0 = clip.kind === 'audio' && isLooping(clip) ? clip.loopPhase ?? 0 : 0
+    const seam0 = clip.start + pass0 - phase0
     const snapAt = snapTracker([
       0,
       Math.round(position()),
-      ...getClips(doc).filter((c) => c.id !== id && !lanes.get(c.trackId)?.src).flatMap((c) => [c.start, c.start + clipLength(c, rate)]),
+      ...clips.flatMap((c) => [c.start, c.start + clipLength(c, rate)]),
       ...getPads(doc).flatMap((p) => [p.start, p.start + p.length]),
+      ...repeatSeams(clips),
+      ...(mode === 'loop' ? passBoundaries(clip.start, pass0, phase0, clip.start + drawn + 600 * rate) : []), // whole passes of this clip
     ], (REARM_PX / pps) * rate)
-    const length = clipLength(clip, rate)
+    const snapTo = (m: PointerEvent, at: number, d: number) => { // soft-snap the handle at sample `at` (moved `d`), with the snap line
+      const snap = m.altKey ? null : snapAt(at + d, 0, (SNAP_PX / pps) * rate)
+      snapLine.hidden = !snap
+      if (snap) snapLine.style.left = `${HEADER + x(snap.at)}px`
+      return snap ? snap.at - at : d
+    }
     dragPointer(ev, {
       onDrag: (m) => {
         if (!clipsMap(doc).has(id)) return
-        if (mode !== 'move') return trimClip(clip, mode, Math.round(((m.clientX - ev.clientX) / cpps) * rate), srcFrames, notes0)
+        if (mode === 'loop') return loopClip(clip, drawn + snapTo(m, clip.start + drawn, Math.round(((m.clientX - ev.clientX) / cpps) * rate)), srcFrames)
+        if (mode === 'pass') {
+          const d = Math.round(((m.clientX - ev.clientX) / cpps) * rate)
+          return passClip(clip, pass0 + (clip.kind === 'audio' ? snapTo(m, seam0, d) : d), srcFrames)
+        }
+        if (mode !== 'move') {
+          let d = Math.round(((m.clientX - ev.clientX) / cpps) * rate)
+          // an audio clip's edge snaps to the same targets, repeat seams included, so it can be trimmed to land on them
+          const snap = clip.kind !== 'audio' || m.altKey ? null : snapAt(mode === 'l' ? clip.start + d : clip.start + length + d, 0, (SNAP_PX / pps) * rate)
+          if (snap) d += snap.at - (mode === 'l' ? clip.start + d : clip.start + length + d)
+          snapLine.hidden = !snap
+          if (snap) snapLine.style.left = `${HEADER + x(snap.at)}px`
+          return trimClip(clip, mode, d, srcFrames, notes0)
+        }
         // Absolute position under the pointer, in the target lane's own scale (source lanes differ).
         const hit = targetAt(m.clientY, clip.kind)
         if (hit) curTrack = hit
@@ -1460,14 +1690,56 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   }
 
   /**
+   * Drag a clip's right edge to change its extent to `extent` samples; the pass repeats to fill it. A clip that wasn't
+   * looping starts to, with its current length as the pass. Dragging it back to a pass or less ends the loop (isLooping),
+   * and a `forever` clip stops being forever.
+   */
+  function loopClip(clip: Clip, extent: number, srcFrames: number) {
+    const looping = isLooping(clip)
+    const forever = clip.forever ? { forever: false } : {}
+    if (clip.kind === 'audio') {
+      updateClip(doc, clip.id, { length: Math.max(Math.round(MIN_SEC * rate), Math.round(extent)), ...(looping ? {} : startPass(clip, srcFrames)), ...forever })
+      return
+    }
+    const step = clip.ppq / 4
+    const lengthTicks = Math.max(step, Math.round((extent * clip.bpm * clip.ppq) / (60 * rate) / step) * step)
+    updateClip(doc, clip.id, { lengthTicks, ...(looping ? {} : { loopTicks: clip.lengthTicks }), ...forever })
+  }
+
+  /** The fields that make a non-looping clip's current length its pass, dropping any stale pass first (its phase moves into the source offset). */
+  function startPass(clip: Clip & { kind: 'audio' }, srcFrames: number) {
+    const sourceOffset = clip.sourceOffset + (clip.loopLength ? clip.loopPhase ?? 0 : 0)
+    return { sourceOffset, loopLength: Math.min(clip.length, srcFrames - sourceOffset), loopPhase: 0 }
+  }
+
+  /** Drag a looping clip's first seam: the pass becomes `pass` samples (audio) or ticks' worth (MIDI, in 1/16 steps) and the repeats re-tile. */
+  function passClip(clip: Clip, pass: number, srcFrames: number) {
+    if (clip.kind === 'audio') {
+      const lo = Math.round(MIN_SEC * rate) + (clip.loopPhase ?? 0) // the first seam stays after the clip's start
+      updateClip(doc, clip.id, { loopLength: Math.round(clamp(pass, lo, Math.max(lo, Math.min(clip.length, srcFrames - clip.sourceOffset)))) })
+      return
+    }
+    const step = clip.ppq / 4
+    updateClip(doc, clip.id, { loopTicks: clamp(Math.round((pass * clip.bpm * clip.ppq) / (60 * rate) / step) * step, step, clip.lengthTicks) })
+  }
+
+  /**
    * Resize a clip from either edge, non-destructively (the source audio and the notes stay whole;
    * dragging the edge back out restores them). `dSmp` is the pointer delta since the grab.
    */
-  function trimClip(clip: Clip, mode: Exclude<Grab, 'move'>, dSmp: number, srcFrames: number, notes0: Note[]) {
+  function trimClip(clip: Clip, mode: 'l' | 'r', dSmp: number, srcFrames: number, notes0: Note[]) {
     const minLength = MIN_SEC * rate
     if (clip.kind === 'audio') {
-      const t = trimBlock(mode, clip, dSmp, { minLength, slackLeft: Math.min(clip.sourceOffset, clip.start), maxLength: srcFrames - clip.sourceOffset })
-      updateClip(doc, clip.id, mode === 'l' ? { start: t.start, length: t.length, sourceOffset: clip.sourceOffset + t.d } : { length: t.length })
+      if (isLooping(clip)) { // the left edge turns the pass instead (the seams stay put); the right edge is the loop handle
+        const t = trimBlock('l', clip, dSmp, { minLength, slackLeft: clip.start })
+        updateClip(doc, clip.id, { start: t.start, length: t.length, loopPhase: rotatePhase(clip.loopPhase ?? 0, t.d, clip.loopLength!) })
+        return
+      }
+      // a stale pass (the clip was pulled back to a pass or less) goes, so trimming it longer can't start it looping
+      const stale = clip.loopLength ? { loopLength: 0, loopPhase: 0 } : {}
+      const sourceOffset = clip.sourceOffset + (clip.loopLength ? clip.loopPhase ?? 0 : 0)
+      const t = trimBlock(mode, clip, dSmp, { minLength, slackLeft: Math.min(sourceOffset, clip.start), maxLength: srcFrames - sourceOffset })
+      updateClip(doc, clip.id, { ...stale, ...(mode === 'l' ? { start: t.start, length: t.length, sourceOffset: sourceOffset + t.d } : { length: t.length, sourceOffset }) })
       return
     }
     // MIDI: lengths are in ticks, snapped to 1/16 notes
@@ -1475,7 +1747,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const step = clip.ppq / 4
     const dTicks = dSmp * k
     if (mode === 'r') {
-      updateClip(doc, clip.id, { lengthTicks: Math.max(step, Math.round((clip.lengthTicks + dTicks) / step) * step) })
+      updateClip(doc, clip.id, { lengthTicks: Math.max(step, Math.round((clip.lengthTicks + dTicks) / step) * step), loopTicks: 0 }) // (clears a stale pass)
       return
     }
     // Left edge: the start moves and every note moves back by the same ticks, so the music stays put on the
@@ -1530,9 +1802,19 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
       select([])
     }]]
-    const midi = getClips(doc).find((c) => c.id === clipId)
-    if (midi?.kind === 'midi') { // looping repeats the first `loopTicks` until the clip's end (drag its right edge to extend)
-      items.unshift(isLooping(midi) || midi.loopTicks ? ['no loop', () => updateClip(doc, clipId, { loopTicks: 0 })] : ['loop', () => updateClip(doc, clipId, { loopTicks: midi.lengthTicks })])
+    const clip = getClips(doc).find((c) => c.id === clipId)
+    if (clip) { // looping repeats the pass to the end of the clip (drag its right edge to extend), or past it with forever
+      const looping = isLooping(clip)
+      items.unshift([isForever(clip) ? 'loop to end' : 'loop forever', () => {
+        if (looping) return updateClip(doc, clipId, { forever: !clip.forever })
+        // not looping yet: the current length becomes the pass and the extent grows to two of them, so it repeats at all
+        if (clip.kind === 'audio') updateClip(doc, clipId, { ...startPass(clip, sourceFrames(clip)), length: clip.length * 2, forever: true })
+        else updateClip(doc, clipId, { loopTicks: clip.lengthTicks, lengthTicks: clip.lengthTicks * 2, forever: true })
+      }])
+      if (looping) items.unshift(['no loop', () => { // the extent back to the first pass
+        if (clip.kind === 'audio') updateClip(doc, clipId, { sourceOffset: clip.sourceOffset + (clip.loopPhase ?? 0), length: clip.loopLength! - (clip.loopPhase ?? 0), loopLength: 0, loopPhase: 0, forever: false })
+        else updateClip(doc, clipId, { lengthTicks: clip.loopTicks!, loopTicks: 0, forever: false })
+      }])
     }
     const hash = String(clipsMap(doc).get(clipId)?.get('sourceHash'))
     const meta = getSamples(doc)[hash]
@@ -1599,6 +1881,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const mod = e.metaKey || e.ctrlKey
     if (e.code === 'Space') { e.preventDefault(); e.shiftKey ? void toggleRecord() : toggle() }
     else if (e.key === 'Escape' && (editing || armed || padSel)) { editing = null; noteSel = null; armed = null; padSel = null; draw() }
+    else if (pedalOn && tag !== 'TEXTAREA' && !mod && !e.repeat && /^[1-4]$/.test(e.key)) { e.preventDefault(); pedalPress(ACTIONS[Number(e.key) - 1], e.timeStamp) } // the pedal's four actions, without a pedal
     else if (readOnly) return
     else if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? undo.redo() : undo.undo() }
     else if (!mod && e.key.toLowerCase() === 's') {
@@ -1647,6 +1930,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     rate = getSampleRate(doc)
     pb = openPlayback(doc, s.projectId, rate, s.userId)
     pb.recorder.onlevel = drawLevel
+    pb.oncpu = showCpu
     draw()
     if (!readOnly) sweepUnusedTakes(takeCtx())
     if (!readOnly) recoverTakes(takeCtx()).then((n) => {
@@ -1663,6 +1947,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       cancelAnimationFrame(previewRaf)
       removeEventListener('keydown', key)
       removeEventListener('resize', schedule)
+      offPedal()
+      pedal?.abandon() // (its backup is recovered on the next open)
       if (take) s.setLocal({ recording: null }), take.journal.release() // (its backup is recovered on the next open)
       watched.forEach((m) => m.unobserveDeep(schedule))
       s.awareness.off('change', schedule)

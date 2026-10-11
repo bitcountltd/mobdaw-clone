@@ -5,17 +5,42 @@ export const EDGE = 8
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
-export type Grab = 'l' | 'r' | 'move'
+export type Grab = 'l' | 'r' | 'move' | 'loop' | 'pass'
 
 /**
  * Which part of a block was pressed: the left or right trim edge (each at most a third of the
  * block, so narrow blocks keep a middle to grab) or the body.
+ * Clips pass `at` to split the right edge: on a looping clip (`looping`) the whole edge is the `'loop'` handle (the
+ * extent), else its upper half is and the lower half stays `'r'` (trim). A looping clip's first seam (`seam`, a
+ * clientX) has the `'pass'` handle on its lower half, the upper half being plain `'move'`. The edges win over the seam.
  */
-export function grabAt(clientX: number, box: DOMRect): Grab {
+export function grabAt(clientX: number, box: DOMRect): 'l' | 'r' | 'move'
+export function grabAt(clientX: number, box: DOMRect, at: { y: number; looping: boolean; seam?: number }): Grab
+export function grabAt(clientX: number, box: DOMRect, at?: { y: number; looping: boolean; seam?: number }): Grab {
   const edge = Math.min(EDGE, box.width / 3)
-  if (clientX > box.right - edge) return 'r'
+  const upper = !!at && at.y < box.top + box.height / 2
+  if (clientX > box.right - edge) return !at ? 'r' : at.looping || upper ? 'loop' : 'r'
   if (clientX < box.left + edge) return 'l'
+  if (at?.looping && at.seam !== undefined && !upper && Math.abs(clientX - at.seam) <= edge / 2) return 'pass'
   return 'move'
+}
+
+/** A looping clip's phase after its left edge moves `d` samples right (the seams stay put, so the pass turns under it). */
+export const rotatePhase = (phase: number, d: number, pass: number) => (((phase + d) % pass) + pass) % pass
+
+/**
+ * Where whole passes of a looping clip end on the timeline (samples): the first seam at `start + pass - phase`, then
+ * every `pass`, up to `until`. These are what its extent soft-snaps to; `max` bounds the list for tiny passes.
+ */
+export function passBoundaries(start: number, pass: number, phase: number, until: number, max = 8192) {
+  const out: number[] = []
+  if (!(pass > 0)) return out
+  for (let k = 0; k < max; k++) {
+    const t = start + pass - phase + k * pass
+    if (t > until) break
+    out.push(Math.round(t))
+  }
+  return out
 }
 
 /**

@@ -1,7 +1,7 @@
 //! Audio and MIDI clips, and how they turn into samples and note events.
 
 use crate::source::Source;
-use dsp::fade::clip_edge_gain;
+use dsp::fade::{clip_edge_gain, fade_in_gain, DECLICK_SAMPLES};
 use dsp::FadeShape;
 
 pub enum Clip {
@@ -11,6 +11,11 @@ pub enum Clip {
 
 /// Plays source frames `[source_offset, source_offset + length)` at timeline
 /// `[start, start + length)`. All positions are integer samples.
+///
+/// With `loop_length` P > 0 the clip reads a looping pass (it only repeats when P < length, but the phase applies either way, so a split-off half that wraps once still sounds right): the pass is the source frames
+/// `[source_offset, source_offset + P)`, and timeline sample `t` reads pass position
+/// `((t - start) + loop_phase) mod P`. Everything is a pure function of `(t, clip, source)` (for a live source, of the frames written so far),
+/// with no state, so a re-upsert mid-play is inaudible and a live take replays identically.
 pub struct AudioClip {
     pub track: u32,
     pub source: u32,
@@ -22,9 +27,20 @@ pub struct AudioClip {
     pub fade_in: f64,
     pub fade_out: f64,
     pub shape: FadeShape,
+    /// Pass length in samples; 0 means no loop.
+    pub loop_length: i64,
+    /// Where in the pass the clip's first sample falls, in `[0, loop_length)`.
+    pub loop_phase: i64,
+    /// The longest seam crossfade (10 ms in samples).
+    pub seam_max: i64,
 }
 
 impl AudioClip {
+    /// The pass length when the clip loops, else `None`.
+    fn looping(&self) -> Option<i64> {
+        (self.loop_length > 0).then_some(self.loop_length)
+    }
+
     /// Add this clip's contribution to the block starting at timeline sample `block_start`
     /// into `l` and `r` (both `block_len` long). Frames outside the source are silent.
     ///
@@ -42,6 +58,45 @@ impl AudioClip {
         }
     }
 
+    /// The clip's pre-gain signal at clip-local sample `k`. Not looping, it is the source
+    /// frame `source_offset + k`. Looping, it is pass position `p = (k + phase) mod P`, with
+    /// the seam rule at the end of every pass that another pass follows:
+    ///
+    /// - `X = min(10 ms, P/4, source_offset)` is the pre-roll the source has before the pass.
+    ///   With `X >= 64` the last `X` samples of the pass crossfade (equal-power) into
+    ///   `source[offset + p - P]`, the audio just before the pass start, which runs on into
+    ///   `source[offset]`. It only uses audio from before the pass end, so a live recording can
+    ///   compute it as it goes.
+    /// - Otherwise the tail fades out over 64 samples and the next pass's head fades in over 64.
+    fn signal(&self, src: &Source, k: i64) -> (f32, f32) {
+        let Some(pl) = self.looping() else {
+            return src.frame(self.source_offset + k);
+        };
+        let q = k + self.loop_phase;
+        let (pass, p) = (q.div_euclid(pl), q.rem_euclid(pl));
+        let tail = src.frame(self.source_offset + p);
+        let followed = k + (pl - p) < self.length;
+        let x = self.seam_max.min(pl / 4).min(self.source_offset);
+        if x >= DECLICK_SAMPLES as i64 {
+            if followed && p >= pl - x {
+                let prog = (p - (pl - x)) as f64 / x as f64;
+                let (go, gi) = (fade_in_gain(FadeShape::EqualPower, 1.0 - prog), fade_in_gain(FadeShape::EqualPower, prog));
+                let pre = src.frame(self.source_offset + p - pl);
+                return (tail.0 * go + pre.0 * gi, tail.1 * go + pre.1 * gi);
+            }
+            return tail;
+        }
+        let n = (DECLICK_SAMPLES as i64).min(pl / 2);
+        let mut g = 1.0f32;
+        if followed && p >= pl - n {
+            g *= fade_in_gain(FadeShape::EqualPower, (pl - 1 - p) as f64 / n as f64);
+        }
+        if pass >= 1 && p < n {
+            g *= fade_in_gain(FadeShape::EqualPower, p as f64 / n as f64);
+        }
+        (tail.0 * g, tail.1 * g)
+    }
+
     /// This clip's stereo output at timeline sample `t` (silence outside the clip or source).
     /// The looper tracks use it to read a track's audio at arbitrary positions.
     pub fn sample_at(&self, src: &Source, t: i64) -> (f32, f32) {
@@ -49,12 +104,9 @@ impl AudioClip {
         if k < 0 || k >= self.length {
             return (0.0, 0.0);
         }
-        let frame = self.source_offset + k;
-        if frame < 0 || frame >= src.frames() as i64 {
-            return (0.0, 0.0);
-        }
+        let (a, b) = self.signal(src, k);
         let g = clip_edge_gain(k, self.length, self.fade_in, self.fade_out, self.shape) * self.gain;
-        (src.left()[frame as usize] * g, src.right()[frame as usize] * g)
+        (a * g, b * g)
     }
 }
 

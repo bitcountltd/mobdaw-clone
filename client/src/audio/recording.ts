@@ -1,6 +1,7 @@
 // Microphone capture (docs/engine.md §9.2). The mic feeds the engine node's input; the worklet copies it while recording,
 // in the same call that advances the engine, so every captured frame maps to a timeline sample. Monitoring (hearing the input through a track's effects) is a separate path: see Playback.monitor.
 import type { EngineHost } from './engine-host'
+import { LIVE_HEADROOM_S } from './bridge'
 import { latencySamples, toPcm16 } from './wav'
 
 export type InputInfo = { deviceId: string; label: string; channels: number }
@@ -122,8 +123,12 @@ export class Recorder {
     this.src = this.stream = this.info = null
   }
 
-  /** Begin capturing; the take starts at the engine's next play. `onChunk` gets each ~1 s of interleaved PCM as it arrives. */
-  start(onChunk?: Take['onChunk'], onStart?: (pos: number) => void) {
+  /**
+   * Begin capturing; the take starts at the engine's next play. `onChunk` gets each ~1 s of interleaved PCM as it arrives.
+   * `live` is a live source handle (`Bridge.liveSource`) the engine fills as the take is captured; its room is topped up
+   * with every chunk. `onStart` gets the take's timeline start (the sample of the first captured frame).
+   */
+  start(onChunk?: Take['onChunk'], onStart?: (pos: number) => void, live = 0) {
     const h = this.host
     if (!h || !this.info || this.take) throw new Error('not armed')
     let done = () => {}
@@ -139,10 +144,11 @@ export class Recorder {
         take.onChunk?.(pcm, take.pcm.length)
         take.pcm.push(pcm)
         take.frames += m.frames
+        if (live) h.call('engine_source_live_reserve', [live, take.frames + LIVE_HEADROOM_S * this.rate])
       }
       if (m.final) take.done()
     }
-    h.record(true, this.info.channels)
+    h.record(true, this.info.channels, live)
   }
 
   /** End the take. Null when nothing was captured (the engine never played). */

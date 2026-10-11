@@ -91,6 +91,8 @@ button.link.danger { color: var(--danger); }
 a.logo:hover { color: #e03a3a; }
 h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .bar-btns { display: flex; }
+.cpu { font-size: 11px; font-variant-numeric: tabular-nums; color: #5c5152; cursor: default; }
+.cpu.hot { color: var(--danger); }
 .bar-btn, .chat-btn { height: 36px; padding: 0 14px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--dim); }
 .chat-btn.on { color: var(--fg); background: var(--raise); }
 .bar-btn.on { color: var(--bg); background: var(--accent); }
@@ -169,11 +171,20 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
   position: absolute; top: 0; bottom: 0; padding: 2px 6px; overflow: hidden; white-space: nowrap; font-size: 12px;
   background: #2d3a5c; cursor: grab; user-select: none;
 }
-.clip::before, .clip::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; z-index: 1; cursor: ew-resize; }
+.clip::before, .clip::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; z-index: 1; cursor: inherit; }
 .clip::after { right: 0; }
 .clip::before { left: 0; }
-.clip:not(.editing):hover::before, .clip:not(.editing):hover::after { background: linear-gradient(var(--accent), var(--accent)) no-repeat; background-size: 2px 100%; }
-.clip:not(.editing):hover::after { background-position: right; }
+/* the handle under the pointer (data-zone, set from the timeline) picks the cursor and which part of the edge lights up:
+   trim zones resize, the loop zone (the right edge's upper half, or all of it once the clip loops) and the pass zone
+   (the lower half of the first seam) show the loop cursor */
+.clip[data-zone=l], .clip[data-zone=r], .clip[data-zone=pass] { cursor: ew-resize; }
+.clip[data-zone=loop] { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 10a5 5 0 1 1-1.8-3.8M14.5 3v3.5H11' stroke='%23000' stroke-width='3.5'/%3E%3Cpath d='M15 10a5 5 0 1 1-1.8-3.8M14.5 3v3.5H11' stroke='%23fff' stroke-width='1.5'/%3E%3C/g%3E%3C/svg%3E") 10 10, ew-resize; }
+.clip:not(.editing):hover[data-zone=l]::before, .clip:hover[data-zone=r]::after, .clip:hover[data-zone=loop]::after { background: linear-gradient(var(--accent), var(--accent)) no-repeat; background-size: 2px 100%; }
+.clip:hover[data-zone=r]::after { background-position: right bottom; background-size: 2px 50%; }
+.clip:hover[data-zone=loop]::after { background-position: right top; background-size: 2px 50%; }
+.clip.looping:hover[data-zone=loop]::after, .clip.editing:hover[data-zone=loop]::after { background-size: 2px 100%; }
+/* a dim loop glyph in the top-right corner while hovered says the upper right edge loops */
+.clip.loopable:not(.editing):not(.looping):not(.forever):hover { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M8.5 5a3.5 3.5 0 1 1-1.3-2.7M8 .8v2H6' fill='none' stroke='%238c7f80' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px top 3px; }
 .clip.sel { background: #364a78; }
 .clip.unplayable { opacity: 0.55; }
 .clip .wave { position: absolute; top: 0; height: 100%; color: #8fa8e0; opacity: .6; pointer-events: none; }
@@ -182,9 +193,13 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .clip.midi.sel { background: #386052; }
 .clip .mark { position: absolute; min-width: 2px; height: 2px; background: #9fe0c0; pointer-events: none; }
 .clip .mark.rep { opacity: .35; }
+.clip .seams { position: absolute; top: 0; bottom: 0; color: #8fa8e0; opacity: .3; pointer-events: none; background-image: linear-gradient(to right, currentColor 1px, transparent 1px); background-repeat: repeat-x; }
+/* the first seam's lower half lights up when it is the pass handle under the pointer */
+.clip .seam-first { display: none; position: absolute; top: 50%; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; }
+.clip.looping:hover[data-zone=pass] .seam-first { display: block; }
 .clip .loop-edge { position: absolute; top: 0; bottom: 0; width: 1px; background: #9fe0c0; opacity: .3; pointer-events: none; }
 /* an open MIDI clip is the editor: the clip itself grows to fill the (taller) lane row */
-.clip.editing { z-index: 1; padding: 0; cursor: default; background: var(--bg); box-shadow: inset 0 0 0 1px var(--accent); }
+.clip.editing { z-index: 1; padding: 0; cursor: default; background: var(--bg); }
 .clip.editing::before, .clip.editing::after { bottom: auto; height: 20px; }
 
 /* bottom bar of every lane: the toggle is its header-width left cell, the chain opens to its right */
@@ -275,6 +290,8 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .note.sel { background: var(--accent); }
 .note.ignored { opacity: .35; }
 .ne-loop { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid #9fe0c0; pointer-events: none; }
+.ne-grip { position: absolute; top: 0; bottom: 0; left: -4px; width: 7px; cursor: ew-resize; pointer-events: auto; }
+.ne-grip:hover { background: linear-gradient(var(--accent), var(--accent)) no-repeat center / 2px 100%; }
 
 /* drum grid: a row per drum, 4 steps to a beat (x scale follows timeline zoom via --beat) */
 .dg { position: relative; }
@@ -423,3 +440,14 @@ nav a.on { color: var(--fg); }
 /* a `forever` MIDI clip runs on past the right edge: no end edge, no resize handle, a faded tail */
 .clip.forever::after { display: none; }
 .clip.forever:not(.editing) { mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); }
+
+/* loop pedal */
+.pedal-btn { height: 36px; padding: 0 10px; border: 0; background: none; color: var(--dim); }
+.pedal-btn:hover { color: var(--fg); }
+.pedal-btn.on { color: var(--bg); background: var(--accent); }
+.pedal-btn:disabled { opacity: .4; }
+.pedal-st { font-size: 11px; color: #5c5152; cursor: default; white-space: nowrap; }
+.pedal-st.rec { color: var(--danger); }
+.pedal-row { margin-bottom: 6px; }
+.clip.live-loop { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); pointer-events: none; z-index: 1; }
+.clip.live-loop.forever { background-image: linear-gradient(to right, transparent calc(100% - 24px), var(--bg)); }

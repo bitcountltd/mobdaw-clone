@@ -1,6 +1,6 @@
 // Yjs document schema v2 (docs/engine.md §3). Every map is flat and keyed by id; children
 // reference their parent by id; positions are integer samples at meta.sampleRate.
-//   meta    Y.Map  { schemaVersion, sampleRate, guideBpm? }
+//   meta    Y.Map  { schemaVersion, sampleRate }
 //   tracks  Y.Map  id -> Y.Map Track
 //   clips   Y.Map  id -> Y.Map AudioClip | MidiClip
 //   notes   Y.Map  id -> Y.Map Note
@@ -38,10 +38,18 @@ export type TrackRole = 'click'
 export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean; role?: TrackRole }
 /** 0 equal-power, 1 linear, 2 s-curve */
 export type FadeShape = 0 | 1 | 2
+/**
+ * `length` is the clip's extent on the timeline. `loopLength` (samples; absent or 0 = no loop) is the pass: the source frames
+ * `[sourceOffset, sourceOffset + loopLength)`, which repeat to fill the extent; the clip loops when `loopLength < length`. `loopPhase`
+ * (samples in `[0, loopLength)`, absent = 0) is where in the pass the clip's start falls, so timeline sample `t` reads pass position
+ * `((t - start) + loopPhase) mod loopLength`. `forever` (only while looping) keeps the pass repeating past `length`, like MIDI's.
+ * Fades apply at the clip's own edges only; the engine crossfades the seams between passes (docs/engine-api.md).
+ */
 export type AudioClip = {
   id: string; trackId: string; kind: 'audio'
   start: number; length: number; sourceHash: string; sourceOffset: number
   gain: number; fadeIn: number; fadeOut: number; fadeShape: FadeShape
+  loopLength?: number; loopPhase?: number; forever?: boolean
 }
 /**
  * `lengthTicks` is the clip's extent on the timeline. `loopTicks` (absent or 0 = no loop) is the pattern length: the notes in
@@ -277,10 +285,13 @@ export function splitClip(doc: Y.Doc, id: string, at: number): string | null {
   const c = clipsMap(doc).get(id)?.toJSON() as Clip | undefined
   if (c?.kind !== 'audio' || at <= c.start || at >= c.start + c.length) return null
   const left = at - c.start
+  const pass = c.loopLength ?? 0
   let right = ''
   doc.transact(() => {
-    right = addAudioClip(doc, { ...c, start: at, length: c.length - left, sourceOffset: c.sourceOffset + left, fadeIn: 0 })
-    updateClip(doc, id, { length: left, fadeOut: 0 })
+    // a looping clip keeps its pass; the right half starts `left` further into it. Forever goes to the right half.
+    const half = pass > 0 ? { loopPhase: ((c.loopPhase ?? 0) + left) % pass } : { sourceOffset: c.sourceOffset + left }
+    right = addAudioClip(doc, { ...c, start: at, length: c.length - left, fadeIn: 0, ...half })
+    updateClip(doc, id, { length: left, fadeOut: 0, ...(c.forever ? { forever: false } : {}) })
   })
   return right
 }
@@ -344,11 +355,11 @@ export function addDrum(doc: Y.Doc, trackId: string, o: { key?: number; name?: s
 
 /** The pattern length of a MIDI clip in ticks: its loop when it loops, else its whole length. */
 export const patternTicks = (c: Pick<MidiClip, 'lengthTicks' | 'loopTicks'>) => (c.loopTicks && c.loopTicks > 0 && c.loopTicks < c.lengthTicks ? c.loopTicks : c.lengthTicks)
-/** Whether a MIDI clip repeats a shorter pattern. */
-export const isLooping = (c: Pick<MidiClip, 'lengthTicks' | 'loopTicks'>) => patternTicks(c) < c.lengthTicks
-/** Whether a MIDI clip repeats past its end: a `forever` flag only counts while it loops. */
-export const isForever = (c: Pick<MidiClip, 'lengthTicks' | 'loopTicks' | 'forever'>) => !!c.forever && isLooping(c)
-/** How long a `forever` clip plays: the engine has no infinite length, so it gets this many seconds' worth of ticks. */
+type Loopy = Pick<MidiClip, 'lengthTicks' | 'loopTicks' | 'forever'> | Pick<AudioClip, 'length' | 'loopLength' | 'forever'>
+/** Whether a clip (either kind) repeats a pass shorter than its extent. */
+export const isLooping = (c: Loopy) => ('lengthTicks' in c ? patternTicks(c) < c.lengthTicks : !!c.loopLength && c.loopLength > 0 && c.loopLength < c.length)
+/** Whether a clip repeats past its end: a `forever` flag only counts while it loops. */
+export const isForever = (c: Loopy) => !!c.forever && isLooping(c)
 export const FOREVER_SECONDS = 24 * 3600
 export const foreverTicks = (c: Pick<MidiClip, 'bpm' | 'ppq'>) => (FOREVER_SECONDS * c.bpm * c.ppq) / 60
 
@@ -517,3 +528,8 @@ export function migrateToV2(doc: Y.Doc) {
     meta.set('schemaVersion', SCHEMA_VERSION)
   }, 'migrate')
 }
+/** A forever audio clip's length in samples (what the engine is sent), mirroring `foreverTicks`. */
+export const foreverSamples = (rate: number) => FOREVER_SECONDS * rate
+/** A clip's pass in samples: its loop when it loops, else its whole (finite) length. */
+export const passLength = (c: Clip, rate: number) =>
+  c.kind === 'audio' ? (isLooping(c) ? c.loopLength! : c.length) : ticksToSamples(patternTicks(c), c.bpm, c.ppq, rate)

@@ -62,6 +62,38 @@ engine_source_free(e, h)
 - A clip whose source isn't ready renders silence. Until milestone 3, the host only loads
   sources ≤ 200 MB.
 
+### Live sources (a take being recorded)
+```
+engine_source_live_alloc(e, h: u32, channels: u32, reserve_frames: f64)
+engine_source_live_reserve(e, h, frames: f64)              // room for this many frames in total
+engine_source_live_append(e, h, frames: u32) -> u32        // from the input buffer; returns the frames taken
+engine_source_live_written(e, h) -> f64                    // frames written so far
+engine_source_live_finalize(e, h)
+```
+A live source is a source that grows while it is recorded. It is playable from `engine_source_live_alloc` on (no
+`engine_source_ready`), and `engine_source_free` frees it like any other.
+- **Silence past the written frames.** A read at source frame `f` returns silence when `f >= written` (and when `f < 0`),
+  so an audio clip on a live source is silent until the recording reaches the frames it plays, then plays them. The
+  output is a pure function of `(t, clip, written)`: the same clip over the same written audio always renders the same
+  samples, and once everything is written it is bit-identical to a decoded source holding the same frames. The seam rule
+  needs no special case: it reads only frames before the pass end, so a loop is complete as soon as its pass is written.
+- **Chunked storage.** Frames live in fixed chunks of 32768 frames (`LIVE_CHUNK`), each holding all channels planar. Growing
+  adds chunks and never moves audio that is already written, and a read is an index split, so a read, a loop pass or a seam
+  crossing a chunk boundary is the same as anywhere else.
+- **Only the first two channels are kept** (`channels` is clamped to 1..2; a mono source plays to both sides).
+- **`engine_source_live_reserve` allocates; `engine_source_live_append` never does.** Chunks are allocated by `alloc` (for
+  `reserve_frames`, rounded up to whole chunks) and `reserve`, which are structural calls: keep them ahead of the recording
+  (the host reserves 30 s up front and tops up with every ~1 s chunk). An append takes only what fits in the allocated chunks
+  and returns that count; the rest is dropped, and since later frames would no longer line up, the source then stays full
+  until more room is reserved. `reserve` never shrinks and ignores unknown handles and decoded sources.
+- **Append reads the input buffer** (`engine_input_ptr`, planar stereo, 128 frames per side): the host fills it as it does for
+  monitoring, then calls `append` with `frames` <= 128. A one-channel source takes the left side only. The host's capture uses
+  it, which is harmless to input monitoring: the engine reads the buffer only inside `engine_process`, where the monitor feed
+  has refilled it.
+- **`engine_source_live_finalize`**: no more appends (they return 0); chunks past the written frames are freed; what was
+  written stays readable. Written is the total from then on.
+- Appends and `written` take effect immediately, between renders. A block rendered after an append sees those frames.
+
 ## Tracks
 ```
 engine_track_upsert(e, h, kind: u32 /*0 audio, 1 midi*/, gain: f32, pan: f32 /*-1..1*/,
@@ -161,7 +193,8 @@ and of other previews, so a soundscape can be auditioned without touching the ma
 ```
 engine_clip_audio_upsert(e, h, track: u32, source: u32, start: f64, length: f64,
                          source_offset: f64, gain: f32,
-                         fade_in: f64, fade_out: f64, fade_shape: u32 /*0 equal-power, 1 linear, 2 s-curve*/)
+                         fade_in: f64, fade_out: f64, fade_shape: u32 /*0 equal-power, 1 linear, 2 s-curve*/,
+                         loop_length: f64, loop_phase: f64)
 engine_clip_remove(e, h)        // any clip kind
 ```
 - The clip plays source frames `[source_offset, source_offset+length)` at timeline
@@ -174,6 +207,22 @@ engine_clip_remove(e, h)        // any clip kind
 - **Declick:** every clip edge gets at least a 64-sample fade, using the same shape, unless
   the user's fade is longer.
 - Overlapping clips on one track are summed.
+- **Looping:** `loop_length` P > 0 makes the pass the source frames `[source_offset, source_offset+P)`,
+  repeated to fill `length`. Timeline sample `t` (clip offset `k = t − start`) reads source frame
+  `source_offset + ((k + loop_phase) mod P)`; `loop_phase` is in `[0, P)` and says where in the pass the clip's
+  start falls. `loop_length` 0 is a plain clip (and ignores the phase). The host sends only `loop_length` < `length`
+  as a loop, but the engine applies the phase whenever P > 0, so a split-off half that wraps once still sounds right.
+  **Forever** clips are sent with a `length` of 24 hours of samples, like MIDI's.
+- **Fades and declick apply at the clip's own edges only**, not at seams.
+- **Seam rule:** the engine is stateless, so the seam is a pure function of `(t, clip, source)`, and it uses only
+  audio from before the pass end (computable live while recording). At the end of every pass that another pass
+  follows, with `X = min(10 ms, P/4, source_offset)` (the pre-roll the source has):
+  - `X >= 64`: for pass position `p` in `[P−X, P)` the output crossfades equal-power from the tail
+    `src[source_offset+p]` to `src[source_offset+p−P]`, the audio just before the pass start, which runs on into
+    `src[source_offset]`.
+  - `X < 64` (no pre-roll): the tail fades out over its last 64 samples and the repeat's head fades in over its
+    first 64, at every seam (not at the clip start, which has its normal declick).
+  - The last pass has no seam after it.
 
 ## MIDI clips and notes
 ```
@@ -378,9 +427,39 @@ decay envelope → gain. A one-shot.
   (channel 0 to both sides if it is mono, an unconnected input being silence) into the input
   buffer before each block.
 
+`{ type: 'callAt', at: number, fn: string, args: number[] }`
+- Like `call`, but applied by the engine at timeline sample `at`. The processor keeps these in a queue ordered by `at` (then by
+  arrival), and before each render block runs every call due (`at <= engine position`). If the transport is playing and the next
+  call lands inside the block, the block is cut there (`engine_process` with fewer frames), so the call takes effect on exactly
+  sample `at`: the first sample rendered afterwards is timeline sample `at`. Cutting a block restarts the 32-frame control grid of
+  the rest of the block (clips are per-sample and unaffected; smoothed params and automation read their values at a slightly
+  different instant, inaudibly).
+- **In the past**: if the position is already at or past `at` (including after a seek or a jump over it), the call is applied
+  immediately, before the next render. Stateless clips then play from the right place. A call whose `at` is ahead while the
+  transport is stopped waits (it does not run until the position reaches it, and a `play` or `seek` to `at` or beyond runs it).
+- **Ordering with `call`**: an ordinary `call` is applied the moment the message arrives, always before any scheduled call
+  that has not fallen due, whatever order they were posted in. Scheduled calls are ordered among themselves by `at`, ties by
+  arrival. A scheduled call may itself be `engine_play`/`engine_seek`; the queue then re-reads the position.
+- Allocation: the message handler allocates (the queue entry); the render path only reads the head of the queue.
+- The queue logic is `client/src/audio/schedule.ts` (`CallQueue`), shared with the tests. `EngineHost.callAt(at, fn, args)`.
+
+`{ type: 'callAtClear' }`
+- Drops the scheduled calls that have not run yet (`EngineHost.clearScheduled()`).
+
+`{ type: 'record', on: boolean, channels?: number, live?: number }`
+- Start or end capturing the node's input (docs/engine.md §9.2). With `live` (non-zero, a handle made by
+  `engine_source_live_alloc`) each captured block is also appended to that source, in the same `process()` call that advances the
+  engine, before the block is rendered. Capture, and the live writes, end at a transport jump or stop, as always. The live
+  source is not finalized by the worklet (the bridge does that when the take is bound to its sample). `live` of 0 or absent
+  is the old behaviour.
+
 ## Processor → main
-`{ type: 'pos', pos: number, playing: boolean }`, sent about 30 times a second while
-playing, and once after stop or seek.
+`{ type: 'pos', pos: number, frame: number, playing: boolean }`, sent about 30 times a second while
+playing, and once after stop or seek. `frame` is the context frame (`currentFrame` clock) at which the engine stood at
+`pos`, so a time on the audio clock (e.g. `AudioContext.getOutputTimestamp()`) can be placed on the timeline.
+
+`{ type: 'recstart', pos: number }`: capture began; `pos` is the timeline sample of the first captured frame (the live source's
+frame 0). `{ type: 'rec', channels, frames, final }`: a ~1 s chunk of the take, transferred.
 
 `{ type: 'preview', h: number, pos: number, playing: boolean }`: the same for each preview, about 30
 times a second while it plays, and once after it is played, stopped or seeked.

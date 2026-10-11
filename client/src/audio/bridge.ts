@@ -3,7 +3,7 @@
 // by id: present and parented -> upsert, otherwise -> remove. Command order never matters.
 import * as Y from 'yjs'
 import {
-  KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverTicks, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
+  KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverSamples, foreverTicks, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
   looperParamDef, loopersMap, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, tracksMap,
   type AudioClip, type Clip, type Device, type Lane, type Looper, type MidiClip, type Pad, type Note, type ParamTarget, type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
@@ -12,7 +12,30 @@ export interface EngineSink {
   call(fn: string, ...args: number[]): void
   /** Hand decoded PCM to the engine (the real sink transfers the buffers). */
   source(h: number, channels: Float32Array[], frames: number): void
+  /** Like `call`, but applied by the engine at timeline sample `at` (EngineHost.callAt). A sink without it applies at once. */
+  callAt?(at: number, fn: string, ...args: number[]): void
 }
+
+/** How far ahead of a recording a live source keeps room, in seconds (topped up by the Recorder with every ~1 s chunk). */
+export const LIVE_HEADROOM_S = 30
+
+/**
+ * An audio clip that exists only in the engine (the loop pedal's live loops), in the engine's own terms: `length` is what the
+ * engine is sent (a forever clip is 24 hours of samples), and `source` is an engine source handle (usually a live one).
+ */
+export type LiveClip = {
+  source: number
+  start: number
+  length: number
+  sourceOffset?: number
+  gain?: number
+  fadeIn?: number
+  fadeOut?: number
+  fadeShape?: number
+  loopLength?: number
+  loopPhase?: number
+}
+const LIVE_DEFAULTS = { sourceOffset: 0, gain: 1, fadeIn: 0, fadeOut: 0, fadeShape: 0, loopLength: 0, loopPhase: 0 }
 /** Decode a source at the project rate. Resolve null to skip it (e.g. too long to play). */
 export type SourceLoader = (hash: string, meta: SampleMeta) => Promise<Float32Array[] | null>
 export type Drag = { deviceId: string; paramId: number; value: number }
@@ -91,6 +114,8 @@ export class Bridge {
   private previewClocks = new Map<number, Clock>()
   private heads = new Map<number, number>()
   private headsAt = -Infinity
+  /** Engine-only clips by engine handle (see liveClip), until a doc clip adopts them. */
+  private ephemeral = new Map<number, { track: number; c: Required<LiveClip> }>()
 
   constructor(
     private doc: Y.Doc,
@@ -377,6 +402,7 @@ export class Bridge {
 
   private upsertClip(c: Clip): boolean {
     if (!tracksMap(this.doc).has(c.trackId)) return false // orphan
+    if (c.kind === 'audio' && !this.handles.clip.has(c.id)) this.claimLiveClip(c as AudioClip)
     const h = this.handle('clip', c.id)
     const track = this.handle('track', c.trackId)
     if (c.kind === 'midi') {
@@ -385,8 +411,10 @@ export class Bridge {
     } else if (c.kind === 'audio') {
       const a = c as AudioClip
       this.wantSource(a.sourceHash)
-      this.sink.call('engine_clip_audio_upsert', h, track, this.handle('source', a.sourceHash), a.start, a.length,
-        a.sourceOffset, a.gain, a.fadeIn, a.fadeOut, a.fadeShape)
+      const pass = a.loopLength && a.loopLength > 0 ? a.loopLength : 0
+      this.sink.call('engine_clip_audio_upsert', h, track, this.handle('source', a.sourceHash), a.start,
+        isForever(a) ? Math.max(a.length, foreverSamples(this.rate)) : a.length,
+        a.sourceOffset, a.gain, a.fadeIn, a.fadeOut, a.fadeShape, pass, pass ? a.loopPhase ?? 0 : 0)
     } else return false
     return true
   }
@@ -432,6 +460,108 @@ export class Bridge {
   private sendParam(deviceId: string, h: number, p: number, v: number) {
     if (this.overrides.has(key(deviceId, p))) return // a remote drag owns it until it ends
     this.sink.call('engine_param_set', h, p, v)
+  }
+
+  // --- live sources and engine-only clips (the loop pedal; docs/engine.md §9.2)
+  /**
+   * Reserve a live source for a take that is about to be recorded: an engine source handle that grows as the Recorder
+   * writes into it (pass the handle to `Recorder.start`), with `LIVE_HEADROOM_S` of room up front. Clips on it
+   * (`liveClip`) are silent where it has not been written yet.
+   */
+  liveSource(channels = 2): number {
+    const h = this.next++
+    this.sink.call('engine_source_live_alloc', h, channels, LIVE_HEADROOM_S * this.rate)
+    return h
+  }
+
+  /**
+   * The finished take became the doc sample `hash`: map `hash` to the live source `h` and finalize it (no more frames). The
+   * bridge then never decodes or loads that sample, and doc clips on `hash` use `h`, so what was heard live keeps sounding
+   * unchanged. Call it before the sample and its clip are written to the doc (see `finishTake`'s `onHash`). Returns false,
+   * leaving `h` unbound, when `hash` already has a source of its own (identical audio loaded before).
+   */
+  bindLiveSource(hash: string, h: number): boolean {
+    if (this.handles.source.has(hash)) return false
+    this.handles.source.set(hash, h)
+    this.requested.add(hash)
+    this.wanted.add(hash)
+    this.sink.call('engine_source_live_finalize', h)
+    return true
+  }
+
+  /** Throw away a live source that was never bound (a discarded take). Clips still reading it must be removed first. */
+  dropLiveSource(h: number) {
+    this.sink.call('engine_source_free', h)
+  }
+
+  /**
+   * Make an audio clip that is not in the doc and return its engine handle: now, or applied exactly at timeline sample `at`
+   * (the clip's own `start` is independent of `at`; a clip that starts before `at` simply plays from the right place when it
+   * arrives, since playback is stateless). The clip is adopted by a doc clip that later appears on the same track and source
+   * with the same `start` and `sourceOffset` (automatic), or explicitly by `adoptLiveClip`.
+   */
+  liveClip(trackId: string, c: LiveClip, at?: number): number {
+    const h = this.next++
+    this.ephemeral.set(h, { track: this.handle('track', trackId), c: { ...LIVE_DEFAULTS, ...c } })
+    this.sendLive(h, at)
+    return h
+  }
+
+  /** Change an engine-only clip (the pedal's stop: a new `length`), now or at sample `at`. False once it is adopted or removed. */
+  updateLiveClip(h: number, patch: Partial<LiveClip>, at?: number): boolean {
+    const e = this.ephemeral.get(h)
+    if (!e) return false
+    Object.assign(e.c, patch)
+    this.sendLive(h, at)
+    return true
+  }
+
+  /** Remove an engine-only clip, now or at sample `at`. */
+  removeLiveClip(h: number, at?: number) {
+    if (!this.ephemeral.delete(h)) return
+    this.callOrAt(at, 'engine_clip_remove', h)
+  }
+
+  /**
+   * Make the engine-only clip `h` the engine copy of doc clip `clipId`. The doc's upsert is then the same call with
+   * the same handle (an inaudible no-op if the fields match), and removing the doc clip removes it. Normally not needed:
+   * a doc clip matching the clip's track, source, `start` and `sourceOffset` adopts it by itself when it is written, so
+   * nothing is created twice. If `clipId` already got a handle of its own, this switches to `h` and removes the other.
+   */
+  adoptLiveClip(h: number, clipId: string): boolean {
+    if (!this.ephemeral.delete(h)) return false
+    const old = this.handles.clip.get(clipId)
+    this.handles.clip.set(clipId, h)
+    if (old != null && old !== h) {
+      this.upsertById('clip', clipId)
+      this.sink.call('engine_clip_remove', old)
+    }
+    return true
+  }
+
+  private callOrAt(at: number | undefined, fn: string, ...args: number[]) {
+    if (at != null && this.sink.callAt) this.sink.callAt(at, fn, ...args)
+    else this.sink.call(fn, ...args)
+  }
+
+  private sendLive(h: number, at?: number) {
+    const e = this.ephemeral.get(h)
+    if (!e) return
+    const c = e.c
+    this.callOrAt(at, 'engine_clip_audio_upsert', h, e.track, c.source, c.start, c.length, c.sourceOffset, c.gain, c.fadeIn, c.fadeOut, c.fadeShape, c.loopLength, c.loopLength ? c.loopPhase : 0)
+  }
+
+  /** A new doc audio clip takes over the engine-only clip it describes, if any (so it is not created a second time). */
+  private claimLiveClip(a: AudioClip) {
+    const track = this.handles.track.get(a.trackId), source = this.handles.source.get(a.sourceHash)
+    if (track == null || source == null) return
+    for (const [h, e] of this.ephemeral) {
+      if (e.track === track && e.c.source === source && e.c.start === a.start && e.c.sourceOffset === (a.sourceOffset ?? 0)) {
+        this.ephemeral.delete(h)
+        this.handles.clip.set(a.id, h)
+        return
+      }
+    }
   }
 
   // --- sources

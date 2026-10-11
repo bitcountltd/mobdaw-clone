@@ -50,7 +50,15 @@ export type Finished = { hash: string; trackId: string; clipId: string }
  * same name if the track was deleted meanwhile. Local projects import it like any file; cloud projects stage it on this
  * device as an `incoming` sample (uploaded when the recorder chooses).
  */
-export async function finishTake(c: TakeCtx, t: Pick<Captured, 'pcm' | 'channels' | 'startPos' | 'latency' | 'frames'> & TakeInfo, name = takeName()): Promise<Finished> {
+export async function finishTake(
+  c: TakeCtx,
+  t: Pick<Captured, 'pcm' | 'channels' | 'startPos' | 'latency' | 'frames'> & TakeInfo,
+  name = takeName(),
+  /** Called with the sample's hash just before it and its clip are written to the doc (e.g. to bind a live source: `Playback.bindLiveSource`). */
+  onHash?: (hash: string) => void,
+  /** Runs inside the same doc transaction as the take's own writes (one undo step), with the take's track (a new one if `t.trackId` is gone) and sample. */
+  inTx?: (f: { trackId: string; hash: string }) => void,
+): Promise<Finished> {
   const { doc, projectId, rate } = c
   const wav = encodeWav(t.pcm, t.channels, rate)
   const file = new File([wav], `${name}.wav`, { type: 'audio/wav' })
@@ -66,11 +74,13 @@ export async function finishTake(c: TakeCtx, t: Pick<Captured, 'pcm' | 'channels
     if (!c.me) throw new Error('sign in to record into a cloud project')
     meta = { hash, name, duration: t.frames / rate, size: file.size, mime: file.type, status: 'incoming', by: c.me.id, byName: c.me.name, peaks }
   }
+  onHash?.(hash)
   let trackId = t.trackId, clipId = ''
   doc.transact(() => {
     if (meta) addSample(doc, meta)
     if (!tracksMap(doc).has(trackId)) trackId = addTrack(doc, t.trackName)
     clipId = addAudioClip(doc, { trackId, sourceHash: hash, start: place.start, length: place.length, sourceOffset: place.sourceOffset })
+    inTx?.({ trackId, hash })
   })
   return { hash, trackId, clipId }
 }

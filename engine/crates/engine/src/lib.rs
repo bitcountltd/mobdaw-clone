@@ -137,6 +137,54 @@ pub unsafe extern "C" fn engine_source_free(e: *mut Engine, h: u32) {
     (*e).source_free(h);
 }
 
+/// Create a live (growing) source for a take being recorded. It plays at once; frames not written
+/// yet are silent. `reserve_frames` is the room allocated up front (more via `engine_source_live_reserve`).
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_source_live_alloc(e: *mut Engine, h: u32, channels: u32, reserve_frames: f64) {
+    (*e).source_live_alloc(h, channels, reserve_frames);
+}
+
+/// Make sure a live source has room for `frames` frames in total (allocates; call it ahead of the
+/// recording, from a message, never from the render loop).
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_source_live_reserve(e: *mut Engine, h: u32, frames: f64) {
+    (*e).source_live_reserve(h, frames);
+}
+
+/// Append `frames` (at most 128) of the input buffer (`engine_input_ptr`) to a live source and return
+/// how many were taken. Never allocates.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_source_live_append(e: *mut Engine, h: u32, frames: u32) -> u32 {
+    (*e).source_live_append_input(h, frames as usize) as u32
+}
+
+/// The frames written to a live source so far.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_source_live_written(e: *mut Engine, h: u32) -> f64 {
+    (*e).source_live_written(h) as f64
+}
+
+/// End a live source: no more appends, what was written stays.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_source_live_finalize(e: *mut Engine, h: u32) {
+    (*e).source_live_finalize(h);
+}
+
 // ---- tracks, clips, notes, devices ----------------------------------------------------------
 
 #[no_mangle]
@@ -269,6 +317,8 @@ pub unsafe extern "C" fn engine_clip_audio_upsert(
     fade_in: f64,
     fade_out: f64,
     fade_shape: u32,
+    loop_length: f64,
+    loop_phase: f64,
 ) {
     (*e).clip_audio_upsert(
         h,
@@ -281,6 +331,8 @@ pub unsafe extern "C" fn engine_clip_audio_upsert(
         fade_in,
         fade_out,
         fade_shape,
+        loop_length as i64,
+        loop_phase as i64,
     );
 }
 

@@ -441,6 +441,53 @@ impl Engine {
         self.sources.remove(h);
     }
 
+    // ---- live sources (a take being recorded; engine.md section 9.2) ---------------------
+
+    /// Create (or replace) a live source: playable at once, silent past what has been written, with
+    /// room for `reserve_frames` (rounded up to whole chunks). Only the first two channels are kept.
+    pub fn source_live_alloc(&mut self, h: u32, channels: u32, reserve_frames: f64) {
+        let mut s = Source::live((channels as usize).clamp(1, 2));
+        s.live_reserve(if reserve_frames.is_finite() { reserve_frames.max(0.0) as usize } else { 0 });
+        self.sources.insert(h, s);
+    }
+
+    /// Make room for at least `frames` frames in total. Allocates, so it is a structural call:
+    /// keep ahead of the recording with it. Unknown handles and decoded sources are ignored.
+    pub fn source_live_reserve(&mut self, h: u32, frames: f64) {
+        if let Some(s) = self.sources.get_mut(h) {
+            s.live_reserve(if frames.is_finite() { frames.max(0.0) as usize } else { 0 });
+        }
+    }
+
+    /// Append frames to a live source: one slice per channel. Returns the frames taken (fewer than
+    /// offered only if the reserve ran out; the rest is dropped). Never allocates.
+    pub fn source_live_append(&mut self, h: u32, channels: &[&[f32]]) -> usize {
+        self.sources.get_mut(h).map_or(0, |s| s.live_append(channels))
+    }
+
+    /// Append the first `frames` (at most `BLOCK`) of the input buffer, which the host filled like
+    /// it does for monitoring. A source with two channels takes both sides of the buffer.
+    pub fn source_live_append_input(&mut self, h: u32, frames: usize) -> usize {
+        let n = frames.min(BLOCK);
+        let (l, r) = self.input.split_at(BLOCK);
+        match self.sources.get_mut(h) {
+            Some(s) => s.live_append(&[&l[..n], &r[..n]]),
+            None => 0,
+        }
+    }
+
+    /// The frames written to a live source so far (0 for anything else).
+    pub fn source_live_written(&self, h: u32) -> usize {
+        self.sources.get(h).filter(|s| s.is_live()).map_or(0, |s| s.frames())
+    }
+
+    /// End a live source: no more appends; the audio written stays readable.
+    pub fn source_live_finalize(&mut self, h: u32) {
+        if let Some(s) = self.sources.get_mut(h) {
+            s.live_finalize();
+        }
+    }
+
     /// Test/host convenience: allocate, copy planar `channels` in, mark ready.
     pub fn load_source(&mut self, h: u32, channels: &[&[f32]]) {
         let frames = channels.first().map_or(0, |c| c.len());
@@ -505,7 +552,11 @@ impl Engine {
         fade_in: f64,
         fade_out: f64,
         fade_shape: u32,
+        loop_length: i64,
+        loop_phase: i64,
     ) {
+        let loop_length = loop_length.max(0);
+        let loop_phase = if loop_length > 0 { loop_phase.rem_euclid(loop_length) } else { 0 };
         self.clips.insert(
             h,
             Clip::Audio(AudioClip {
@@ -518,6 +569,9 @@ impl Engine {
                 fade_in,
                 fade_out,
                 shape: FadeShape::from_u32(fade_shape),
+                loop_length,
+                loop_phase,
+                seam_max: (self.sr * 0.010) as i64,
             }),
         );
         self.rebuild_routing();

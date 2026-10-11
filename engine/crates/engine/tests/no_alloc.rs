@@ -50,7 +50,7 @@ fn process_never_allocates_across_a_busy_scene() {
         for c in 0..6u32 {
             // overlapping clips with fades of every shape
             let h = t * 10 + c;
-            e.clip_audio_upsert(h, t, 1, (c * 7000) as i64, 20_000, (c * 100) as i64, 0.9, 500.0, 900.0, c % 3);
+            e.clip_audio_upsert(h, t, 1, (c * 7000) as i64, 20_000, (c * 100) as i64, 0.9, 500.0, 900.0, c % 3, if c % 2 == 1 { 3000 } else { 0 }, c as i64 * 211);
         }
     }
     for t in 20..24u32 {
@@ -70,7 +70,7 @@ fn process_never_allocates_across_a_busy_scene() {
     for t in 30..32u32 {
         // soundscape tracks: 4 loopers each, with pads, speeds and regions that wrap often
         e.track_upsert(t, 2, 1.0, 0.0, false, false, false);
-        e.clip_audio_upsert(700 + t, t, 1, 0, 90_000, 0, 1.0, 0.0, 0.0, 0);
+        e.clip_audio_upsert(700 + t, t, 1, 0, 90_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
         for k in 0..4u32 {
             e.looper_upsert(800 + t * 10 + k, t, 0.25 + k as f64, 5000 * k as i64, 3000 + 1000 * k as i64);
         }
@@ -99,6 +99,12 @@ fn process_never_allocates_across_a_busy_scene() {
     e.preview_upsert(951, 31, 1);
     e.preview_play(950, 1000);
     e.preview_play(951, 0);
+    // a live source being recorded, read by looping clips (one across a chunk boundary) while it grows
+    e.source_live_alloc(60, 2, 300_000.0);
+    e.track_upsert(40, 0, 1.0, 0.0, false, false, false);
+    e.clip_audio_upsert(4000, 40, 60, 0, 400_000, 30_000, 1.0, 0.0, 0.0, 0, 5_000, 0);
+    e.clip_audio_upsert(4001, 40, 60, 10_000, 400_000, 0, 0.5, 300.0, 300.0, 1, 0, 0);
+    let input = e.input_ptr();
     e.set_param(engine::PARAM_GATE, 1.0); // M1 test voice too
     e.play(0);
 
@@ -111,6 +117,9 @@ fn process_never_allocates_across_a_busy_scene() {
     // ---- measured section ----
     ARMED.with(|a| a.set(true));
     for block in 0..2000u32 {
+        // the recording appends one block per call (the reserve was made up front)
+        unsafe { *input.add(block as usize % 128) = (block % 17) as f32 * 0.01 };
+        e.source_live_append_input(60, 128);
         e.process(128);
         match block % 97 {
             10 => e.param_set(101, 1, 200.0 + block as f32),
@@ -121,6 +130,9 @@ fn process_never_allocates_across_a_busy_scene() {
             90 => e.param_set(1203, 1, 20.0 + (block % 11) as f32 * 150.0), // delay time: the head moves
             80 => e.preview_seek(950, (block as i64 * 17) % 40_000),
             70 => e.looper_upsert(1100, 30, 1.0 + (block % 5) as f64 * 0.3, 1000, 4000),
+            55 => {
+                e.source_live_written(60);
+            }
             60 => {
                 e.stop();
                 e.play((block as i64 * 31) % 50_000);

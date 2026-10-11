@@ -2,8 +2,11 @@
 // TextDecoder/fetch/etc. and (deliberately) no wasm-bindgen glue: we call raw `extern "C"`
 // exports. Loaded via `?worker&url` by engine-host.ts.
 
+import { CallQueue } from './schedule'
+
 // The DOM lib doesn't declare the worklet globals, so declare the little we use.
 declare const sampleRate: number
+declare const currentFrame: number
 declare class AudioWorkletProcessor {
   readonly port: MessagePort
   constructor(options?: unknown)
@@ -27,8 +30,12 @@ type EngineExports = {
   engine_preview_is_playing(e: number, h: number): number
   engine_source_alloc(e: number, h: number, channels: number, frames: number): number
   engine_source_ready(e: number, h: number): void
+  engine_source_live_append(e: number, h: number, frames: number): number
 } & Record<string, unknown>
 const REPORT = new Set(['engine_play', 'engine_stop', 'engine_seek'])
+
+/** Milliseconds; the high-resolution clock where the worklet scope has one. */
+const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
 const BLOCK = 128 // engine render quantum; the output buffer is planar stereo: L[128] then R[128]
 
@@ -48,13 +55,22 @@ class EngineProcessor extends AudioWorkletProcessor {
   private loopers = new Set<number>()
   private loopersSounding = false
   private warned = new Set<string>()
+  /** DSP load: render time over the audio time it produced, averaged over ~0.5 s and posted with that window's worst call. */
+  private busy = 0
+  private span = 0
+  private worst = 0
   /** Input capture (docs/engine.md §9.2): armed by a 'record' message, begins with the engine playing. */
   /** Input level (docs/engine.md §9.2): max |x| per 64 frames, posted 16 at a time while a meter is wanted. */
   private meter = false
   private lvl = new Float32Array(16)
   private lvlAt = 0
   private lvlRec = false
-  private rec: { channels: number; buf: Float32Array[]; fill: number; started: boolean; next: number; ended: boolean } | null = null
+  private rec: { channels: number; buf: Float32Array[]; fill: number; started: boolean; next: number; ended: boolean; live: number } | null = null
+  /** Calls waiting for their timeline sample (the 'callAt' message). */
+  private sched = new CallQueue()
+  /** Frames of the current `process()` call already rendered, so a position report can say which context frame it belongs to. */
+  private done = 0
+  private transport = { position: () => this.x.engine_position(this.e), playing: () => this.x.engine_is_playing(this.e) === 1 }
 
   constructor(options: { processorOptions: { wasmBytes: ArrayBuffer } }) {
     super()
@@ -72,7 +88,9 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (m?.type === 'param') this.x.engine_set_param(this.e, m.id, m.value)
       else if (m?.type === 'call') this.call(m.fn, m.args)
       else if (m?.type === 'source') this.loadSource(m.h, m.channels, m.frames)
-      else if (m?.type === 'record') this.record(m.on, m.channels)
+      else if (m?.type === 'callAt') this.sched.add(m.at, m.fn, m.args)
+      else if (m?.type === 'callAtClear') this.sched.clear()
+      else if (m?.type === 'record') this.record(m.on, m.channels, m.live)
       else if (m?.type === 'meter') this.meter = !!m.on
       else if (m?.type === 'monitor') this.monitor(m.h, !!m.on)
       else if (m?.type === 'ping') this.port.postMessage({ type: 'pong', id: m.id })
@@ -144,9 +162,10 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.x.engine_source_ready(this.e, h)
   }
 
-  private record(on: boolean, channels = 1) {
+  /** `live`: the handle of a live source (engine_source_live_alloc) to write every captured block into too, or 0 for none. */
+  private record(on: boolean, channels = 1, live = 0) {
     if (on) {
-      this.rec = { channels, buf: [], fill: 0, started: false, next: 0, ended: false }
+      this.rec = { channels, buf: [], fill: 0, started: false, next: 0, ended: false, live }
       this.rec.buf = this.fresh(this.rec)
     } else if (this.rec) {
       this.flush(true)
@@ -194,6 +213,15 @@ class EngineProcessor extends AudioWorkletProcessor {
       const src = input?.[c] // an unconnected or narrower input records silence
       if (src) r.buf[c].set(src.subarray(0, frames), r.fill)
     }
+    if (r.live && typeof this.x.engine_source_live_append === 'function') {
+      // Block by block through the engine's input buffer, which the engine reads only while a track is monitored
+      // (and the monitor feed refills it before each render), so this does not disturb monitoring.
+      for (let at = 0; at < frames; at += BLOCK) {
+        const n = Math.min(BLOCK, frames - at)
+        this.feed(input, at, n)
+        this.x.engine_source_live_append(this.e, r.live, n)
+      }
+    }
     r.fill += frames
     if (r.fill >= r.buf[0].length) this.flush()
   }
@@ -201,10 +229,12 @@ class EngineProcessor extends AudioWorkletProcessor {
   private report() {
     if (typeof this.x.engine_position !== 'function') return
     this.sinceReport = 0
-    this.port.postMessage({ type: 'pos', pos: this.x.engine_position(this.e), playing: this.x.engine_is_playing(this.e) === 1 })
+    // `frame` is the context frame at which the engine stood at `pos` (the output timestamp's clock), so a pedal press can be placed on the timeline.
+    this.port.postMessage({ type: 'pos', pos: this.x.engine_position(this.e), frame: currentFrame + this.done, playing: this.x.engine_is_playing(this.e) === 1 })
   }
 
   process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
+    const t0 = now()
     const out = outputs[0]
     const total = out[0].length
     const r = this.rec
@@ -221,8 +251,11 @@ class EngineProcessor extends AudioWorkletProcessor {
       else r.ended = true
     } else if (r?.started) r.ended = true // stopped: a later play must not append to this take
     if (this.meter) this.level(inputs[0], total, captured)
-    for (let at = 0; at < total; at += BLOCK) {
-      const n = Math.min(BLOCK, total - at)
+    for (let at = 0; at < total; ) {
+      let n = Math.min(BLOCK, total - at)
+      this.done = at
+      // Scheduled calls run when the position reaches their sample: cut the block there.
+      if (this.sched.size) n = this.sched.step(n, this.transport, (c) => this.call(c.fn, c.args))
       if (this.monitoring) this.feed(inputs[0], at, n)
       this.x.engine_process(this.e, n)
       // memory.grow detaches the old ArrayBuffer; re-wrap when it changes.
@@ -231,7 +264,9 @@ class EngineProcessor extends AudioWorkletProcessor {
       }
       out[0].set(this.view.subarray(0, n), at)
       if (out[1]) out[1].set(this.view.subarray(BLOCK, BLOCK + n), at)
+      at += n
     }
+    this.done = total
     // ~30 position reports a second while playing (the timeline, and each playing preview)
     this.sinceReport += total
     if (this.sinceReport >= sampleRate / 30) {
@@ -240,6 +275,17 @@ class EngineProcessor extends AudioWorkletProcessor {
       for (const h of this.previews) this.reportPreview(h)
       this.reportLoopers()
     }
+    // AudioWorkletGlobalScope has no `performance` in some browsers; Date.now()'s 1 ms steps still average out over a window.
+    const took = (now() - t0) / 1000
+    const budget = total / sampleRate
+    this.busy += took
+    this.span += budget
+    this.worst = Math.max(this.worst, took / budget)
+    if (this.span >= 0.5) {
+      this.port.postMessage({ type: 'cpu', load: this.busy / this.span, peak: this.worst })
+      this.busy = this.span = this.worst = 0
+    }
+    this.done = 0
     return true
   }
 }

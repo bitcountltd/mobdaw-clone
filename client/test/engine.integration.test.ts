@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import { addAudioClip, addClickTrack, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
+import { CallQueue } from '../src/audio/schedule'
 
 const SR = 48000
 const wasm = readFileSync(new URL('../src/audio/wasm/engine.wasm', import.meta.url))
@@ -14,28 +15,34 @@ function host() {
     exports: Record<string, any> & { memory: WebAssembly.Memory }
   }
   const e = x.engine_new(SR)
+  const queue = new CallQueue()
+  const transport = { position: () => x.engine_position(e), playing: () => x.engine_is_playing(e) === 1 }
   const sink = {
     call: (fn: string, ...args: number[]) => x[fn](e, ...args),
+    // As the worklet does it: queued, and the render loop cuts its blocks at the sample.
+    callAt: (at: number, fn: string, ...args: number[]) => queue.add(at, fn, args),
     source: (h: number, channels: Float32Array[], frames: number) => {
       const ptr = x.engine_source_alloc(e, h, channels.length, frames)
       channels.forEach((c, i) => new Float32Array(x.memory.buffer, ptr + i * frames * 4, frames).set(c))
       x.engine_source_ready(e, h)
     },
   }
-  /** Render n frames; returns peak |L| over them. */
-  const render = (n: number) => {
-    let peak = 0
-    for (let done = 0; done < n; done += 128) {
-      x.engine_process(e, 128)
+  /** Render n frames the way the worklet's process() does; returns the left channel. */
+  const samples = (n: number) => {
+    const left = new Float32Array(n)
+    for (let at = 0; at < n; ) {
+      const k = queue.size ? queue.step(Math.min(128, n - at), transport, (c) => x[c.fn](e, ...c.args)) : Math.min(128, n - at)
+      x.engine_process(e, k)
       const out = new Float32Array(x.memory.buffer, x.engine_out_ptr(e), 256)
-      for (const v of out) {
-        expect(Number.isFinite(v)).toBe(true)
-        peak = Math.max(peak, Math.abs(v))
-      }
+      for (let i = 0; i < k; i++) expect(Number.isFinite(out[i]) && Number.isFinite(out[128 + i])).toBe(true)
+      left.set(out.subarray(0, k), at)
+      at += k
     }
-    return peak
+    return left
   }
-  return { sink, render }
+  /** Render n frames; returns peak |L| over them. */
+  const render = (n: number) => samples(n).reduce((peak, v) => Math.max(peak, Math.abs(v)), 0)
+  return { sink, render, samples, x, e }
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0))
@@ -199,6 +206,68 @@ describe('bridge + real engine.wasm', () => {
     const closed = render(2400) // around 0.375 s
     expect(open).toBeGreaterThan(0.3)
     expect(closed).toBeLessThan(0.05)
+    bridge.destroy()
+  })
+
+  it('a scheduled call takes effect on exactly its sample, mid-block, and a past one applies at once', async () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 'audio')
+    const { sink, samples } = host()
+    const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
+    // a constant source, a clip that began long before the call
+    sink.source(900, [new Float32Array(SR).fill(0.5)], SR)
+    const at = 7 * 128 + 41
+    const first = bridge.liveClip(t, { source: 900, start: 0, length: SR }, at)
+    bridge.play(0)
+    const a = samples(2048)
+    expect(a.findIndex((v) => v !== 0)).toBe(at)
+    expect(a[at - 1]).toBe(0)
+    expect(Math.abs(a[at])).toBeGreaterThan(0.1) // full level at once: the clip plays from where the timeline is
+
+    bridge.removeLiveClip(first)
+    expect(samples(256).every((v) => v === 0)).toBe(true) // removed at once
+    // already past: applied immediately, so it sounds from the next sample
+    const b = bridge.liveClip(t, { source: 900, start: 0, length: SR, gain: 0.25 }, 100)
+    const c = samples(256)
+    expect(c[0]).not.toBe(0)
+    // a scheduled stop (a shorter length) ends the clip at its new end: before it the clip plays, after it there is silence
+    const pos = 2048 + 256 + 256
+    bridge.updateLiveClip(b, { length: pos + 2000 }, pos + 500)
+    const d = samples(4000)
+    expect(Math.abs(d[1000])).toBeGreaterThan(0.01)
+    expect(d[2100]).toBe(0)
+    bridge.destroy()
+  })
+
+  it('a live source plays what was recorded into it, silent past the written frames, and a bound hash keeps the same audio', async () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 'audio')
+    const loads: string[] = []
+    const { sink, samples, x, e } = host()
+    const bridge = new Bridge(doc, sink, async (h) => (loads.push(h), null), SR, () => 0)
+    const live = bridge.liveSource(1)
+    const input = new Float32Array(x.memory.buffer, x.engine_input_ptr(e), 256)
+    const write = (frames: number, v: number) => {
+      input.fill(v) // (re-wrapped each call: memory may have grown)
+      x.engine_source_live_append(e, live, frames)
+    }
+    for (let i = 0; i < 4; i++) write(128, 0.5) // 512 frames
+    expect(x.engine_source_live_written(e, live)).toBe(512)
+    bridge.liveClip(t, { source: live, start: 0, length: 2000 })
+    bridge.play(0)
+    const a = samples(1024)
+    expect(Math.abs(a[300])).toBeGreaterThan(0.1) // written
+    expect(a[700]).toBe(0) // not yet
+    // bind a hash, then write the sample and clip to the doc: nothing is loaded or created again
+    expect(bridge.bindLiveSource('take', live)).toBe(true)
+    expect(x.engine_source_live_append(e, live, 128)).toBe(0) // finalized
+    addSample(doc, { hash: 'take', name: 'take', duration: 1, size: 10, mime: 'audio/wav' })
+    addAudioClip(doc, { trackId: t, sourceHash: 'take', start: 0, length: 2000 })
+    await tick()
+    expect(loads).toEqual([])
+    bridge.seek(0)
+    const b = samples(1024)
+    expect(b.subarray(100, 400)).toEqual(a.subarray(100, 400)) // the doc clip adopted the live one: one clip, not two
     bridge.destroy()
   })
 })

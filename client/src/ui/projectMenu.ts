@@ -4,6 +4,7 @@ import { getInputOffset, getPreferredInput, setInputOffset, setPreferredInput } 
 import { h } from '../dom'
 import { describeError } from '../errors'
 import { memberRows } from './members'
+import { pedalSettings } from './pedalSettings'
 import { popoverPanel } from './popover'
 
 export type ProjectMenuOpts = {
@@ -17,6 +18,8 @@ export type ProjectMenuOpts = {
   sampleRate: { value: number; locked: 'tracks' | 'readonly' | null; set(rate: number): void }
   /** The microphone choice changed: re-open the input if it is in use. */
   onInputChanged(): void
+  /** Absent when the pedal can't be used (viewers). The MIDI input or a binding changed. */
+  onPedalChanged?(): void
 }
 
 /** The rates a project can use (docs/engine.md §2). */
@@ -109,7 +112,8 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   const audio = section('audio', field('sample rate', rate), field('microphone', mic), grant, offsetField)
   void listMics()
 
-  const panel = h('div', { className: 'settings' }, section('project', field('name', name, true)), sharing, audio, msg)
+  const pedal = o.onPedalChanged && section('foot pedal', pedalSettings(o.onPedalChanged))
+  const panel = h('div', { className: 'settings' }, section('project', field('name', name, true)), sharing, audio, pedal, msg)
   popoverPanel(anchor, panel)
 }
 

@@ -40,7 +40,7 @@ fn one_clip(src: &[f32], start: i64, length: i64, offset: i64, fade_in: f64, fad
     let mut e = Engine::new(SR);
     e.load_source(1, &[src]);
     e.track_upsert(1, 0, 1.0, -1.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, start, length, offset, 1.0, fade_in, fade_out, shape);
+    e.clip_audio_upsert(1, 1, 1, start, length, offset, 1.0, fade_in, fade_out, shape, 0, 0);
     e
 }
 
@@ -169,7 +169,7 @@ fn solo_and_mute_logic() {
     e.load_source(1, &[&dc]);
     for t in 1..=3 {
         e.track_upsert(t, 0, 1.0, -1.0, false, false, false);
-        e.clip_audio_upsert(t, t, 1, 0, 40_000, 0, 1.0, 0.0, 0.0, 0);
+        e.clip_audio_upsert(t, t, 1, 0, 40_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     }
     e.play(0);
     let level = |e: &mut Engine| {
@@ -407,7 +407,7 @@ fn commands_in_any_order_converge() {
     let src = ramp_source(5000);
     let mut e = Engine::new(SR);
     // Children first: clip, then device, note, param, with no parent entities yet.
-    e.clip_audio_upsert(1, 1, 1, 100, 1000, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 100, 1000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e.clip_midi_upsert(2, 2, 0, 120.0, 960, 4000.0, 0.0);
     e.note_upsert(1, 2, 0.0, 480.0, 69, 1.0);
     e.device_upsert(1, 2, 2, 1.0, false);
@@ -423,7 +423,7 @@ fn commands_in_any_order_converge() {
     // (The audio track is on its own track, so check it alone via a separate engine below.)
     assert!(l[700] != src[600], "midi track adds the synth");
     let mut e3 = Engine::new(SR);
-    e3.clip_audio_upsert(1, 1, 1, 100, 1000, 0, 1.0, 0.0, 0.0, 0);
+    e3.clip_audio_upsert(1, 1, 1, 100, 1000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     render(&mut e3, 10);
     e3.track_upsert(1, 0, 1.0, -1.0, false, false, false);
     e3.load_source(1, &[&src]);
@@ -493,7 +493,7 @@ fn soundscape_engine(kind: u32) -> Engine {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&sine(440.0, 48_000)]);
     e.track_upsert(1, kind, 1.0, -1.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e
 }
 
@@ -519,7 +519,7 @@ fn a_pad_gates_its_looper_with_short_fades_and_restarts_the_loop_at_the_region_s
     let mut e = Engine::new(SR);
     e.load_source(1, &[&ramp]);
     e.track_upsert(1, 2, 1.0, -1.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     let (start, len) = (10_000i64, 5_000i64);
     e.looper_upsert(1, 1, 1.0, start, len);
     let (gs, gl) = (33_333i64, 12_000i64); // an arbitrary, unaligned pad
@@ -570,7 +570,7 @@ fn ramp_scape() -> Engine {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&ramp]);
     e.track_upsert(1, 2, 1.0, -1.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e
 }
 
@@ -639,7 +639,7 @@ fn source_preview_plays_the_tape_straight_through_on_its_own_transport() {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&ramp]);
     e.track_upsert(1, 2, 1.0, -1.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 5_000, 20_000, 1_000, 1.0, 0.0, 0.0, 0); // tape: source frames 1000.. at 5000..
+    e.clip_audio_upsert(1, 1, 1, 5_000, 20_000, 1_000, 1.0, 0.0, 0.0, 0, 0, 0); // tape: source frames 1000.. at 5000..
     e.preview_upsert(7, 1, 0);
     // The main transport is stopped and stays untouched.
     e.preview_play(7, 8_000);
@@ -775,7 +775,7 @@ fn a_master_chain_device_processes_the_whole_mix_and_bypass_restores_it() {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&sine(5000.0, 48_000)]);
     e.track_upsert(1, 0, 1.0, 0.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e.play(0);
     let clean = rms(&render(&mut e, 12_000).0[4_000..]);
     e.device_upsert(1, master, 1, 1.0, false); // low-pass filter on the master bus
@@ -794,7 +794,7 @@ fn a_reverb_device_leaves_a_tail_after_the_clip_ends_and_bypass_clears_it() {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&sine(440.0, 4_800)]); // 0.1 s burst
     e.track_upsert(1, 0, 1.0, 0.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 4_800, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 4_800, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e.device_upsert(1, 1, 3, 1.0, false); // reverb
     e.param_set(1, 0, 1.0);
     e.param_set(1, 1, 0.9);
@@ -913,7 +913,7 @@ fn a_master_device_lane_is_automated_too() {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&sine(5000.0, 48_000)]);
     e.track_upsert(1, 0, 1.0, 0.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 48_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e.device_upsert(1, master, 1, 1.0, false);
     e.lane_upsert(1, engine::LANE_DEVICE, 1, 1, true, 20.0, 20_000.0, LOG);
     e.point_upsert(1, 1, 0, 0.0, false); // closed ...
@@ -945,7 +945,7 @@ fn a_compressor_device_tames_a_loud_clip_and_bypass_restores_it() {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&sine(440.0, 24_000)]);
     e.track_upsert(1, 0, 1.0, 0.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 24_000, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 24_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e.play(0);
     let clean = rms(&render(&mut e, 12_000).0[4_000..]);
     e.device_upsert(1, 1, 4, 1.0, false); // compressor
@@ -965,7 +965,7 @@ fn a_tremolo_device_modulates_a_clip_and_bypass_restores_it() {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&sine(440.0, 24_000)]);
     e.track_upsert(1, 0, 1.0, 0.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 24_000, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 24_000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e.play(0);
     let clean = rms(&render(&mut e, 12_000).0[4_000..]);
     e.device_upsert(1, 1, 5, 1.0, false); // tremolo
@@ -985,7 +985,7 @@ fn a_tape_delay_device_repeats_a_clip_after_it_ends_and_bypass_clears_it() {
     let mut e = Engine::new(SR);
     e.load_source(1, &[&sine(440.0, 4_800)]);
     e.track_upsert(1, 0, 1.0, 0.0, false, false, false);
-    e.clip_audio_upsert(1, 1, 1, 0, 4_800, 0, 1.0, 0.0, 0.0, 0);
+    e.clip_audio_upsert(1, 1, 1, 0, 4_800, 0, 1.0, 0.0, 0.0, 0, 0, 0);
     e.play(0);
     let clean = rms(&render(&mut e, 4_800).0);
     e.device_upsert(1, 1, 6, 1.0, false); // tape delay
@@ -1280,9 +1280,9 @@ fn a_solo_safe_track_stays_audible_under_another_tracks_solo_but_not_when_muted(
         e.track_upsert(1, 0, 1.0, -1.0, false, true, false); // soloed
         e.track_upsert(2, 0, 1.0, -1.0, click_muted, false, true); // solo-safe
         e.track_upsert(3, 0, 1.0, -1.0, false, false, false); // silenced by the solo
-        e.clip_audio_upsert(1, 1, 1, 0, 1000, 0, 1.0, 0.0, 0.0, 0);
-        e.clip_audio_upsert(2, 2, 1, 0, 1000, 0, 1.0, 0.0, 0.0, 0);
-        e.clip_audio_upsert(3, 3, 1, 0, 1000, 0, 1.0, 0.0, 0.0, 0);
+        e.clip_audio_upsert(1, 1, 1, 0, 1000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
+        e.clip_audio_upsert(2, 2, 1, 0, 1000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
+        e.clip_audio_upsert(3, 3, 1, 0, 1000, 0, 1.0, 0.0, 0.0, 0, 0, 0);
         e.play(0);
         render(&mut e, 600).0
     };
@@ -1291,4 +1291,279 @@ fn a_solo_safe_track_stays_audible_under_another_tracks_solo_but_not_when_muted(
     // 0.25 + i*1e-4 per clip, once the 10 ms (480 sample) ramps are over; the unsoloed, unsafe track never sounds
     assert!((two[550] - 2.0 * src[550]).abs() < 1e-4);
     assert!((one[550] - src[550]).abs() < 1e-4);
+}
+
+// ---- looping audio clips -------------------------------------------------------------------
+
+/// A looping clip on track 1: source 1 at `start`, `length` long, pass `[offset, offset+pass)`, starting `phase` into the pass.
+fn loop_engine(src: &[f32], clips: &[(u32, i64, i64, i64, i64)]) -> Engine {
+    let mut e = Engine::new(SR);
+    e.load_source(1, &[src]);
+    e.track_upsert(1, 0, 1.0, -1.0, false, false, false);
+    for &(h, start, length, offset, phase) in clips {
+        e.clip_audio_upsert(h, 1, 1, start, length, offset, 1.0, 0.0, 0.0, 0, LOOP_P, phase);
+    }
+    e.play(0);
+    e
+}
+const LOOP_P: i64 = 1000;
+
+#[test]
+fn a_looping_audio_clip_wraps_its_pass_and_honours_the_phase() {
+    let src = ramp_source(20_000);
+    let (s, len, o) = (1000i64, 5000i64, 2000i64);
+    for phase in [0i64, 300] {
+        let mut e = loop_engine(&src, &[(1, s, len, o, phase)]);
+        let (l, _) = render(&mut e, 7000);
+        assert!(l[..s as usize].iter().all(|&x| x == 0.0) && l[(s + len) as usize..].iter().all(|&x| x == 0.0));
+        let mut checked = 0;
+        for k in 64..len - 64 {
+            let p = (k + phase) % LOOP_P;
+            if p >= LOOP_P - 250 && k + (LOOP_P - p) < len {
+                continue; // inside a seam crossfade (checked below)
+            }
+            assert_eq!(l[(s + k) as usize].to_bits(), src[(o + p) as usize].to_bits(), "phase={phase} k={k}");
+            checked += 1;
+        }
+        println!("loop phase={phase}: {checked} samples read the wrapped pass bit-exactly");
+    }
+}
+
+#[test]
+fn the_seam_crossfades_the_pass_tail_with_the_pre_roll() {
+    let src = ramp_source(20_000);
+    let (s, len, o) = (1000i64, 5000i64, 2000i64);
+    let mut e = loop_engine(&src, &[(1, s, len, o, 0)]);
+    let (l, _) = render(&mut e, 7000);
+    let x = 250i64; // min(10 ms = 480, P/4, offset)
+    let mut worst = 0.0f64;
+    for pass in 0..4 {
+        for p in LOOP_P - x..LOOP_P {
+            let k = pass * LOOP_P + p;
+            let prog = (p - (LOOP_P - x)) as f64 / x as f64;
+            let want = src[(o + p) as usize] as f64 * (prog * PI / 2.0).cos() + src[(o + p - LOOP_P) as usize] as f64 * (prog * PI / 2.0).sin();
+            worst = worst.max((l[(s + k) as usize] as f64 - want).abs());
+        }
+    }
+    println!("seam: worst error vs the equal-power pre-roll crossfade {worst:.2e}");
+    assert!(worst < 1e-5);
+    // the last pass has nothing after it: no crossfade, the tail is plain until the clip's own declick
+    for p in 750..900 {
+        let k = 4000 + p;
+        assert_eq!(l[(s + k) as usize].to_bits(), src[(o + p) as usize].to_bits());
+    }
+    // the first pass start (clip start, k=100) and every repeat head are untouched
+    assert_eq!(l[(s + 1100) as usize].to_bits(), src[(o + 100) as usize].to_bits());
+    assert_eq!(l[(s + 1000) as usize].to_bits(), src[o as usize].to_bits());
+}
+
+#[test]
+fn without_enough_pre_roll_the_seam_falls_back_to_a_declick() {
+    let src = ramp_source(20_000);
+    let (s, len) = (1000i64, 5000i64);
+    for o in [0i64, 40] {
+        let mut e = loop_engine(&src, &[(1, s, len, o, 0)]);
+        let (l, _) = render(&mut e, 7000);
+        let at = |k: i64| l[(s + k) as usize];
+        let want = |p: i64| src[(o + p) as usize];
+        assert_eq!(at(999), 0.0, "o={o}: the tail ends silent");
+        assert_eq!(at(1000), 0.0, "o={o}: the repeat head starts silent");
+        assert_eq!(at(2000), 0.0);
+        for j in 1..64 {
+            assert!(at(1000 + j) > at(999 + j) && at(1000 + j) < want(j), "head fade at {j}");
+            assert!(at(999 - j) < want(999 - j) && at(999 - j) > 0.0, "tail fade at {j}");
+        }
+        assert_eq!(at(1064).to_bits(), want(64).to_bits());
+        assert_eq!(at(935).to_bits(), want(935).to_bits());
+        assert_eq!(at(100).to_bits(), want(100).to_bits(), "no head fade at the clip start beyond the declick");
+    }
+}
+
+#[test]
+fn a_looped_clip_split_in_two_renders_like_the_unsplit_one() {
+    let src = ramp_source(20_000);
+    let (s, len, o, phase) = (1000i64, 5000i64, 2000i64, 100i64);
+    let at = 2345i64;
+    let mut whole = loop_engine(&src, &[(1, s, len, o, phase)]);
+    // the same arithmetic as splitClip: left [s, s+at), right from s+at with phase (phase + at) mod P
+    let mut halves = loop_engine(&src, &[(1, s, at, o, phase), (2, s + at, len - at, o, (phase + at) % LOOP_P)]);
+    let (a, _) = render(&mut whole, 7000);
+    let (b, _) = render(&mut halves, 7000);
+    let cut = (s + at) as usize;
+    let mut same = 0;
+    for i in 0..7000 {
+        if i + 64 >= cut && i < cut + 64 {
+            continue; // the cut's own declick
+        }
+        assert_eq!(a[i].to_bits(), b[i].to_bits(), "sample {i}");
+        same += 1;
+    }
+    println!("split loop: {same} samples bit-identical outside the cut's declick");
+}
+
+#[test]
+fn re_upserting_an_identical_looping_clip_mid_play_changes_nothing() {
+    let src = ramp_source(20_000);
+    let mut straight = loop_engine(&src, &[(1, 1000, 5000, 2000, 250)]);
+    let mut redone = loop_engine(&src, &[(1, 1000, 5000, 2000, 250)]);
+    let (a, _) = render(&mut straight, 7000);
+    let (mut b, _) = render(&mut redone, 2999);
+    redone.clip_audio_upsert(1, 1, 1, 1000, 5000, 2000, 1.0, 0.0, 0.0, 0, LOOP_P, 250);
+    b.extend(render(&mut redone, 4001).0);
+    assert!(a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()));
+}
+
+// ---- live (growing) sources ------------------------------------------------------------------
+
+/// A source that varies everywhere, so a misplaced frame cannot go unnoticed.
+fn busy_source(frames: usize) -> Vec<f32> {
+    (0..frames).map(|i| ((i as f32) * 0.037).sin() * 0.5 + (i % 7) as f32 * 0.01).collect()
+}
+
+/// A live source (handle 1) fed `data` in odd-sized pieces, like captured blocks.
+fn live_with(e: &mut Engine, data: &[f32], reserve: f64) {
+    e.source_live_alloc(1, 1, reserve);
+    let mut at = 0;
+    let mut piece = 1;
+    while at < data.len() {
+        let n = piece.min(data.len() - at);
+        assert_eq!(e.source_live_append(1, &[&data[at..at + n]]), n);
+        at += n;
+        piece = piece % 300 + 97;
+    }
+}
+
+fn clip_engine(loop_length: i64, phase: i64, offset: i64, length: i64) -> Engine {
+    let mut e = Engine::new(SR);
+    e.track_upsert(1, 0, 1.0, -1.0, false, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, length, offset, 1.0, 0.0, 0.0, 0, loop_length, phase);
+    e
+}
+
+#[test]
+fn live_source_reads_silence_past_what_is_written() {
+    let src = busy_source(3000);
+    let mut e = clip_engine(0, 0, 0, 6000);
+    live_with(&mut e, &src[..2000], 2000.0);
+    assert_eq!(e.source_live_written(1), 2000);
+    e.play(0);
+    let (l, _) = render(&mut e, 4000);
+    // Reference: a decoded source holding the same frames, zero past them.
+    let mut flat = clip_engine(0, 0, 0, 6000);
+    flat.load_source(1, &[&src[..2000]]);
+    flat.play(0);
+    let (fl, _) = render(&mut flat, 4000);
+    assert_eq!(l, fl, "a live source reads exactly like a decoded one holding the written frames");
+    assert!(l[2100..].iter().all(|&x| x == 0.0), "silence past the written frames");
+    assert!(l[200..1900].iter().any(|&x| x != 0.0));
+}
+
+#[test]
+fn live_source_matches_a_decoded_one_across_chunk_boundaries() {
+    let n = 3 * engine::source::LIVE_CHUNK + 5000;
+    let src = busy_source(n);
+    let b = engine::source::LIVE_CHUNK as i64;
+    // A plain clip straddling the first boundary, and a loop whose pass, seam pre-roll and repeats straddle the second.
+    for (lp, phase, off, len) in [(0, 0, b - 700, 2000), (3000, 123, 2 * b - 1500, 12_000)] {
+        let mut live = clip_engine(lp, phase, off, len);
+        live_with(&mut live, &src, n as f64);
+        let mut flat = clip_engine(lp, phase, off, len);
+        flat.load_source(1, &[&src]);
+        live.play(0);
+        flat.play(0);
+        let (a, _) = render(&mut live, len as usize + 256);
+        let (c, _) = render(&mut flat, len as usize + 256);
+        assert_eq!(a, c, "loop {lp} offset {off}");
+        assert!(a.iter().any(|&x| x != 0.0));
+    }
+}
+
+#[test]
+fn live_loop_seam_only_needs_audio_written_before_the_pass_end() {
+    // A pass [off, off+P) whose seam pre-roll (before off) and tail are written, nothing after the pass.
+    let (off, p) = (40_000i64, 2000i64);
+    let src = busy_source((off + p) as usize);
+    let mut live = clip_engine(p, 0, off, 3 * p);
+    live_with(&mut live, &src, (off + p) as f64);
+    let mut flat = clip_engine(p, 0, off, 3 * p);
+    flat.load_source(1, &[&src]);
+    live.play(0);
+    flat.play(0);
+    let (a, _) = render(&mut live, 3 * p as usize);
+    let (c, _) = render(&mut flat, 3 * p as usize);
+    assert_eq!(a, c);
+    assert!(a[..p as usize - 8].iter().any(|&x| x != 0.0));
+}
+
+#[test]
+fn live_source_grows_under_a_playing_clip_without_moving_audio() {
+    let n = 2 * engine::source::LIVE_CHUNK + 3000;
+    let src = busy_source(n);
+    let mut e = clip_engine(0, 0, 0, n as i64);
+    e.source_live_alloc(1, 1, 0.0);
+    e.play(0);
+    let mut out = Vec::new();
+    let mut fed = 0;
+    // The recording runs one block ahead of the playhead, and the reserve is topped up every block.
+    while out.len() < n {
+        let next = (fed + 128).min(n);
+        e.source_live_reserve(1, next as f64 + 256.0);
+        assert_eq!(e.source_live_append(1, &[&src[fed..next]]), next - fed);
+        fed = next;
+        let (l, _) = render(&mut e, 128);
+        out.extend(l);
+    }
+    let mut flat = clip_engine(0, 0, 0, n as i64);
+    flat.load_source(1, &[&src]);
+    flat.play(0);
+    let (c, _) = render(&mut flat, out.len());
+    assert_eq!(out, c);
+}
+
+#[test]
+fn live_source_finalize_and_limits() {
+    let src = busy_source(1000);
+    let mut e = clip_engine(0, 0, 0, 2000);
+    live_with(&mut e, &src, 100.0);
+    e.source_live_finalize(1);
+    assert_eq!(e.source_live_append(1, &[&src[..10]]), 0, "closed: no more appends");
+    assert_eq!(e.source_live_written(1), 1000);
+    e.play(0);
+    let (l, _) = render(&mut e, 2000);
+    assert!(l[300..900].iter().any(|&x| x != 0.0) && l[1100..].iter().all(|&x| x == 0.0));
+
+    // Without room, an append takes only what fits and later ones take nothing more once full.
+    let mut f = Engine::new(SR);
+    f.source_live_alloc(1, 2, 1.0); // one chunk
+    let big = busy_source(engine::source::LIVE_CHUNK + 500);
+    assert_eq!(f.source_live_append(1, &[&big, &big]), engine::source::LIVE_CHUNK);
+    assert_eq!(f.source_live_append(1, &[&big[..10], &big[..10]]), 0);
+    f.source_live_reserve(1, (engine::source::LIVE_CHUNK + 10) as f64);
+    assert_eq!(f.source_live_append(1, &[&big[..10], &big[..10]]), 10);
+    // Plain sources are not live.
+    f.load_source(2, &[&big[..10]]);
+    assert_eq!(f.source_live_append(2, &[&big[..10]]), 0);
+    assert_eq!(f.source_live_written(2), 0);
+}
+
+#[test]
+fn live_source_takes_the_input_buffer() {
+    let mut e = Engine::new(SR);
+    e.source_live_alloc(1, 2, 256.0);
+    let p = e.input_ptr();
+    for i in 0..128 {
+        unsafe {
+            *p.add(i) = i as f32;
+            *p.add(128 + i) = -(i as f32);
+        }
+    }
+    assert_eq!(e.source_live_append_input(1, 100), 100);
+    assert_eq!(e.source_live_written(1), 100);
+    e.track_upsert(1, 0, 1.0, 0.0, false, false, false);
+    e.clip_audio_upsert(1, 1, 1, 0, 100, 0, 1.0, 0.0, 0.0, 0, 0, 0);
+    e.play(0);
+    e.process(100);
+    // frame 50 of a stereo source: the sides differ in sign
+    let (l, r) = e.output();
+    assert!(l[50] > 0.0 && r[50] < 0.0);
 }

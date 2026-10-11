@@ -1,8 +1,9 @@
 // Glue for one open project: the wasm engine host + the doc bridge + transport.
 import type * as Y from 'yjs'
-import { Bridge, type Drag, type PreviewMode, type PreviewTransport } from './bridge'
+import { Bridge, type Drag, type LiveClip, type PreviewMode, type PreviewTransport } from './bridge'
 import { getCtx } from './context'
 import { EngineHost } from './engine-host'
+import { heardPosition, type PosReport } from './pedal'
 import { Recorder } from './recording'
 import { getSampleBuffer, playable } from '../samples'
 
@@ -11,9 +12,12 @@ export type Playback = ReturnType<typeof openPlayback>
 /** `me` is the signed-in user's id: it may load its own 'incoming' takes, which are only on this device. */
 export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: number | null) {
   const ctx = getCtx(rate)
+  let oncpu: ((m: { load: number; peak: number }) => void) | null = null
+  let lastPos: (PosReport & { playing: boolean }) | null = null // the engine's latest position report, to place pedal presses
   const hostP = EngineHost.create(ctx).then((h) => {
+    h.oncpu = (m) => oncpu?.(m)
     h.node.connect(ctx.destination)
-    h.onpos = (m) => bridge.onPos(m)
+    h.onpos = (m) => ((lastPos = m), bridge.onPos(m))
     h.onpreview = (m) => bridge.onPreviewPos(m)
     h.onloopers = (m) => bridge.onLooperHeads(m)
     return h
@@ -25,6 +29,7 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     {
       call: (fn, ...args) => void hostP.then((h) => h.call(fn, args), () => {}),
       source: (h, ch, frames) => void hostP.then((x) => x.source(h, ch, frames), () => {}),
+      callAt: (at, fn, ...args) => void hostP.then((h) => h.callAt(at, fn, args), () => {}),
     },
     async (hash, meta) => {
       if (!playable(meta) || meta.status === 'missing') return null
@@ -39,6 +44,8 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
   return {
     rate,
     recorder,
+    /** Engine DSP load reports (twice a second). */
+    set oncpu(fn: ((m: { load: number; peak: number }) => void) | null) { oncpu = fn },
     get playing() { return bridge.isPlaying },
     position: () => bridge.position(),
     play(from?: number) {
@@ -61,10 +68,42 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
       }
     },
     seek: (pos: number) => bridge.seek(pos),
+    /**
+     * The timeline sample the performer hears at `perfTime` (performance.now clock, ms; a MIDI event's `timeStamp`): the
+     * output timestamp says which context frame is at the speaker then, and the engine's last position report ties that
+     * frame to the timeline. Without a usable report, the extrapolated position less the output latency.
+     */
+    heard(perfTime: number): number {
+      const ts = ctx.getOutputTimestamp?.()
+      if (lastPos?.playing && ts && ts.contextTime != null && ts.performanceTime) {
+        return heardPosition(lastPos, { contextTime: ts.contextTime, performanceTime: ts.performanceTime }, perfTime, rate)
+      }
+      const late = (ctx.outputLatency ?? 0) + (ctx.baseLatency ?? 0) - (performance.now() - perfTime) / 1000
+      return Math.round(bridge.position() - late * rate)
+    },
     /** Hear the armed microphone through this track's effects (null: stop). Only audible while the recorder is armed. */
     monitor: (trackId: string | null) => void hostP.then((h) => h.monitor(trackId == null ? null : bridge.trackHandle(trackId)), () => {}),
     /** A looper's read head on the source tape (samples), or null while it isn't sounding. */
     looperHead: (id: string) => bridge.looperHead(id),
+    /**
+     * Reserve a live source for a take (pass it to `recorder.start(..., live)`): audio that grows as the take is
+     * recorded. Returns its engine handle.
+     */
+    liveSource: (channels?: number) => bridge.liveSource(channels),
+    /** The finished take is the doc sample `hash`: bind it to the live source `h` and finalize it, so it is not loaded again. Call before writing the sample to the doc. */
+    bindLiveSource: (hash: string, h: number) => bridge.bindLiveSource(hash, h),
+    /** Free a live source that was never bound (a discarded take). */
+    dropLiveSource: (h: number) => bridge.dropLiveSource(h),
+    /** Play an audio clip that is not in the doc, now or applied exactly at timeline sample `at`. Returns its engine handle. */
+    liveClip: (trackId: string, c: LiveClip, at?: number) => bridge.liveClip(trackId, c, at),
+    /** Change such a clip (e.g. `{ length }` to stop it), now or at sample `at`. */
+    updateLiveClip: (h: number, patch: Partial<LiveClip>, at?: number) => bridge.updateLiveClip(h, patch, at),
+    /** Remove such a clip, now or at sample `at`. */
+    removeLiveClip: (h: number, at?: number) => bridge.removeLiveClip(h, at),
+    /** Make the engine-only clip `h` the engine copy of doc clip `clipId` (a matching doc clip adopts it by itself; see Bridge.adoptLiveClip). */
+    adoptLiveClip: (h: number, clipId: string) => bridge.adoptLiveClip(h, clipId),
+    /** Forget scheduled engine calls that have not run yet. */
+    clearScheduled: () => void hostP.then((h) => h.clearScheduled(), () => {}),
     live: (deviceId: string, paramId: number, v: number) => bridge.live(deviceId, paramId, v),
     setOverrides: (d: Drag[]) => bridge.setOverrides(d),
     destroy() {
