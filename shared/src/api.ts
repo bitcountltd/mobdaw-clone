@@ -51,12 +51,14 @@ export type ProjectSummary = {
   /** The owner's subscription has ended: nobody can edit until they resubscribe, and it is deleted at `retentionEndsAt`. */
   frozen: boolean
   retentionEndsAt: number | null
+  /** Anyone signed in who has the link can open it, read-only (not listed in their projects). */
+  public: boolean
 }
 export type Member = { username: string; role: Role }
 export type ProjectDetail = ProjectSummary & { members: Member[] }
 export type CreateProjectRequest = { name: string }
 export type AddMemberRequest = { username: string; role?: 'editor' | 'viewer' }
-export type RenameProjectRequest = { name: string }
+export type UpdateProjectRequest = { name?: string; public?: boolean }
 export type CopyProjectRequest = { name?: string }
 /** An audio file in a project's library. `owner` is the user who uploaded it (and can delete it). */
 export type LibrarySample = { hash: string; size: number; mime: string; owner: string; addedAt: number }

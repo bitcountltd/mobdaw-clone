@@ -3,10 +3,11 @@
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addClickTrack, addDevice, addDrum, isLooping, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
-  deleteDevice, deleteLooper, addNextLooper, isDrum, isForever, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
+  deleteDevice, deleteLooper, addNextLooper, isDrum, isForever, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples, metaMap,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type SampleMeta, type Track,
+  type Role,
 } from '@mobdaw/shared'
 import { homeLink } from '../router'
 import { drawWave, onPeaks, peaksFor, storedPeaks } from '../audio/peaks'
@@ -16,6 +17,7 @@ import type { PreviewMode } from '../audio/bridge'
 import { openPlayback, type Playback } from '../audio/playback'
 import { renderProject } from '../audio/render'
 import { exportDialog } from './exportDialog'
+import { projectMenu } from './projectMenu'
 import { h } from '../dom'
 import { importFile, playable, PLAYBACK_MAX_BYTES } from '../samples'
 import { discardTake, finishTake, hasStaged, isMine, myTakes, recoverTakes, sweepUnusedTakes, takeJournal, uploadAll, uploadTake, type TakeCtx } from '../takes'
@@ -68,8 +70,9 @@ type Src = {
   end: number // where the source audio ends (samples)
 }
 
-/** `renameProject`: when given, clicking the project's name in the bar edits it (it saves the new name). */
-export function mountTimeline(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void) {
+/** The project's name in the bar opens its settings; `renameProject`, when given, lets them change the name (it saves it). `cloud` is set for server projects. */
+export function mountTimeline(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void,
+  cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean }) {
   const { doc, undo } = s
   let rate = DEFAULT_SAMPLE_RATE
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
@@ -119,32 +122,61 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     doc, user: s.user, readOnly,
     onUnread: (n) => (chatBtn.textContent = n ? `chat (${n})` : 'chat'),
   })
-  /** The project's name in the bar; click to rename when allowed. */
+  /** The project's name in the bar: a button that opens the project settings (rename, sharing, audio input). */
   function projectTitle() {
-    let current = projectName
-    const el = h('strong', { title: renameProject ? 'click to rename' : '', className: renameProject ? 'project-name' : '' }, current)
-    if (!renameProject) return el
-    el.onclick = () => {
-      const input = h('input', { value: current, className: 'rename' })
-      const done = (ok: boolean) => {
-        if (!input.isConnected) return
-        const n = input.value.trim()
-        input.replaceWith(el)
-        if (!ok || !n || n === current) return
-        const before = current
-        el.textContent = current = n
-        Promise.resolve(renameProject(n)).catch((err) => {
-          el.textContent = current = before
-          status.textContent = `rename: ${(err as Error).message}`
-        })
-      }
-      input.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false) }
-      input.onblur = () => done(true)
-      el.replaceWith(input)
-      input.focus()
-      input.select()
-    }
+    const el = h('button', { className: 'project-name', title: 'project settings', onclick: () => {
+      projectMenu(el, {
+        name: projectName,
+        rename: renameProject,
+        onRenamed: (n) => (el.textContent = projectName = n),
+        cloud: cloud && { ...cloud, onPublic: (v) => (cloud.public = v) },
+        sampleRate: {
+          value: rate,
+          locked: readOnly ? 'readonly' : isBlank() ? null : 'tracks',
+          set: (r) => isBlank() && metaMap(doc).set('sampleRate', r),
+        },
+        onInputChanged: () => void reopenInput(),
+      })
+    } }, projectName)
     return el
+  }
+  /** Nothing is placed on a timeline yet (positions are in samples, so only then can the rate change). */
+  const isBlank = () => !getTracks(doc).length && !getPoints(doc).length && !getLoopers(doc).length
+  /**
+   * The project's sample rate changed (here or on another machine; only possible while there are no tracks): the
+   * engine and the microphone run at the project's rate, so playback is opened again.
+   */
+  function rateChanged() {
+    const next = getSampleRate(doc)
+    if (!pb || next === rate) return
+    pb.destroy()
+    rate = next
+    armedTrack = null
+    try {
+      pb = openPlayback(doc, s.projectId, rate, s.userId)
+      pb.recorder.onlevel = drawLevel
+    } catch (err) {
+      pb = null
+      status.textContent = `sample rate: ${(err as Error).message}`
+    }
+    draw()
+  }
+  /** The microphone choice changed: if one is open, reconnect it to the chosen device (unless a take is running). */
+  async function reopenInput() {
+    if (!pb?.recorder.armed) return
+    if (take) {
+      status.textContent = 'the new microphone is used from the next take'
+      return
+    }
+    pb.recorder.disarm()
+    try {
+      await pb.recorder.arm()
+      status.textContent = ''
+    } catch (err) {
+      armedTrack = null
+      status.textContent = `record: ${(err as Error).message}`
+    }
+    draw()
   }
   const exportBtn = h('button', { className: 'bar-btn', title: 'render the whole project to a file', onclick: () => {
     if (!pb) return // (the project has not synced yet)
@@ -1597,6 +1629,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const watched = [tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), loopersMap(doc), padsMap(doc), lanesMap(doc), pointsMap(doc), samplesMap(doc)]
   watched.forEach((m) => m.observeDeep(schedule))
   s.awareness.on('change', schedule)
+  metaMap(doc).observe(rateChanged)
   const offPeaks = onPeaks(schedule)
   const onStatus = ({ status: st }: { status: string }) => (bar.dataset.status = st)
   s.provider?.on('status', onStatus)
@@ -1633,6 +1666,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (take) s.setLocal({ recording: null }), take.journal.release() // (its backup is recovered on the next open)
       watched.forEach((m) => m.unobserveDeep(schedule))
       s.awareness.off('change', schedule)
+      metaMap(doc).unobserve(rateChanged)
       offPeaks()
       chat.destroy()
       pb?.destroy()

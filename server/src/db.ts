@@ -137,6 +137,8 @@ const migrations: (string | ((db: Db) => void))[] = [
   'ALTER TABLE uploads ADD COLUMN analysis TEXT;',
   // A free-text note an admin attaches to an invite (who it is for).
   `ALTER TABLE invites ADD COLUMN memo TEXT NOT NULL DEFAULT '';`,
+  // Public projects can be opened (read-only) by any signed-in account that has the link; they are not listed anywhere.
+  'ALTER TABLE projects ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0;',
 ]
 
 export function openDb(path: string): Db {

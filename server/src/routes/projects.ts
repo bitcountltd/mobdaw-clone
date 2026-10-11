@@ -2,33 +2,35 @@ import { randomBytes } from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import * as Y from 'yjs'
 import { docName, projectPreview, type Member, type ProjectPreview, type ProjectDetail, type ProjectSummary, type Role } from '@mobdaw/shared'
-import { accountBlocked, findUser, isDevUser, memberRole, requireSignedIn, writeBlock, type Ctx, type Env } from '../auth.ts'
-import { kick, type Collab } from '../collab.ts'
+import { accountBlocked, findUser, isDevUser, memberRole, projectRole, requireSignedInOrPublic, writeBlock, type Ctx, type Env } from '../auth.ts'
+import { kick, KICK_REASON, type Collab } from '../collab.ts'
 import { tx } from '../db.ts'
 
 type ProjectRow = {
   id: string; name: string; owner_username: string; created_at: number; role: Role
   plan_status: 'active' | 'read_only'; retention_ends_at: number | null // the owner's
+  is_public: number
 }
 const summary = (p: ProjectRow): ProjectSummary => ({
-  id: p.id, name: p.name, ownerUsername: p.owner_username, createdAt: p.created_at, role: p.role,
+  id: p.id, name: p.name, ownerUsername: p.owner_username, createdAt: p.created_at, role: p.role, public: p.is_public === 1,
   frozen: p.plan_status === 'read_only', retentionEndsAt: p.plan_status === 'read_only' ? p.retention_ends_at : null,
 })
 // Projects joined with their owner's plan, which decides whether the project is frozen.
 const WITH_OWNER = 'JOIN users o ON o.id = p.owner_id'
-const COLS = 'p.id, p.name, p.created_at, o.username AS owner_username, o.plan_status, o.retention_ends_at'
+const COLS = 'p.id, p.name, p.created_at, p.is_public, o.username AS owner_username, o.plan_status, o.retention_ends_at'
 
 export function projectRoutes(ctx: Ctx, collab: Collab) {
   const { db } = ctx
   const r = new Hono<Env>()
-  r.use('*', requireSignedIn)
+  r.use('*', requireSignedInOrPublic(ctx)) // (only GETs of a public project's details and preview get through signed out)
 
-  const detail = (id: string, userId: number): ProjectDetail | null => {
-    const role = memberRole(ctx, id, userId)
+  const detail = (id: string, userId: number | null): ProjectDetail | null => {
+    const role = projectRole(ctx, id, userId)
     const row = role && (db.prepare(`SELECT ${COLS} FROM projects p ${WITH_OWNER} WHERE p.id = ?`).get(id) as Omit<ProjectRow, 'role'> | undefined)
     if (!row) return null
     const p = { ...row, role } as ProjectRow
-    const members = db
+    // (collaborators are only listed to signed-in accounts)
+    const members = userId === null ? [] : db
       .prepare(
         `SELECT u.username, m.role FROM project_members m JOIN users u ON u.id = m.user_id
          WHERE m.project_id = ? ORDER BY m.role = 'owner' DESC, u.username`,
@@ -64,17 +66,17 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
   })
 
   r.get('/:id', (c) => {
-    const p = detail(c.req.param('id'), c.var.session!.id)
+    const p = detail(c.req.param('id'), c.var.session?.id ?? null)
     return p ? c.json(p) : c.json({ error: 'not_found' }, 404)
   })
 
   // Access gate: null if the caller may proceed, else a 404 (non-member) / 403 (not owner when required) response.
   // `changes` marks routes that modify the project: they also refuse a read-only account or a frozen project.
   const gate = (c: Context<Env>, ownerOnly = false, changes = false) => {
-    const id = c.req.param('id')!, me = c.var.session!.id
-    const role = memberRole(ctx, id, me)
+    const id = c.req.param('id')!, me = c.var.session?.id ?? null
+    const role = projectRole(ctx, id, me)
     if (!role || (ownerOnly && role !== 'owner')) return c.json({ error: role ? 'forbidden' : 'not_found' }, role ? 403 : 404)
-    const blocked = changes && writeBlock(ctx, id, me)
+    const blocked = changes && me !== null && writeBlock(ctx, id, me)
     return blocked ? c.json({ error: blocked }, 403) : null
   }
 
@@ -94,10 +96,20 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
   r.patch('/:id', async (c) => {
     const denied = gate(c, true, true)
     if (denied) return denied
-    const name = String((await c.req.json().catch(() => ({}))).name ?? '').trim()
-    if (!name) return c.json({ error: 'bad_request' }, 400)
-    db.prepare('UPDATE projects SET name = ? WHERE id = ?').run(name, c.req.param('id'))
-    return c.json(detail(c.req.param('id'), c.var.session!.id))
+    const id = c.req.param('id')
+    const body = await c.req.json().catch(() => ({}))
+    const name = body.name === undefined ? undefined : String(body.name).trim()
+    const isPublic = body.public === undefined ? undefined : body.public
+    if ((name === undefined && isPublic === undefined) || name === '' || (isPublic !== undefined && typeof isPublic !== 'boolean'))
+      return c.json({ error: 'bad_request' }, 400)
+    if (name !== undefined) db.prepare('UPDATE projects SET name = ? WHERE id = ?').run(name, id)
+    if (isPublic !== undefined) {
+      db.prepare('UPDATE projects SET is_public = ? WHERE id = ?').run(isPublic ? 1 : 0, id)
+      if (!isPublic) // making it private again drops everyone who was only here through the link
+        for (const conn of collab.hocuspocus.documents.get(docName(id))?.getConnections() ?? [])
+          if (conn.context.userId == null || !memberRole(ctx, id, conn.context.userId)) conn.close({ code: 1000, reason: KICK_REASON })
+    }
+    return c.json(detail(id, c.var.session!.id))
   })
 
   r.delete('/:id', (c) => {
@@ -130,7 +142,7 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
     db.prepare(
       'INSERT INTO project_members(project_id, user_id, role) VALUES(?,?,?) ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role',
     ).run(id, target.id, newRole)
-    if (current && current !== newRole) kick(collab, id, target.id) // reconnects with the new role
+    if (current !== newRole) kick(collab, id, target.id) // reconnects with the new role (or as a collaborator, if they were only watching)
     return c.json(detail(id, c.var.session!.id))
   })
 

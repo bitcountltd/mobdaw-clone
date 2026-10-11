@@ -1,7 +1,7 @@
 import { Database } from '@hocuspocus/extension-database'
 import { Server } from '@hocuspocus/server'
 import { docName, samplesMap } from '@mobdaw/shared'
-import { memberRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
+import { isPublic, memberRole, projectRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
 import type { Link } from './uploads.ts'
 
 export type Collab = ReturnType<typeof createCollab>
@@ -90,14 +90,24 @@ export function createCollab(ctx: Ctx) {
         },
       }),
     ],
+    // Presence is a write too: whoever is not a collaborator (a signed-out visitor, or anyone who got in through a
+    // public link) only watches, and is never shown to others.
+    async beforeHandleAwareness({ context, states }) {
+      if (context?.watching) states.clear()
+    },
     async onAuthenticate({ token, documentName, connectionConfig }) {
       const user = sessionUser(ctx, token)
       const projectId = documentName.startsWith('project:') ? documentName.slice(8) : null
-      if (!user) throw new Error('not_signed_in')
-      const role = projectId && memberRole(ctx, projectId, user.id)
+      if (!user) {
+        // Signed out: only a public project, read-only.
+        if (!projectId || !isPublic(ctx, projectId)) throw new Error('not_signed_in')
+        connectionConfig.readOnly = true
+        return { userId: null, username: 'guest', role: 'viewer' as const, watching: true }
+      }
+      const role = projectId && projectRole(ctx, projectId, user.id)
       if (!role) throw new Error('forbidden')
       connectionConfig.readOnly = role === 'viewer' || !!writeBlock(ctx, projectId!, user.id)
-      return { userId: user.id, username: user.username, role }
+      return { userId: user.id, username: user.username, role, watching: !memberRole(ctx, projectId!, user.id) }
     },
   })
 }

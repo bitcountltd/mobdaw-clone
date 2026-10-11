@@ -1,5 +1,5 @@
 import { HocuspocusProvider } from '@hocuspocus/provider'
-import { docName, undoScope, userColor, type AwarenessState, type Me } from '@mobdaw/shared'
+import { docName, undoScope, userColor, type AwarenessState } from '@mobdaw/shared'
 import type { Awareness } from 'y-protocols/awareness'
 import * as Y from 'yjs'
 import { getToken } from '../api'
@@ -24,7 +24,11 @@ export type Session = {
 }
 
 /** Y.Doc + provider + awareness + undo for one project. Call destroy() on route leave. */
-export function openSession(projectId: string, me: Pick<Me, 'id' | 'username'>): Session {
+/**
+ * `watching`: not a collaborator (a signed-out visitor, or anyone who got in through a public link). They only read:
+ * nothing of theirs is published, presence included, and the server drops it anyway.
+ */
+export function openSession(projectId: string, me: { id: number | null; username: string }, watching = me.id === null): Session {
   const doc = new Y.Doc()
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const provider = new HocuspocusProvider({
@@ -35,13 +39,16 @@ export function openSession(projectId: string, me: Pick<Me, 'id' | 'username'>):
   })
   const awareness = provider.awareness!
   const user: AwarenessState['user'] = { username: me.username, color: userColor(me.username) }
-  awareness.setLocalStateField('user', user)
+  // Presence is a write too.
+  if (watching) awareness.setLocalState(null)
+  else awareness.setLocalStateField('user', user)
   // Local edits have origin null (tracked by default); remote updates carry the provider as origin.
   const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
   const synced = new Promise<void>((resolve) => (provider.synced ? resolve() : provider.on('synced', () => resolve())))
   return {
     projectId, doc, provider, local: false, awareness, undo, user, userId: me.id, synced,
     setLocal: (patch) => {
+      if (watching) return
       for (const [k, v] of Object.entries(patch)) awareness.setLocalStateField(k, v)
     },
     remoteStates: () =>

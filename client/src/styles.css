@@ -376,8 +376,24 @@ nav a.on { color: var(--fg); }
 .tile-new button:hover:not(:disabled) { color: var(--fg); }
 .tile-new button:disabled { opacity: .5; cursor: default; }
 .tile-new .small { font-size: 12px; }
-.project-name { cursor: text; }
-.bar-l .rename { width: 200px; }
+.project-name { font-weight: bold; border: 0; background: none; padding: 2px 6px; cursor: pointer; }
+.project-name:hover { background: var(--raise); }
+
+/* project settings panel */
+.settings { width: 280px; padding: 8px 12px; font-size: 13px; }
+.settings-sec + .settings-sec { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.settings h3 { margin: 0 0 6px; font-size: 12px; font-weight: normal; color: var(--dim); text-transform: uppercase; }
+.settings .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.settings .field input, .settings .field select, .settings select { width: 100%; box-sizing: border-box; }
+.settings .field.inline { flex-direction: row; align-items: center; }
+.settings .field.inline input { flex: 1; width: auto; }
+.settings .who { margin: 0 0 6px; }
+.settings .members { margin: 6px 0 0; }
+.settings .grow { flex: 1; }
+.settings .check { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 8px; }
+.settings .row { display: flex; gap: 6px; align-items: center; }
+.settings button, .popover.panel .settings button { padding: 2px 8px; border: 1px solid var(--line); background: var(--raise); text-align: center; }
+.settings p:empty { display: none; }
 
 .invite-dialog { width: min(480px, 90vw); padding: 16px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
 .invite-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }

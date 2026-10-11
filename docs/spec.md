@@ -367,7 +367,10 @@ All sample routes are scoped to a project, and the caller must be a member.
   the owner's own role can't be changed.
 - `POST /projects/:id/leave`: editors and viewers only. The owner gets 400
   `{error:"owner_cannot_leave"}`.
-- `PATCH /projects/:id` with `{name}`: owner only.
+- `PATCH /projects/:id` with `{name?, public?}`: owner only. `public: true` lets anyone that has the link open the project
+  as a read-only `viewer`, signed in or not (document, samples, preview; signed-out visitors can't list members or copy);
+  it is not listed in anyone's projects.
+  Turning it off closes the connections of everyone who was only there through the link. `ProjectSummary.public`.
 - `DELETE /projects/:id`: owner only, as described under Deletion.
 - `POST /projects/:id/copy` with `{name?}`: any member. It creates a new project owned by
   the caller that:

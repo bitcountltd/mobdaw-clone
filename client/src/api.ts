@@ -55,6 +55,7 @@ export const api = {
   projectPreview: (id: string) => get<ProjectPreview>(`/projects/${id}/preview`),
   createProject: (b: CreateProjectRequest) => post<ProjectSummary>('/projects', b),
   renameProject: (id: string, name: string) => req<ProjectDetail>('PATCH', `/projects/${id}`, { name }),
+  setProjectPublic: (id: string, isPublic: boolean) => req<ProjectDetail>('PATCH', `/projects/${id}`, { public: isPublic }),
   deleteProject: (id: string) => del(`/projects/${id}`),
   copyProject: (id: string) => post<ProjectDetail>(`/projects/${id}/copy`),
   leaveProject: (id: string) => post(`/projects/${id}/leave`),

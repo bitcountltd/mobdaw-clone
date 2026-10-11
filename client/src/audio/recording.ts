@@ -15,6 +15,11 @@ const offsetKey = (deviceId: string) => `mobdaw.inputOffsetMs.${deviceId}`
 export const getInputOffset = (deviceId: string) => Number(localStorage.getItem(offsetKey(deviceId))) || 0
 export const setInputOffset = (deviceId: string, ms: number) => localStorage.setItem(offsetKey(deviceId), String(ms))
 
+const inputKey = 'mobdaw.inputDevice'
+/** The microphone chosen in the project settings (a device id), kept in this browser; empty = the system default. */
+export const getPreferredInput = () => localStorage.getItem(inputKey) ?? ''
+export const setPreferredInput = (deviceId: string) => (deviceId ? localStorage.setItem(inputKey, deviceId) : localStorage.removeItem(inputKey))
+
 type Take = {
   pcm: Int16Array[]; frames: number; startPos: number | null; onChunk?: (pcm: Int16Array, seq: number) => void
   done: () => void; finished: Promise<void>
@@ -67,7 +72,10 @@ export class Recorder {
     const off = { echoCancellation: false, noiseSuppression: false, autoGainControl: false } // call-style processing ruins music
     let stream: MediaStream
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: off })
+      const pick = getPreferredInput()
+      // (a chosen microphone that is unplugged falls back to the default one)
+      stream = await navigator.mediaDevices.getUserMedia({ audio: pick ? { ...off, deviceId: { exact: pick } } : off })
+        .catch((e: DOMException) => (pick && e.name === 'OverconstrainedError' ? navigator.mediaDevices.getUserMedia({ audio: off }) : Promise.reject(e)))
     } catch (e) {
       throw new Error((e as DOMException).name === 'NotAllowedError' ? 'microphone access was denied' : `no microphone: ${(e as Error).message}`)
     }

@@ -6,6 +6,7 @@ import { deleteProjectAudio } from '../local/audio'
 import { dateOf } from '../format'
 import { cloudToLocal } from '../transfer'
 import { silliName } from '../projectName'
+import { memberRows } from '../ui/members'
 import { newProjectTile, projectTile, type TileAction } from '../ui/tile'
 
 /** A cloud project we no longer have: drop the takes this device staged for it (docs/engine.md §9.3). */
@@ -65,22 +66,8 @@ export function cloudSection(me: Me): HTMLElement {
       } })
 
     // Members: change role / remove, and share with someone new.
-    const roleSelect = (value: string, onchange: (role: 'editor' | 'viewer') => void) => {
-      const s = h('select', {}, h('option', { value: 'editor' }, 'editor'), h('option', { value: 'viewer' }, 'viewer'))
-      s.value = value
-      s.onchange = () => onchange(s.value as 'editor' | 'viewer')
-      return s
-    }
-    const members = d.members.filter((m) => m.role !== 'owner').map((m) =>
-      h('div', { className: 'row' }, h('span', { className: 'grow' }, m.username),
-        roleSelect(m.role, (role) => act(() => api.addMember(p.id, { username: m.username, role }))),
-        h('button', { title: 'remove', onclick: () => act(() => api.removeMember(p.id, m.username)) }, '×')))
-    const pick = h('select', { disabled: locked }, h('option', { value: '' }, 'share with…'),
-      ...usernames.filter((e) => e !== me.username && !d.members.some((m) => m.username === e)).map((e) => h('option', { value: e }, e)))
-    const role = roleSelect('editor', () => {})
-    pick.onchange = () => pick.value && act(() => api.addMember(p.id, { username: pick.value, role: role.value as 'editor' | 'viewer' }))
-    return tile([h('details', { className: 'members' }, h('summary', {}, `${members.length} shared`), ...members,
-      h('div', { className: 'row' }, pick, role))])
+    const rows = memberRows({ projectId: p.id, members: d.members, usernames, me: me.username, locked, act })
+    return tile([h('details', { className: 'members' }, h('summary', {}, `${d.members.filter((m) => m.role !== 'owner').length} shared`), ...rows)])
   }
 
   const section = h('section', { className: 'section' },

@@ -75,6 +75,87 @@ describe('websocket access', () => {
   })
 })
 
+describe('public projects', () => {
+  it('a public project opens read-only for any signed-in account, and making it private drops them', async () => {
+    const p = await create('Open')
+    expect((await alice.get(`/api/projects/${p}`)).status).toBe(404)
+    await denied(alice.token!, p)
+    const on = await admin.patch(`/api/projects/${p}`, { public: true })
+    expect(on.body.public).toBe(true)
+    expect(on.body.name).toBe('Open')
+    expect((await alice.get(`/api/projects/${p}`)).body).toMatchObject({ role: 'viewer', public: true })
+    expect((await alice.patch(`/api/projects/${p}`, { public: false })).status).toBe(403) // owner only
+    expect((await alice.get('/api/projects')).body.map((x: any) => x.id)).not.toContain(p) // not listed
+    expect((await alice.get(`/api/projects/${p}/samples`)).status).toBe(200)
+    const v = connect(t.port, p, alice.token!)
+    await until(() => v.provider.synced)
+    const gone = kicked(v)
+    await admin.patch(`/api/projects/${p}`, { public: false })
+    await until(() => gone.closed)
+    v.provider.destroy()
+    expect((await alice.get(`/api/projects/${p}`)).status).toBe(404)
+  })
+
+  it('signed-out visitors can read a public project, read-only, and nothing else', async () => {
+    const p = await create('Anon')
+    const anon = client(t.base)
+    expect((await anon.get(`/api/projects/${p}`)).status).toBe(401) // private
+    await denied('', p)
+    await admin.patch(`/api/projects/${p}`, { public: true })
+    const d = await anon.get(`/api/projects/${p}`)
+    expect(d.status).toBe(200)
+    expect(d.body).toMatchObject({ role: 'viewer', public: true, members: [] })
+    expect((await anon.get(`/api/projects/${p}/preview`)).status).toBe(200)
+    expect((await anon.get(`/api/projects/${p}/samples`)).status).toBe(200)
+    expect((await anon.get('/api/projects')).status).toBe(401)
+    expect((await anon.patch(`/api/projects/${p}`, { public: false })).status).toBe(401)
+    expect((await anon.post(`/api/projects/${p}/members`, { username: 'alice' })).status).toBe(401)
+    expect((await anon.post(`/api/projects/${p}/copy`, {})).status).toBe(401)
+
+    const a = connect(t.port, p, admin.token!)
+    const g = connect(t.port, p, '')
+    await until(() => a.provider.synced && g.provider.synced)
+    addTrack(g.doc, 'Sneaky') // applied locally only
+    g.provider.awareness!.setLocalStateField('user', { username: 'guest' }) // presence is a write too
+    a.provider.awareness!.setLocalStateField('user', { username: 'owner' })
+    addTrack(a.doc, 'Real')
+    await until(() => names(g).includes('Real'))
+    await until(() => [...g.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'owner')) // sees others
+    await new Promise((r) => setTimeout(r, 300))
+    expect(names(a)).toEqual(['Real'])
+    expect([...a.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'guest')).toBe(false)
+    const gone = kicked(g)
+    await admin.patch(`/api/projects/${p}`, { public: false })
+    await until(() => gone.closed)
+    a.provider.destroy()
+    g.provider.destroy()
+  })
+
+  it('a signed-in non-member viewing a public project is invisible too, a viewer member is not', async () => {
+    const p = await create('Watchers')
+    await admin.patch(`/api/projects/${p}`, { public: true })
+    const a = connect(t.port, p, admin.token!)
+    const v = connect(t.port, p, alice.token!) // not a member: in through the link
+    await until(() => a.provider.synced && v.provider.synced)
+    v.provider.awareness!.setLocalStateField('user', { username: 'alice' })
+    await new Promise((r) => setTimeout(r, 300))
+    const seen = () => [...a.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'alice')
+    expect(seen()).toBe(false)
+    await admin.post(`/api/projects/${p}/members`, { username: 'alice', role: 'viewer' }) // now a collaborator
+    const v2 = connect(t.port, p, alice.token!)
+    await until(() => v2.provider.synced)
+    v2.provider.awareness!.setLocalStateField('user', { username: 'alice' })
+    await until(seen)
+    for (const c of [a, v, v2]) c.provider.destroy()
+  })
+
+  it('rejects an empty patch and non-boolean values', async () => {
+    const p = await create('Bad')
+    expect((await admin.patch(`/api/projects/${p}`, {})).status).toBe(400)
+    expect((await admin.patch(`/api/projects/${p}`, { public: 'yes' })).status).toBe(400)
+  })
+})
+
 describe('copy', () => {
   it('copies live doc state and library; caller owns the copy', async () => {
     const src = await create('Source')

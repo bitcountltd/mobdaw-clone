@@ -80,6 +80,22 @@ export function memberRole(ctx: Ctx, projectId: string, userId: number) {
     | undefined)?.role
 }
 
+/** What the user may do in a project: their membership role, or 'viewer' when the project is public. Undefined when neither. */
+export function projectRole(ctx: Ctx, projectId: string, userId: number | null): Role | undefined {
+  const member = userId === null ? undefined : memberRole(ctx, projectId, userId)
+  return member ?? (isPublic(ctx, projectId) ? 'viewer' : undefined)
+}
+export const isPublic = (ctx: Ctx, projectId: string) => !!ctx.db.prepare('SELECT 1 FROM projects WHERE id = ? AND is_public = 1').get(projectId)
+
+/** Anonymous visitors may only read a public project: its details, preview and sample list / download links. */
+const PUBLIC_READ = /\/projects\/([^/]+)(?:\/preview|\/samples|\/samples\/[^/]+\/url)?$/
+/** Like `requireSignedIn`, but lets a signed-out GET through when it only reads a public project (handlers then see `session` null). */
+export const requireSignedInOrPublic = (ctx: Ctx): MiddlewareHandler<Env> => async (c, next) => {
+  if (c.var.session) return next()
+  const id = c.req.method === 'GET' ? PUBLIC_READ.exec(c.req.path)?.[1] : undefined
+  if (!id || !isPublic(ctx, decodeURIComponent(id))) return c.json({ error: 'not_signed_in' }, 401)
+  await next()
+}
 
 export type WriteBlock = 'account_read_only' | 'project_frozen'
 

@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { LibrarySample, UploadUrlRequest } from '@mobdaw/shared'
-import { isDevUser, memberRole, requireSignedIn, writeBlock, type Ctx, type Env } from '../auth.ts'
+import { isDevUser, projectRole, requireSignedInOrPublic, writeBlock, type Ctx, type Env } from '../auth.ts'
 import { tx } from '../db.ts'
 import { isHash, type Storage } from '../storage/index.ts'
 import { getUpload } from '../uploads.ts'
@@ -9,7 +9,7 @@ import { getUpload } from '../uploads.ts'
 export function sampleRoutes(ctx: Ctx, storage: Storage) {
   const { db, config } = ctx
   const r = new Hono<Env>()
-  r.use('*', requireSignedIn)
+  r.use('*', requireSignedInOrPublic(ctx))
   const link = (project: string, hash: string, owner: number) =>
     db.prepare('INSERT OR IGNORE INTO project_samples(project_id, hash, owner_id, added_at) VALUES(?,?,?,?)').run(project, hash, owner, Date.now())
   // Someone else's upload of this file that the user can already read through a project they belong to.
@@ -42,11 +42,11 @@ export function sampleRoutes(ctx: Ctx, storage: Storage) {
 
   // Membership gate: 404 for non-members; writes additionally refuse viewers, read-only accounts and frozen projects.
   r.use('/*', async (c, next) => {
-    const role = memberRole(ctx, c.req.param('id')!, c.var.session!.id)
+    const role = projectRole(ctx, c.req.param('id')!, c.var.session?.id ?? null)
     if (!role) return c.json({ error: 'not_found' }, 404)
     if (c.req.method !== 'GET') {
       if (role === 'viewer') return c.json({ error: 'forbidden' }, 403)
-      const blocked = writeBlock(ctx, c.req.param('id')!, c.var.session!.id)
+      const blocked = writeBlock(ctx, c.req.param('id')!, c.var.session!.id) // (writes are never anonymous)
       if (blocked) return c.json({ error: blocked }, 403)
     }
     await next()
