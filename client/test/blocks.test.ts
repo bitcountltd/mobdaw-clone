@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { grabAt, rotateTick, trimBlock, trimMidiLeft } from '../src/ui/blocks'
+import { grabAt, rotateTick, snapMove, snapTracker, trimBlock, trimMidiLeft } from '../src/ui/blocks'
 
 const box = (left: number, width: number) => ({ left, right: left + width, width }) as DOMRect
 
@@ -51,5 +51,39 @@ describe('rotateTick', () => {
     expect(rotateTick(0, 240, 3840)).toBe(3600) // before the new start: it is the next pass's now
     expect(rotateTick(100, -240, 3840)).toBe(340) // dragged back out to the left
     expect(rotateTick(100, 3840 * 5, 3840)).toBe(100) // whole passes change nothing
+  })
+})
+
+describe('snapMove', () => {
+  it('snaps the start to a nearby target', () => {
+    expect(snapMove(103, 50, [0, 100], 5)).toEqual({ start: 100, at: 100 })
+  })
+  it('snaps the end to a nearby target', () => {
+    expect(snapMove(48, 50, [100], 5)).toEqual({ start: 50, at: 100 })
+  })
+  it('takes the nearest of several candidates', () => {
+    expect(snapMove(97, 50, [100, 146], 5)).toEqual({ start: 96, at: 146 })
+  })
+  it('leaves the block alone when nothing is within tolerance', () => {
+    expect(snapMove(60, 10, [0, 100], 5)).toBeNull()
+  })
+  it('never snaps before 0', () => {
+    expect(snapMove(2, 10, [8], 5)).toBeNull()
+  })
+})
+
+describe('snapTracker', () => {
+  it('stays off a target it was pulled free of until moved far enough away', () => {
+    const snap = snapTracker([100], 20)
+    expect(snap(103, 10, 5)?.start).toBe(100) // snapped
+    expect(snap(108, 10, 5)).toBeNull() // pulled free
+    expect(snap(103, 10, 5)).toBeNull() // back inside the zone: disarmed, place by hand
+    expect(snap(130, 10, 5)).toBeNull() // far away: re-armed
+    expect(snap(103, 10, 5)?.start).toBe(100)
+  })
+  it('does not disarm targets it never snapped to', () => {
+    const snap = snapTracker([100], 20)
+    expect(snap(60, 10, 5)).toBeNull()
+    expect(snap(98, 10, 5)?.start).toBe(100)
   })
 })

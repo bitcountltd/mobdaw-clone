@@ -130,6 +130,8 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .playhead, .remote-head { position: absolute; top: 0; bottom: 0; width: 1px; }
 .playhead { background: var(--fg); }
 .remote-head { opacity: .8; }
+.snap-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent, #6cf); z-index: 3; }
+.snap-line[hidden] { display: none; }
 
 /* lanes: header, clip row, FX chain */
 .lane { --lane: #1a1112; background: var(--lane); border-bottom: 3px solid var(--divider); position: relative; }

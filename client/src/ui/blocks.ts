@@ -90,3 +90,36 @@ export function trimMidiLeft(c: { start: number; bpm: number; ppq: number; lengt
  * moves `d` ticks to the right: back by `d`, turning round the loop's start so it stays inside the pattern.
  */
 export const rotateTick = (tick: number, d: number, loop: number) => (((tick - d) % loop) + loop) % loop
+
+/**
+ * Snap a block being moved: its start or its end, whichever lies nearest to one of `targets` (all samples), jumps onto
+ * that target when within `tol`. Returns the (possibly shifted) start and the target it landed on, or null when none was close.
+ */
+export function snapMove(start: number, length: number, targets: number[], tol: number) {
+  let best: { start: number; at: number; gap: number } | null = null
+  for (const t of targets) {
+    for (const edge of [0, length]) {
+      const gap = Math.abs(start + edge - t)
+      if (gap <= tol && (!best || gap < best.gap)) best = { start: t - edge, at: t, gap }
+    }
+  }
+  return best && best.start >= 0 ? { start: best.start, at: best.at } : null
+}
+
+/**
+ * A drag's snapping with hysteresis: once the block has snapped to a target and then pulled away, that target stays
+ * disarmed until the block is more than `rearm` from it, so things can be placed close beside a target by hand.
+ * Call the returned function with each new position (same units as `targets`); `tol` is the snap distance.
+ */
+export function snapTracker(targets: number[], rearm: number) {
+  const off = new Set<number>()
+  let last: number | null = null
+  const gap = (t: number, start: number, length: number) => Math.min(Math.abs(start - t), Math.abs(start + length - t))
+  return (start: number, length: number, tol: number) => {
+    for (const t of off) if (gap(t, start, length) > rearm) off.delete(t)
+    const snap = snapMove(start, length, targets.filter((t) => !off.has(t)), tol)
+    if (last !== null && snap?.at !== last && gap(last, start, length) <= rearm) off.add(last)
+    last = snap?.at ?? null
+    return snap
+  }
+}

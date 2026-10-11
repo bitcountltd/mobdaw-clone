@@ -27,13 +27,15 @@ import type { FilterChange, FilterMember } from './filterCurve'
 import { LOOP_COLORS, looperCard } from './loopers'
 import { drumGrid } from './drumGrid'
 import { noteEditor } from './noteEditor'
-import { clamp, dragPointer, grabAt, rotateTick, trimBlock, trimMidiLeft, type Grab } from './blocks'
+import { clamp, dragPointer, grabAt, rotateTick, snapTracker, trimBlock, trimMidiLeft, type Grab } from './blocks'
 import { closedBy, deleteMenu, popover } from './popover'
 import { fmt, transportControls, type TransportControls } from './transport'
 import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
 import { valueTip } from './valueTip'
 
 const HEADER = 140
+const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
+const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
 const MIN_SEC = 0.05
 const LANE_H = 72
 const NO_DRAGS = new Map<number, number>()
@@ -189,10 +191,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   } }, '+')
   const overlay = h('div', { className: 'overlay' })
   const playhead = h('div', { className: 'playhead' })
+  const snapLine = h('div', { className: 'snap-line', hidden: true }) // where a dragged clip just snapped to
   // The ruler is opaque and above the overlay, so it carries its own copies of the playhead lines.
   const rulerHead = h('div', { className: 'playhead' })
   const rulerHeads = h('div', { className: 'overlay' }, rulerHead)
-  overlay.append(playhead)
+  overlay.append(playhead, snapLine)
   const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio files here, or use + track.')
   const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
   const content = h('div', { className: 'content' }, ruler, laneBox, masterAuto.el, hint, readOnly ? null : addLink, bgPicker, overlay)
@@ -1393,6 +1396,14 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     let curTrack = clip.trackId
     const srcFrames = clip.kind === 'audio' ? (getSamples(doc)[clip.sourceHash]?.duration ?? Infinity) * rate : Infinity
     const notes0 = clip.kind === 'midi' ? getNotes(doc).filter((n) => n.clipId === id) : []
+    // snap targets: the timeline start, the playhead and the edges of every other clip and pad (source lanes keep their own time)
+    const snapAt = snapTracker([
+      0,
+      Math.round(position()),
+      ...getClips(doc).filter((c) => c.id !== id && !lanes.get(c.trackId)?.src).flatMap((c) => [c.start, c.start + clipLength(c, rate)]),
+      ...getPads(doc).flatMap((p) => [p.start, p.start + p.length]),
+    ], (REARM_PX / pps) * rate)
+    const length = clipLength(clip, rate)
     dragPointer(ev, {
       onDrag: (m) => {
         if (!clipsMap(doc).has(id)) return
@@ -1401,10 +1412,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         const hit = targetAt(m.clientY, clip.kind)
         if (hit) curTrack = hit
         const host = hostOf(curTrack)
-        const start = Math.max(0, Math.round(((m.clientX - grab - host.el.getBoundingClientRect().left) / host.pps) * rate))
+        let start = Math.max(0, Math.round(((m.clientX - grab - host.el.getBoundingClientRect().left) / host.pps) * rate))
+        const snap = m.altKey || lanes.get(curTrack)?.src ? null : snapAt(start, length, (SNAP_PX / host.pps) * rate)
+        if (snap) start = snap.start
+        snapLine.hidden = !snap
+        if (snap) snapLine.style.left = `${HEADER + x(snap.at)}px`
         updateClip(doc, id, { start, ...(curTrack !== clip.trackId ? { trackId: curTrack } : {}) })
       },
       onEnd: (moved) => {
+        snapLine.hidden = true
         undo.stopCapturing()
         if (!moved) zoom()
       },
