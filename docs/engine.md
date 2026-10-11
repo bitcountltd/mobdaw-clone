@@ -370,3 +370,16 @@ client diverged, so we don't.
   track is gone, the take goes into a new track with the same name.
 - The lock covers recording only. Once stopped, the take is a normal clip and `incoming`
   says it isn't shared yet.
+
+## 10. Drum grid and the metronome
+
+- **Drum grid**: a MIDI clip with `view: 'drums'` opens a step grid instead of the piano roll (same notes, same
+  looping, same export). Rows are the track's instruments whose range is a single note (`keyLo === keyHi`), in
+  synths-lane order; wide-range synths get no row. "+ add drum" adds a lofi drum on the lowest unused key from 36 up.
+  A cell toggles a one-step, velocity-1 note. Notes at pitches without a single-note instrument are hidden but kept.
+- **Several instruments per track**: a note goes to every non-bypassed instrument whose range contains its pitch;
+  their outputs are summed before the track's effect chain.
+- **Metronome button** (top bar): creates a MIDI track with `role: 'click'` (accent + tick lofi drums and a looping
+  drum clip at 120 bpm, 4/4) in one undo step; afterwards it toggles that track's mute. Click tracks ignore solo
+  (their own mute still counts). There is no count-in feature: start the song at bar 2, mute the click, and the
+  export trims the lead-in (export covers only audible clips).
