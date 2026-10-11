@@ -1,8 +1,8 @@
-// One looper slot's card: mute and volume, speed (0.1x-4x, log slider), tape controls (saturation, filter, warble), a "draw region" arm button and clear.
+// One looper slot's card: on/off switch (mute), volume, speed (0.1x-4x, log slider), tape controls (saturation, filter, warble), a "draw region" arm button and clear.
 import { LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, type Looper, type ParamTarget } from '@mobdaw/shared'
 import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
-import { deleteMenu } from './popover'
+import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
 import { fmtDb } from './slider'
 import { valueTip } from './valueTip'
 
@@ -45,9 +45,8 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
   const color = LOOP_COLORS[lp.slot % LOOP_COLORS.length]
   const draw = h('button', { title: 'draw the loop region on the track', onclick: () => deps.toggleArm(id) }, 'draw')
   const clear = h('button', { title: 'clear region', onclick: () => deps.clear(id) }, 'clear')
-  const remove = h('button', { className: 'x', title: 'remove looper', onclick: () => deps.remove(id) }, '×')
-  const mute = h('button', { className: 'mute', title: 'mute', onclick: () => deps.setMuted(id, !muted) }, 'm')
-  draw.disabled = clear.disabled = remove.disabled = mute.disabled = deps.readOnly
+  const power = onOffSwitch('mute', () => deps.setMuted(id, !muted))
+  draw.disabled = clear.disabled = power.disabled = deps.readOnly
   let muted = false
   const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, disabled: deps.readOnly, title: 'volume' })
   valueTip(vol, () => fmtDb(Number(vol.value)))
@@ -96,16 +95,18 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
     deps.autoMenu(label, { scope: lp.trackId, kind: 'looper', owner: id, param: key })
     return label
   }
+  const title = h('strong', {}, `loop ${lp.slot + 1}`)
+  title.style.color = color // the slot's colour, as on its region box
+  const head = h('div', { className: 'dev-head' }, title, h('span', { className: 'grow' }), power)
   const el = h('div', { className: 'dev looper' },
-    h('div', { className: 'dev-head' }, h('strong', {}, `loop ${lp.slot + 1}`), h('span', { className: 'grow' }), remove),
-    h('div', { className: 'prm' }, name('gain', 'volume'), h('div', { className: 'ctl' }, mute, vol)),
+    head,
+    h('label', { className: 'prm' }, name('gain', 'volume'), vol),
     h('label', { className: 'prm' }, name('speed', 'speed'), speed),
     h('label', { className: 'prm' }, name('sat', 'saturate'), sat),
     h('label', { className: 'prm' }, name('cutoff', 'filter'), filter),
     h('label', { className: 'prm' }, name('warble', 'warble'), warble),
     h('div', { className: 'prm' }, h('span', { className: 'dim' }, 'region'), h('div', { className: 'btns' }, draw, clear)))
-  el.style.setProperty('--c', color)
-  deleteMenu(el, 'delete looper', () => deps.remove(id), () => !deps.readOnly)
+  cardMenu(el, head, title, 'delete looper', () => deps.remove(id), () => !deps.readOnly)
 
   let current = lp
   let lastArmed = false
@@ -128,7 +129,7 @@ export function looperCard(lp: Looper, deps: LooperDeps) {
       out.textContent = fmtSpeed(sp.v)
     }
     muted = l.muted ?? false
-    mute.classList.toggle('on', muted)
+    setSwitch(power, el, !muted)
     const vo = val('gain', vol, l.gain ?? 1)
     if (vo.show) vol.value = String(vo.v)
     const sa = val('sat', sat, l.sat ?? 0)

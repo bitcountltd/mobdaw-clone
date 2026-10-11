@@ -4,7 +4,8 @@ A collaborative web DAW: invite-only, real-time editing of the same project. See
 
 Free and open source under the [Apache License 2.0](LICENSE.md). See
 [`docs/pro-tier.md`](docs/pro-tier.md) for free vs mobdaw pro, and
-[`docs/data-policy.md`](docs/data-policy.md) for how cloud data is handled.
+[`docs/data-policy.md`](docs/data-policy.md) for how cloud data is handled. UI conventions are in
+[`docs/style.md`](docs/style.md).
 
 ## Quick start
 Prerequisites: Node 24, and Rust via [rustup](https://rustup.rs) with the wasm target

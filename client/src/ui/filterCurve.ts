@@ -7,8 +7,8 @@ import { dampingAtNodeDb, filterHasGain, filterNodeDb, filterResponseDb, type Fi
 /** One colour per filter of a run (in chain order), shared by the card's title and its node. A lone filter has none. */
 export const FILTER_COLORS = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0', '#b388ff', '#ff9f68']
 
-/** Width of one card; the view is this wide per filter in the run. */
-export const CARD_W = 200
+/** Width of a filter card (the rest are wider); the merged view is this wide per filter in the run. */
+export const CARD_W = 160
 const H = 56
 const HZ_MIN = 20
 const HZ_MAX = 20000

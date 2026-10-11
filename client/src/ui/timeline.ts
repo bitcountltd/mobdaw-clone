@@ -169,7 +169,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const n = getTracks(doc).length + 1
     popover(addLink, [
       ['audio', () => addTrack(doc, `track ${n}`)],
-      ['MIDI', () => {
+      ['midi', () => {
         doc.transact(() => addDevice(doc, addTrack(doc, `midi ${n}`, 'midi'), FINNWAVE))
       }],
       ['soundscape', () => addTrack(doc, `soundscape ${n}`, 'soundscape')],
@@ -658,6 +658,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     } }, 'synth')
     const synth = h('div', { className: 'fx' })
+    openOnClick(synth, () => synthShown.add(t.id))
     const synthRow = h('div', { className: 'fx-row', hidden: true }, synthMore, synth)
     // soundscape tracks: the main lane is blank like an empty track (regions turn the loopers on); the source audio gets its own lane
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
@@ -670,6 +671,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     } }, 'loopers')
     const loops = h('div', { className: 'fx' })
+    openOnClick(loops, () => loopShown.add(t.id))
     loops.append(h('button', { className: 'add-fx', title: 'add looper', disabled: readOnly, onclick: () => addNextLooper(doc, t.id) }, '+'))
     const loopTc = transportControls({ title: 'play / stop the loops', small: true, onToggle: () => togglePreview(t.id, 'loops') })
     const loopRow = h('div', { className: 'fx-row', hidden: true }, h('div', { className: 'fx-head' }, loopMore, loopTc.el), loops)
@@ -722,9 +724,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     l.fx.classList.toggle('collapsed', !fxOpen)
     l.more.classList.toggle('on', fxOpen)
     l.synthRow.hidden = t.kind !== 'midi'
-    l.synth.hidden = !synthOpen
+    const instruments = mine.filter((d) => DEVICES[d.type]?.instrument)
+    const synthShut = !synthOpen && (t.kind !== 'midi' || instruments.length === 0)
+    l.synth.hidden = synthShut // shut: the synth card stays as a title bar
+    l.synth.classList.toggle('collapsed', !synthOpen)
     l.synthMore.classList.toggle('on', synthOpen)
-    if (!fxShown && !synthOpen) return
+    if (!fxShown && synthShut) return
     const ids = new Set(mine.map((d) => d.id))
     for (const [id, c] of l.cards) if (!ids.has(id)) { c.el.remove(); l.cards.delete(id) }
     const place = (box: HTMLElement, list: Device[]) => list.forEach((d, i) => {
@@ -733,7 +738,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       if (box.children[i] !== c.el) box.insertBefore(c.el, box.children[i] ?? null)
       c.update(d, remoteDrags.get(d.id) ?? NO_DRAGS, autoInfos.get(d.id) ?? NO_AUTO)
     })
-    if (synthOpen) place(l.synth, mine.filter((d) => DEVICES[d.type]?.instrument))
+    if (!synthShut) place(l.synth, instruments)
     if (fxShown) {
       findRuns(chain)
       place(l.fx, chain)
@@ -1003,10 +1008,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     const isLoop = t.kind === 'soundscape' && !!l.src
     l.loopRow.hidden = !isLoop
     const open = isLoop && loopShown.has(t.id)
-    l.loops.hidden = !open
+    const mine = isLoop ? loopers.filter((x) => x.trackId === t.id) : []
+    const shown = open || mine.length > 0 // shut: the cards stay as title bars
+    l.loops.hidden = !shown
+    l.loops.classList.toggle('collapsed', !open)
     l.loopMore.classList.toggle('on', open)
     l.loopTc.el.hidden = !open
-    const mine = isLoop ? loopers.filter((x) => x.trackId === t.id) : []
     l.src?.body.classList.toggle('arming', mine.some((x) => x.id === armed))
     // region boxes
     const ids = new Set(mine.filter((x) => x.length > 0).map((x) => x.id))
@@ -1026,7 +1033,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       b.style.width = `${Math.max(2, (lp.length / rate) * l.src.pps)}px`
       b.classList.toggle('armed', lp.id === armed)
     }
-    if (!open) return
+    if (!shown) return
     for (const [id, c] of l.loopCards) if (!mine.some((m) => m.id === id)) { c.el.remove(); l.loopCards.delete(id) }
     mine.forEach((lp, i) => {
       let c = l.loopCards.get(lp.id)
@@ -1275,7 +1282,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (e.dataset.sig === sig) return
     e.dataset.sig = sig
     const lo = Math.min(...notes.map((n) => n.pitch)), hi = Math.max(...notes.map((n) => n.pitch))
-    e.replaceChildren('MIDI', ...notes.map((n) => {
+    e.replaceChildren('midi', ...notes.map((n) => {
       const m = h('i', { className: 'mark' })
       m.style.left = `${(n.tick / c.lengthTicks) * 100}%`
       m.style.width = `${Math.max(1, (n.durTicks / c.lengthTicks) * 100)}%`

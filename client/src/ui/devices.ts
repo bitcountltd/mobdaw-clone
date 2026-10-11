@@ -1,9 +1,9 @@
-// FX chain cards: title, bypass, remove and param controls for one device.
+// FX chain cards: title (click for the delete menu), on/off switch and param controls for one device.
 import { DEVICES, SIMPLE_FILTER, filterHasGain, paramToPos, paramToValue, type Device, type ParamDef, type ParamTarget } from '@mobdaw/shared'
 import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
-import { FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type FilterMember } from './filterCurve'
-import { deleteMenu } from './popover'
+import { CARD_W, FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type FilterMember } from './filterCurve'
+import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
 import { dragToReorder } from './reorder'
 import { valueTip } from './valueTip'
 
@@ -42,9 +42,9 @@ type Row = { p: ParamDef; input: HTMLInputElement | HTMLSelectElement; out: HTML
 export function deviceCard(dev: Device, deps: CardDeps) {
   const def = DEVICES[dev.type]
   const id = dev.id
-  const bypass = h('button', { title: 'bypass', className: 'byp', onclick: () => deps.bypass(id, !current.bypass) }, 'bypass')
-  const remove = h('button', { title: 'remove device', className: 'x', onclick: () => deps.remove(id) }, '×')
-  bypass.disabled = remove.disabled = deps.readOnly
+  // lit while the effect is running, off while bypassed
+  const bypass = onOffSwitch('bypass', () => deps.bypass(id, !current.bypass))
+  bypass.disabled = deps.readOnly
   let current = dev
   const title = h('strong', {}, def?.name ?? `device ${dev.type}`)
 
@@ -138,15 +138,16 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     return { p, input, out, label }
   })
 
-  const head = h('div', { className: 'dev-head' }, title, h('span', { className: 'grow' }), bypass, def?.instrument ? null : remove)
+  const head = h('div', { className: 'dev-head' }, title, h('span', { className: 'grow' }), bypass)
   const el = h('div', { className: 'dev', 'data-device': id },
     head,
     slot,
     ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input)))
+  if (slot) el.style.width = `${CARD_W}px` // filters stay narrow: their run shares one curve view, a card wide per filter
   if (!def?.instrument && !deps.readOnly) {
     dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })
   }
-  if (!def?.instrument) deleteMenu(el, 'delete device', () => deps.remove(id), () => !deps.readOnly)
+  if (!def?.instrument) cardMenu(el, head, title, 'delete effect', () => deps.remove(id), () => !deps.readOnly)
 
   /**
    * `remote`: in-progress values from other users' drags, keyed by param id. `auto`: the params a lane
@@ -156,8 +157,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   function update(d: Device, remote: Map<number, number>, auto: Map<string, AutoInfo> = NO_AUTO) {
     current = d
     lastRemote = remote
-    bypass.classList.toggle('on', d.bypass)
-    el.classList.toggle('bypassed', d.bypass)
+    setSwitch(bypass, el, !d.bypass)
     for (const { p, input, out, label } of rows) {
       const a = auto.get(String(p.id))
       const driven = !!a?.on && a.value != null

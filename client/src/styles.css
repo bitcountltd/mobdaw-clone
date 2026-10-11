@@ -2,7 +2,7 @@
 * { scrollbar-width: none; }
 *::-webkit-scrollbar { display: none; }
 :root {
-  --bg: #160f10; --panel: #1d1314; --raise: #271c1d; --line: #2f2223; --fg: #ddd5d5; --dim: #8c7f80; --accent: #7aa2ff; --danger: #ff7a7a; --divider: #8c1818;
+  --bg: #160f10; --panel: #1d1314; --raise: #271c1d; --line: #2f2223; --fg: #ddd5d5; --dim: #8c7f80; --accent: #7aa2ff; --danger: #ff7a7a; --divider: #8c1818; --switch: #a32424; --switch-track: #4a1616;
   color-scheme: dark;
   font: 14px/1.4 system-ui, -apple-system, sans-serif;
 }
@@ -17,7 +17,8 @@ input, select, button {
   font: inherit; color: var(--fg); background: var(--raise); border: 1px solid var(--line);
   border-radius: 0; padding: 6px 10px;
 }
-button { cursor: pointer; }
+/* buttons are floating text: no background or border until hovered or toggled on */
+button { cursor: pointer; background: none; border: 0; }
 button:hover { background: var(--line); }
 :disabled { opacity: 0.4; cursor: default; }
 nav { display: flex; gap: 20px; align-items: center; padding: 14px 24px; }
@@ -175,13 +176,13 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .fx-row { position: relative; z-index: 2; display: flex; background: var(--lane); border-top: 1px solid var(--line); }
 .fx-toggle { position: sticky; left: 0; flex: none; width: 140px; min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
 .fx-toggle.on { color: var(--fg); }
-.fx { position: sticky; left: 140px; width: calc(100vw - 140px); display: flex; flex-wrap: wrap; align-items: flex-start; min-height: 72px; }
+.fx { position: sticky; left: 140px; width: calc(100vw - 140px); display: flex; flex-wrap: wrap; align-items: stretch; min-height: 72px; } /* cards stretch to the row's tallest, so borders line up */
 .fx[hidden] { display: none; }
 /* shut: only each card's title bar */
 .fx.collapsed { min-height: 0; align-items: stretch; }
 .fx.collapsed .dev > :not(.dev-head), .fx.collapsed .add-fx { display: none; }
 .fx.collapsed .dev { cursor: pointer; display: flex; flex-direction: column; } /* the title bar fills the bar's height */
-.fx.collapsed .dev-head { height: auto; flex: 1; background: color-mix(in srgb, var(--bg) 75%, var(--lane)); color: var(--dim); }
+.fx.collapsed .dev-head { height: auto; flex: 1; color: var(--dim); }
 .fx.collapsed .dev-head strong { opacity: .65; } /* filter colour-coding stays, darkened */
 .fx-row[hidden] { display: none; }
 /* global fx: pinned under the scroller; opens upward into a capped, scrollable strip */
@@ -189,8 +190,6 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .lane.master .fx-row { border-top: 0; min-width: 100%; width: max-content; }
 .lane.master .fx { position: static; width: auto; max-width: calc(100vw - 140px); }
 .lane.master .fx-toggle { min-height: 44px; padding-left: 12px; font-size: 14px; line-height: 44px; align-items: center; color: var(--fg); }
-.dev.looper { box-shadow: inset 3px 0 0 var(--c); }
-.dev.looper .dev-head strong { padding-left: 4px; }
 .lane-body.arming { cursor: crosshair; }
 /* looper regions: coloured outline boxes over the track's audio */
 .loop-box { position: absolute; top: 0; bottom: 0; cursor: grab; z-index: 1; background: color-mix(in srgb, var(--c) 14%, transparent); }
@@ -199,10 +198,16 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .loop-box::before { left: 0; }
 .loop-box::after { right: 0; }
 .loop-box span { pointer-events: none; position: absolute; top: 0; left: 0; padding: 0 5px; font-size: 10px; line-height: 14px; color: var(--bg); background: var(--c); }
-.dev { position: relative; width: 200px; font-size: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.dev { position: relative; width: 280px; font-size: 12px; border-right: 1px solid var(--line); }
 .dev.bypassed { opacity: 0.55; }
-.dev-head { display: flex; gap: 6px; align-items: center; padding: 0 0 0 8px; height: 18px; padding-right: 18px; background: var(--raise); }
+.dev-head { display: flex; gap: 6px; align-items: center; padding: 0 0 0 8px; height: 18px; padding-right: 8px; }
 .dev button { border: 0; padding: 0 6px; font-size: 11px; line-height: 18px; }
+/* on/off switch: a square knob in a flat track; a red knob in a dark red slot while the effect runs */
+.dev .sw { position: relative; flex: none; width: 24px; height: 12px; padding: 0; background: var(--line); }
+.dev .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: var(--dim); }
+.dev .sw:hover { background: color-mix(in srgb, var(--line) 70%, var(--dim)); }
+.dev .sw[aria-checked=true] { background: var(--switch-track); }
+.dev .sw[aria-checked=true]::after { left: 14px; background: var(--switch); }
 .add-fx { align-self: center; margin: 0 16px; width: 64px; height: 40px; font-size: 22px; line-height: 1; color: var(--dim); background: none; border: 1px dashed var(--line); }
 .dev .prm { display: grid; grid-template-columns: 1fr 2fr; gap: 6px; align-items: center; padding: 3px 8px; }
 .dev .prm input, .dev .prm select { padding: 0; border: 0; min-width: 0; accent-color: var(--accent); }
@@ -299,11 +304,8 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .fx-head .fx-toggle { position: relative; width: auto; flex: none; border-right: 0; }
 .fx-head .transport.sm { padding: 3px 0 0 6px; }
 .loop-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--c); pointer-events: none; z-index: 2; }
-.dev.looper { width: 280px; }
-.dev.looper .prm > .ctl, .dev.looper .prm > .btns { grid-column: 2; }
+.dev.looper .prm > .btns { grid-column: 2; }
 .dev.looper .btns { display: flex; gap: 6px; }
-.dev.looper .ctl button { background: var(--raise); }
-.dev.looper .ctl button.on { background: var(--accent); }
 
 /* pages: banner, small text, danger buttons */
 .top { flex: none; }
@@ -320,7 +322,6 @@ nav a.on { color: var(--fg); }
 .ctl button.record.on { color: #fff; background: var(--danger); }
 .clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); pointer-events: none; z-index: 1; }
 .ctl.track-btns { background: none; } /* the strip beside M S R shows only while the meter is live */
-.ctl.track-btns button:not(.on) { background: var(--line); }
 .ctl button.listen[hidden] { display: none; }
 .ctl .meter { background: var(--line); flex: 1; align-self: stretch; position: relative; overflow: hidden; }
 .ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: #6fcf8f; transition: width 60ms linear; }
