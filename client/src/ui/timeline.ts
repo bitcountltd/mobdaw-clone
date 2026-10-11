@@ -1,9 +1,9 @@
 // Plain absolutely-positioned DOM timeline. Isolated so it can be redesigned.
 // Positions in the doc are integer samples; the UI zoom is pixels per second.
 import {
-  DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addDevice, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
+  DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, DEVICES, EFFECTS, INSTRUMENTS, LOFI_DRUM, MASTER_TRACK, FINNWAVE, SIMPLE_FILTER, addAudioClip, addClickTrack, addDevice, addDrum, isLooping, addLane, addMidiClip, addPad, addPoint, addTrack, orderBetween, deleteLane, deletePad, clipLength, clipsMap, deleteClip,
   evalPoints, getLanes, getPoints, lanesMap, laneOf, laneState, paramToPos, paramToValue, pointsMap, resolveTarget, setLaneEnabled, setLaneState,
-  deleteDevice, deleteLooper, addNextLooper, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
+  deleteDevice, deleteLooper, addNextLooper, isDrum, isForever, deleteNote, deleteTrack, devicesMap, loopersMap, getClips, getDevices, getNotes, getSampleRate, getSamples,
   getLoopers, getPads, getTracks, padsMap, updatePad, migrateToV2, notesMap, samplesMap, setParam, splitClip, stashLaneRanges, sweepOrphans, tracksMap, updateClip,
   updateDevice, updateLooper, updateNote, updateTrack, type AwarenessState, type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget,
   type Point, type SampleMeta, type Track,
@@ -25,8 +25,9 @@ import { NO_AUTO, autoRow, automateMenu, type AutoInfo } from './automation'
 import { deviceCard } from './devices'
 import type { FilterChange, FilterMember } from './filterCurve'
 import { LOOP_COLORS, looperCard } from './loopers'
+import { drumGrid } from './drumGrid'
 import { noteEditor } from './noteEditor'
-import { clamp, dragPointer, grabAt, trimBlock, trimMidiLeft, type Grab } from './blocks'
+import { clamp, dragPointer, grabAt, rotateTick, trimBlock, trimMidiLeft, type Grab } from './blocks'
 import { closedBy, deleteMenu, popover } from './popover'
 import { fmt, transportControls, type TransportControls } from './transport'
 import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
@@ -147,6 +148,17 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     if (!pb) return // (the project has not synced yet)
     exportDialog({ name: projectName, render: (o) => renderProject(doc, s.projectId, rate, s.userId, o) })
   } }, 'export')
+  // The metronome is an ordinary MIDI track (role 'click'): the button makes it, and then mutes / unmutes it.
+  const clickBtn = h('button', { className: 'metro', disabled: readOnly, title: 'metronome: add a click track, then mute / unmute it', onclick: () => {
+    const t = getTracks(doc).find((x) => x.role === 'click')
+    if (t && !t.muted) { // switching it off tucks it away: every expandable lane and the editor shut
+      for (const set of [expanded, synthShown, loopShown, srcShown, autoShown]) set.delete(t.id)
+      if (editing && clipsMap(doc).get(editing)?.get('trackId') === t.id) editing = null
+    }
+    if (t) updateTrack(doc, t.id, { muted: !t.muted })
+    else addClickTrack(doc)
+  } })
+  transport.el.append(clickBtn) // sits right of the time readout
   const bar = h('header', { className: 'bar' },
     h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), projectTitle(),
       readOnly ? h('span', { className: 'dim' }, 'view only') : null,
@@ -227,6 +239,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     doc, undo, readOnly,
     selectNote: (id) => ((noteSel = id), draw()),
   })
+  const dg = drumGrid({ doc, undo, readOnly })
 
   // --- transport
   function toggle() {
@@ -442,12 +455,23 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     },
     bypass: (d: string, b: boolean) => updateDevice(doc, d, { bypass: b }),
     remove: (d: string) => deleteDevice(doc, d),
+    keys: (d: string, lo: number, hi: number) => {
+      undo.stopCapturing()
+      updateDevice(doc, d, { keyLo: lo, keyHi: hi })
+      undo.stopCapturing()
+    },
+    rename: (d: string) => {
+      const dev = getDevices(doc).find((x) => x.id === d)
+      const name = dev && prompt('name', dev.name ?? DEVICES[dev.type]?.name ?? '')?.trim()
+      if (name) updateDevice(doc, d, { name })
+    },
     reorderStart: () => { reordering = true; schedule() },
     reorderEnd: () => { reordering = false; schedule() },
     reorderDrop: (d: string, before: string | null) => {
       const dev = getDevices(doc).find((x) => x.id === d)
       if (!dev) return
-      const chain = getDevices(doc).filter((x) => x.trackId === dev.trackId && x.id !== d && !DEVICES[x.type]?.instrument)
+      const synth = !!DEVICES[dev.type]?.instrument // instruments and effects are separate rows
+      const chain = getDevices(doc).filter((x) => x.trackId === dev.trackId && x.id !== d && !!DEVICES[x.type]?.instrument === synth)
       const i = before == null ? chain.length : chain.findIndex((x) => x.id === before)
       if (i < 0) return
       undo.stopCapturing()
@@ -644,7 +668,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     }
     // background menu: audio lanes take uploads; MIDI lanes and soundscapes make a new region
     if (t.kind === 'audio') bgMenu(body, (e) => [['upload', () => pickInto(t.id, atX(e))]])
-    else if (t.kind === 'midi') bgMenu(body, (e) => [['new region', () => newMidiClip(t.id, atX(e))]])
+    else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => newMidiClip(t.id, atX(e))], ['new drum grid', () => newMidiClip(t.id, atX(e), true)]])
     else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => newPad(t.id, atX(e))]])
     const fx = h('div', { className: 'fx', hidden: true })
     openOnClick(fx, () => expanded.add(t.id))
@@ -653,12 +677,15 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     fx.append(add)
     const fxRow = h('div', { className: 'fx-row' }, more, fx) // opaque, so it covers the playhead
     // MIDI tracks: the instrument gets its own row above the FX bar
-    const synthMore = h('button', { className: 'fx-toggle', title: 'instrument', onclick: () => {
+    const synthMore = h('button', { className: 'fx-toggle', title: 'instruments', onclick: () => {
       if (!synthShown.delete(t.id)) synthShown.add(t.id)
       draw()
     } }, 'synth')
     const synth = h('div', { className: 'fx' })
     openOnClick(synth, () => synthShown.add(t.id))
+    const addSynth = h('button', { className: 'add-fx', title: 'add instrument', disabled: readOnly, onclick: () =>
+      popover(addSynth, INSTRUMENTS.map((d) => [d.name, () => (d.type === LOFI_DRUM ? addDrum(doc, t.id) : addDevice(doc, t.id, d.type))] as [string, () => void])) }, '+')
+    synth.append(addSynth)
     const synthRow = h('div', { className: 'fx-row', hidden: true }, synthMore, synth)
     // soundscape tracks: the main lane is blank like an empty track (regions turn the loopers on); the source audio gets its own lane
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
@@ -860,8 +887,9 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     bgPicker.click()
   }
 
-  function newMidiClip(trackId: string, at: number) {
-    const id = addMidiClip(doc, { trackId, start: at })
+  /** A drum grid clip is a one-bar pattern looped across four bars (4/4); a piano roll clip is four bars, unlooped. */
+  function newMidiClip(trackId: string, at: number, drums = false) {
+    const id = addMidiClip(doc, { trackId, start: at, ...(drums ? { view: 'drums', loopTicks: 4 * DEFAULT_PPQ } : {}) })
     editing = id
     select([id])
   }
@@ -1120,10 +1148,13 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     locks = new Map(remote.flatMap((r) => (r.recording ? [[r.recording.trackId, r.user.username] as [string, string]] : [])))
 
     if (editing && clipsMap(doc).get(editing)?.get('kind') !== 'midi') editing = null
-    const editTrack = editing ? clips.find((c) => c.id === editing)?.trackId : undefined
+    const editClip = editing ? clips.find((c) => c.id === editing) : undefined
+    const editTrack = editClip?.trackId
+    const gridRows = editClip?.kind === 'midi' && editClip.view === 'drums' ? devices.filter((d) => d.trackId === editTrack && isDrum(d)).length : -1 // -1: the piano roll
 
     // lanes
     hint.hidden = tracks.length > 0
+    clickBtn.classList.toggle('on', tracks.some((t) => t.role === 'click' && !t.muted)) // lit: a click track exists and is unmuted
     const ids = new Set(tracks.map((t) => t.id))
     for (const [id, l] of lanes) if (!ids.has(id)) { l.el.remove(); lanes.delete(id) }
     if (armedTrack && !ids.has(armedTrack)) { // the armed track was deleted
@@ -1139,6 +1170,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       l.body.style.width = `${x(total)}px`
       l.el.dataset.kind = t.kind
       l.el.classList.toggle('editing', t.id === editTrack)
+      l.el.classList.toggle('drums', t.id === editTrack && gridRows >= 0) // the lane fits the drum grid instead of the piano roll
+      if (t.id === editTrack && gridRows >= 0) l.el.style.setProperty('--dg-rows', String(gridRows))
       if (l.name.textContent !== t.name) l.name.textContent = t.name
       l.el.classList.toggle('locked', locks.has(t.id))
       l.record?.classList.toggle('on', armedTrack === t.id)
@@ -1148,6 +1181,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         l.listen.classList.toggle('on', monitoring)
       }
       l.mute.classList.toggle('on', t.muted)
+      l.el.classList.toggle('muted', t.muted)
       l.solo.classList.toggle('on', t.soloed)
       if (document.activeElement !== l.gain) l.gain.value = String(gainToPos(t.gain))
       drawFx(l, t, devices)
@@ -1198,8 +1232,11 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       const cpps = lane.src ? lane.src.pps : pps
       if (e.parentElement !== host) host.append(e)
       e.style.left = `${(c.start / rate) * cpps}px`
-      const width = Math.max(2, (clipLength(c, rate) / rate) * cpps)
+      // a `forever` clip is drawn out to the end of the scroll area, which its finite part alone decides
+      const forever = c.kind === 'midi' && isForever(c)
+      const width = Math.max(2, ((forever ? Math.max(clipLength(c, rate), total - c.start) : clipLength(c, rate)) / rate) * cpps)
       e.style.width = `${width}px`
+      e.classList.toggle('forever', forever)
       let canPlay = true
       if (c.kind === 'audio') {
         const meta = samples[c.sourceHash]
@@ -1215,7 +1252,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         const pk = !pb || !canPlay ? undefined : st ? storedPeaks(meta, rate) : peaksFor(s.projectId, c.sourceHash, rate)
         if (pk) drawVisibleWave(c, w, pk, width, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps, scroller: scroll, off: HEADER })
         else w.cv.style.display = 'none'
-      } else drawMidiClip(e, c, notes.filter((n) => n.clipId === c.id), c.id === editing)
+      } else drawMidiClip(e, c, notes.filter((n) => n.clipId === c.id), devices.filter((d) => d.trackId === c.trackId && DEVICES[d.type]?.instrument), c.id === editing,
+        forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks)
       e.classList.toggle('midi', c.kind === 'midi')
       e.classList.toggle('editing', c.kind === 'midi' && c.id === editing)
       e.classList.toggle('sel', selection.includes(c.id))
@@ -1269,26 +1307,47 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     drawWave(w.cv, pk, c.sourceOffset + v0 * fpp, (v1 - v0) * fpp)
   }
 
-  /** Preview (label plus tiny note marks, rebuilt only when the notes change), or the note editor when zoomed in. */
-  function drawMidiClip(e: HTMLElement, c: Clip & { kind: 'midi' }, notes: Note[], open: boolean) {
+  /**
+   * Preview (label plus tiny note marks, rebuilt only when the notes change), or the open editor: the drum grid for a
+   * `view: 'drums'` clip, else the piano roll. A looping clip draws its first pass in full and the repeats faded.
+   */
+  function drawMidiClip(e: HTMLElement, c: Clip & { kind: 'midi' }, notes: Note[], instruments: Device[], open: boolean, extent: number) {
+    const editor = c.view === 'drums' ? dg : ne
+    const other = editor === dg ? ne : dg
+    if (other.el.parentElement === e) { other.el.remove(); other.reset() }
     if (open) {
-      if (ne.el.parentElement !== e) { e.replaceChildren(ne.el); delete e.dataset.sig }
+      if (editor.el.parentElement !== e) { e.replaceChildren(editor.el); delete e.dataset.sig }
       noteSel = notesMap(doc).has(noteSel ?? '') ? noteSel : null
-      ne.update(c, notes, noteSel, pps)
+      if (editor === dg) dg.update(c, notes, instruments, pps, extent)
+      else ne.update(c, notes, noteSel, pps, extent)
       return
     }
-    if (ne.el.parentElement === e) { ne.el.remove(); ne.reset() }
-    const sig = `${c.lengthTicks}|${notes.map((n) => `${n.tick},${n.durTicks},${n.pitch}`).join(';')}`
+    if (editor.el.parentElement === e) { editor.el.remove(); editor.reset() }
+    const lp = isLooping(c) ? c.loopTicks! : 0
+    const sig = `${extent}|${lp}|${c.view ?? ''}|${notes.map((n) => `${n.tick},${n.durTicks},${n.pitch}`).join(';')}`
     if (e.dataset.sig === sig) return
     e.dataset.sig = sig
-    const lo = Math.min(...notes.map((n) => n.pitch)), hi = Math.max(...notes.map((n) => n.pitch))
-    e.replaceChildren('midi', ...notes.map((n) => {
-      const m = h('i', { className: 'mark' })
-      m.style.left = `${(n.tick / c.lengthTicks) * 100}%`
-      m.style.width = `${Math.max(1, (n.durTicks / c.lengthTicks) * 100)}%`
-      m.style.top = `${hi === lo ? 50 : 20 + ((hi - n.pitch) / (hi - lo)) * 60}%`
-      return m
-    }))
+    const shown = lp ? notes.filter((n) => n.tick < lp) : notes
+    const lo = Math.min(...shown.map((n) => n.pitch)), hi = Math.max(...shown.map((n) => n.pitch))
+    const passes = lp ? Math.ceil(extent / lp) : 1
+    const marks: HTMLElement[] = []
+    for (let k = 0; k < passes; k++) {
+      if (k) { // where the pattern starts over
+        const edge = h('i', { className: 'loop-edge' })
+        edge.style.left = `${((k * lp) / extent) * 100}%`
+        marks.push(edge)
+      }
+      for (const n of shown) {
+        const tick = k * lp + n.tick
+        if (tick >= extent) continue
+        const m = h('i', { className: k ? 'mark rep' : 'mark' })
+        m.style.left = `${(tick / extent) * 100}%`
+        m.style.width = `${(Math.min(n.durTicks, lp || Infinity) / extent) * 100}%` // (min-width in the CSS: a % minimum is huge on a forever clip)
+        m.style.top = `${hi === lo ? 50 : 20 + ((hi - n.pitch) / (hi - lo)) * 60}%`
+        marks.push(m)
+      }
+    }
+    e.replaceChildren(c.view === 'drums' ? 'drums' : 'midi', ...marks)
   }
 
   /** Second ticks with labels into `box` (rebuilt only when the extent or scale changes). */
@@ -1373,10 +1432,12 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     }
     // Left edge: the start moves and every note moves back by the same ticks, so the music stays put on the
     // timeline. Notes pushed before the new start go silent but are kept, and return if the edge is dragged out.
+    // A looping clip's pattern turns instead: the notes rotate within the loop, so every repeat stays where it was.
     const t = trimMidiLeft(clip, dSmp, rate)
+    const loop = isLooping(clip) ? clip.loopTicks! : 0
     doc.transact(() => {
       updateClip(doc, clip.id, { start: t.start, lengthTicks: t.lengthTicks })
-      for (const n of notes0) updateNote(doc, n.id, { tick: n.tick - t.d })
+      for (const n of notes0) updateNote(doc, n.id, { tick: loop && n.tick < loop ? rotateTick(n.tick, t.d, loop) : n.tick - t.d })
     })
   }
 
@@ -1421,6 +1482,10 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
       select([])
     }]]
+    const midi = getClips(doc).find((c) => c.id === clipId)
+    if (midi?.kind === 'midi') { // looping repeats the first `loopTicks` until the clip's end (drag its right edge to extend)
+      items.unshift(isLooping(midi) || midi.loopTicks ? ['no loop', () => updateClip(doc, clipId, { loopTicks: 0 })] : ['loop', () => updateClip(doc, clipId, { loopTicks: midi.lengthTicks })])
+    }
     const hash = String(clipsMap(doc).get(clipId)?.get('sourceHash'))
     const meta = getSamples(doc)[hash]
     if (meta?.status !== 'incoming') return items

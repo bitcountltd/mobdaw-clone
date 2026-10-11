@@ -148,8 +148,9 @@ pub unsafe extern "C" fn engine_track_upsert(
     pan: f32,
     muted: u32,
     soloed: u32,
+    solo_safe: u32,
 ) {
-    (*e).track_upsert(h, kind, gain, pan, muted != 0, soloed != 0);
+    (*e).track_upsert(h, kind, gain, pan, muted != 0, soloed != 0, solo_safe != 0);
 }
 
 #[no_mangle]
@@ -292,8 +293,9 @@ pub unsafe extern "C" fn engine_clip_midi_upsert(
     bpm: f64,
     ppq: u32,
     length_ticks: f64,
+    loop_ticks: f64,
 ) {
-    (*e).clip_midi_upsert(h, track, start as i64, bpm, ppq, length_ticks);
+    (*e).clip_midi_upsert(h, track, start as i64, bpm, ppq, length_ticks, loop_ticks);
 }
 
 #[no_mangle]
@@ -322,6 +324,15 @@ pub unsafe extern "C" fn engine_note_remove(e: *mut Engine, h: u32) {
 #[no_mangle]
 pub unsafe extern "C" fn engine_device_upsert(e: *mut Engine, h: u32, track: u32, kind: u32, order: f64, bypass: u32) {
     (*e).device_upsert(h, track, kind, order, bypass != 0);
+}
+
+/// An instrument's note range (MIDI pitches `lo..=hi`): it only gets the notes inside it.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_device_keys(e: *mut Engine, h: u32, lo: u32, hi: u32) {
+    (*e).device_keys(h, lo, hi);
 }
 
 #[no_mangle]

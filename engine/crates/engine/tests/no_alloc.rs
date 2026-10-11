@@ -43,7 +43,7 @@ fn process_never_allocates_across_a_busy_scene() {
     let sine: Vec<f32> = (0..96_000).map(|n| (n as f32 * 0.05).sin()).collect();
     e.load_source(1, &[&sine, &sine]);
     for t in 1..=8u32 {
-        e.track_upsert(t, 0, 0.8, (t as f32 - 4.0) / 4.0, false, false);
+        e.track_upsert(t, 0, 0.8, (t as f32 - 4.0) / 4.0, false, false, false);
         e.device_upsert(100 + t, t, 1, 1.0, false);
         e.device_upsert(200 + t, t, 1, 2.0, t % 2 == 0);
         e.device_upsert(1200 + t, t, 6, 3.0, false); // tape delay
@@ -54,11 +54,13 @@ fn process_never_allocates_across_a_busy_scene() {
         }
     }
     for t in 20..24u32 {
-        e.track_upsert(t, 1, 1.0, 0.0, false, false);
+        e.track_upsert(t, 1, 1.0, 0.0, false, false, false);
         e.device_upsert(300 + t, t, 1, 2.0, false);
         e.device_upsert(400 + t, t, 2, 1.0, false);
-        e.clip_midi_upsert(500 + t, t, 0, 100.0 + t as f64, 960, 30_000.0);
-        e.clip_midi_upsert(600 + t, t, 40_000, 140.0, 480, 30_000.0);
+        e.device_upsert(900 + t, t, 7, 1.5, false); // lofi drum on the low keys, layered with the synth
+        e.device_keys(900 + t, 36, 50);
+        e.clip_midi_upsert(500 + t, t, 0, 100.0 + t as f64, 960, 30_000.0, 0.0);
+        e.clip_midi_upsert(600 + t, t, 40_000, 140.0, 480, 30_000.0, 2_500.0);
         for n in 0..120u32 {
             // dense chords: more than 64 voices sound at once on some tracks
             e.note_upsert(t * 1000 + n, 500 + t, (n * 40) as f64, 20_000.0, 36 + n % 48, 0.8);
@@ -67,7 +69,7 @@ fn process_never_allocates_across_a_busy_scene() {
     }
     for t in 30..32u32 {
         // soundscape tracks: 4 loopers each, with pads, speeds and regions that wrap often
-        e.track_upsert(t, 2, 1.0, 0.0, false, false);
+        e.track_upsert(t, 2, 1.0, 0.0, false, false, false);
         e.clip_audio_upsert(700 + t, t, 1, 0, 90_000, 0, 1.0, 0.0, 0.0, 0);
         for k in 0..4u32 {
             e.looper_upsert(800 + t * 10 + k, t, 0.25 + k as f64, 5000 * k as i64, 3000 + 1000 * k as i64);
@@ -114,7 +116,7 @@ fn process_never_allocates_across_a_busy_scene() {
             10 => e.param_set(101, 1, 200.0 + block as f32),
             20 => e.param_set(424, 0, 0.05 + (block % 7) as f32 * 0.1),
             30 => e.seek((block as i64 * 53) % 90_000),
-            40 => e.track_upsert(3, 0, 0.3, 0.5, block % 2 == 0, block % 3 == 0),
+            40 => e.track_upsert(3, 0, 0.3, 0.5, block % 2 == 0, block % 3 == 0, false),
             50 => e.param_set(423, 6, 1.5),
             90 => e.param_set(1203, 1, 20.0 + (block % 11) as f32 * 150.0), // delay time: the head moves
             80 => e.preview_seek(950, (block as i64 * 17) % 40_000),

@@ -1,6 +1,6 @@
 //! Devices: the effect/instrument processors in a track's chain.
 
-use dsp::{CompParams, Compressor, DelayParams, Ramp, Reverb, Svf, Synth, TapeDelay, TremParams, Tremolo};
+use dsp::{CompParams, Compressor, DelayParams, LofiDrum, Ramp, Reverb, Svf, Synth, TapeDelay, TremParams, Tremolo};
 
 pub const KIND_FILTER: u32 = 1;
 pub const KIND_SYNTH: u32 = 2;
@@ -8,6 +8,7 @@ pub const KIND_REVERB: u32 = 3;
 pub const KIND_COMPRESSOR: u32 = 4;
 pub const KIND_TREMOLO: u32 = 5;
 pub const KIND_DELAY: u32 = 6;
+pub const KIND_LOFI_DRUM: u32 = 7;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -17,6 +18,9 @@ pub struct Device {
     pub bypass: bool,
     pub kind_id: u32,
     pub kind: DeviceKind,
+    /// An instrument's note range (MIDI pitches, inclusive): it only gets the notes inside it.
+    pub key_lo: u32,
+    pub key_hi: u32,
 }
 
 /// Boxed so the sorted device map shuffles small structs, not 10 KB synths.
@@ -29,6 +33,7 @@ pub enum DeviceKind {
     Compressor(Box<CompressorDevice>),
     Tremolo(Box<TremoloDevice>),
     Delay(Box<DelayDevice>),
+    Lofi(Box<LofiDrum>),
 }
 
 impl Device {
@@ -40,13 +45,53 @@ impl Device {
             KIND_COMPRESSOR => DeviceKind::Compressor(Box::new(CompressorDevice::new(sample_rate))),
             KIND_TREMOLO => DeviceKind::Tremolo(Box::new(TremoloDevice::new(sample_rate))),
             KIND_DELAY => DeviceKind::Delay(Box::new(DelayDevice::new(sample_rate))),
+            KIND_LOFI_DRUM => DeviceKind::Lofi(Box::new(LofiDrum::new(sample_rate))),
             _ => DeviceKind::Unknown,
         };
-        Self { track, order, bypass, kind_id, kind }
+        Self { track, order, bypass, kind_id, kind, key_lo: 0, key_hi: 127 }
     }
 
     pub fn is_instrument(&self) -> bool {
-        matches!(self.kind, DeviceKind::Synth(_))
+        matches!(self.kind, DeviceKind::Synth(_) | DeviceKind::Lofi(_))
+    }
+
+    /// Whether this is a sounding (not bypassed) instrument whose note range holds `pitch`.
+    pub fn takes_note(&self, pitch: u32) -> bool {
+        self.is_instrument() && !self.bypass && (self.key_lo..=self.key_hi).contains(&pitch)
+    }
+
+    /// Start a note (`start` is its timeline sample, the lofi drum's noise seed). `release_at`
+    /// is when the synth lets go; the drum is a one-shot and ignores it.
+    pub fn note_on(&mut self, pitch: u32, velocity: f32, release_at: i64, start: i64) {
+        match &mut self.kind {
+            DeviceKind::Synth(s) => s.note_on(pitch, velocity, release_at),
+            DeviceKind::Lofi(d) => d.note_on(velocity, start),
+            _ => {}
+        }
+    }
+
+    /// Let go of the notes whose release time has come (instruments only).
+    pub fn release_due(&mut self, now: i64) {
+        if let DeviceKind::Synth(s) = &mut self.kind {
+            s.release_due(now);
+        }
+    }
+
+    /// The next scheduled release after `now`, or `i64::MAX`.
+    pub fn next_release_after(&self, now: i64) -> i64 {
+        match &self.kind {
+            DeviceKind::Synth(s) => s.next_release_after(now),
+            _ => i64::MAX,
+        }
+    }
+
+    /// Release every sounding note (transport stop / seek).
+    pub fn release_all(&mut self) {
+        match &mut self.kind {
+            DeviceKind::Synth(s) => s.release_all(),
+            DeviceKind::Lofi(d) => d.release_all(),
+            _ => {}
+        }
     }
 
     pub fn set_param(&mut self, param: u32, value: f32) {
@@ -57,6 +102,7 @@ impl Device {
             DeviceKind::Compressor(c) => c.set_param(param, value),
             DeviceKind::Tremolo(t) => t.set_param(param, value),
             DeviceKind::Delay(d) => d.set_param(param, value),
+            DeviceKind::Lofi(d) => d.set_param(param, value),
             DeviceKind::Unknown => {}
         }
     }
@@ -70,6 +116,7 @@ impl Device {
             DeviceKind::Compressor(c) => c.set_param_smooth(param, value, 0.0),
             DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, 0.0),
             DeviceKind::Delay(d) => d.set_param_smooth(param, value, 0.0),
+            DeviceKind::Lofi(d) => d.set_param_smooth(param, value, 0.0),
             DeviceKind::Unknown => {}
         }
     }
@@ -84,6 +131,7 @@ impl Device {
             DeviceKind::Compressor(c) => c.reset(),
             DeviceKind::Tremolo(t) => t.reset(),
             DeviceKind::Delay(d) => d.reset(),
+            DeviceKind::Lofi(d) => d.reset(),
             DeviceKind::Unknown => {}
         }
     }
@@ -107,6 +155,15 @@ impl Device {
                 let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
                 let mono = &mut mono[..l.len()];
                 s.render_add(mono);
+                for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
+                    *l += *m;
+                    *r += *m;
+                }
+            }
+            DeviceKind::Lofi(d) => {
+                let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
+                let mono = &mut mono[..l.len()];
+                d.render_add(mono);
                 for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
                     *l += *m;
                     *r += *m;

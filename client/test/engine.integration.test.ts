@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { addAudioClip, addDevice, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, setLaneState, setParam, updateLaneLfo, type SampleMeta } from '@mobdaw/shared'
+import { addAudioClip, addClickTrack, addDevice, addDrum, addLane, addMidiClip, addNote, addPoint, addSample, addTrack, deleteLane, getClips, setLaneState, setParam, updateClip, updateDevice, updateLaneLfo, updateTrack, type SampleMeta } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
 
 const SR = 48000
@@ -82,6 +82,70 @@ describe('bridge + real engine.wasm', () => {
     bridge.stop()
     render(SR) // release tail
     expect(render(4800)).toBeLessThan(1e-4) // silent after release
+    bridge.destroy()
+  })
+
+  it('the metronome: a looped one-bar pattern clicks on every beat, ignores solo, and honours its own mute', async () => {
+    const doc = new Y.Doc()
+    const click = addClickTrack(doc)
+    const other = addTrack(doc, 'other', 'midi')
+    updateTrack(doc, other, { soloed: true })
+    const { sink, render } = host()
+    const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
+    await tick()
+    bridge.play(0)
+    expect(render(1024)).toBeGreaterThan(0.01) // beat 1 (the accent), although another track is soloed
+    render(4096)
+    expect(render(8192)).toBeLessThan(1e-4) // the click is a short hit, not a tone
+    render(10496)
+    expect(render(1280)).toBeGreaterThan(0.01) // beat 2, at 0.5 s
+    render(SR * 2 - 25088) // to 2 s: the pattern starts over
+    expect(render(1280)).toBeGreaterThan(0.01) // the accent of bar 2: looped, not a single bar
+    bridge.seek(0)
+    updateTrack(doc, click, { muted: true })
+    render(4096)
+    expect(render(SR / 2)).toBeLessThan(1e-4) // muted
+    bridge.destroy()
+  }, 20_000)
+
+  it('a forever click keeps looping past the end of its clip', async () => {
+    const doc = new Y.Doc()
+    addClickTrack(doc)
+    const clip = getClips(doc)[0] // four bars at 120 bpm: 8 s
+    const { sink, render } = host()
+    const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
+    await tick()
+    updateClip(doc, clip.id, { forever: false }) // (a click track starts forever)
+    bridge.play(10 * SR) // bar 5: beyond the clip
+    expect(render(1024)).toBeLessThan(1e-4)
+    bridge.stop()
+    updateClip(doc, clip.id, { forever: true })
+    bridge.play(10 * SR)
+    expect(render(1024)).toBeGreaterThan(0.01) // the accent of bar 5
+    bridge.destroy()
+  }, 20_000)
+
+  it('instruments take the notes in their range: a split keyboard, with layering where the ranges overlap', async () => {
+    const doc = new Y.Doc()
+    const m = addTrack(doc, 'midi', 'midi')
+    const synth = addDevice(doc, m, 2, { keyLo: 60, keyHi: 127 })
+    const drum = addDrum(doc, m, { key: 40, params: { 3: 1 } })
+    const c = addMidiClip(doc, { trackId: m, start: 0, loopTicks: 960, lengthTicks: 3840 })
+    addNote(doc, { clipId: c, tick: 0, durTicks: 480, pitch: 40, velocity: 1 })
+    const { sink, render } = host()
+    const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
+    await tick()
+    bridge.play(0)
+    expect(render(2048)).toBeGreaterThan(0.01) // the drum's note
+    render(SR / 4)
+    updateDevice(doc, drum, { keyLo: 41, keyHi: 41 }) // the note is nobody's now (the synth starts at 60)
+    bridge.seek(0)
+    render(256)
+    expect(render(SR / 2)).toBeLessThan(1e-4)
+    updateDevice(doc, synth, { keyLo: 0 }) // the synth takes it
+    bridge.seek(0)
+    expect(render(SR / 4)).toBeGreaterThan(0.01)
+    updateClip(doc, c, { loopTicks: 0 })
     bridge.destroy()
   })
 

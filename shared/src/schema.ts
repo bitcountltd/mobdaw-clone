@@ -12,7 +12,7 @@
 //   samples Y.Map  hash -> plain object SampleMeta
 //   chat    Y.Array of plain ChatMessage, append-only; outside the undo scope
 import * as Y from 'yjs'
-import { DEVICES } from './devices.ts'
+import { DEVICES, LOFI_DRUM } from './devices.ts'
 import type { ParamTarget } from './params.ts'
 
 export const SCHEMA_VERSION = 2
@@ -33,7 +33,9 @@ export const LOOP_SPEED_MAX = 4
 /** Tape low-pass range in Hz; the top is fully open (bypassed). */
 export const LOOP_CUTOFF_MIN = 200
 export const LOOP_CUTOFF_MAX = 20000
-export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean }
+/** `role: 'click'` marks the metronome's track: it ignores other tracks' solo (still audible), and its own mute counts. */
+export type TrackRole = 'click'
+export type Track = { id: string; name: string; kind: TrackKind; order: number; gain: number; pan: number; muted: boolean; soloed: boolean; role?: TrackRole }
 /** 0 equal-power, 1 linear, 2 s-curve */
 export type FadeShape = 0 | 1 | 2
 export type AudioClip = {
@@ -41,10 +43,20 @@ export type AudioClip = {
   start: number; length: number; sourceHash: string; sourceOffset: number
   gain: number; fadeIn: number; fadeOut: number; fadeShape: FadeShape
 }
-export type MidiClip = { id: string; trackId: string; kind: 'midi'; start: number; bpm: number; ppq: number; lengthTicks: number }
+/**
+ * `lengthTicks` is the clip's extent on the timeline. `loopTicks` (absent or 0 = no loop) is the pattern length: the notes in
+ * `[0, loopTicks)` repeat every `loopTicks` until `lengthTicks`, and notes at or after `loopTicks` are ignored. `view: 'drums'`
+ * opens the drum grid instead of the piano roll (absent = piano roll); it is only a view of the same notes.
+ * `forever` (only while looping) keeps the pattern repeating past `lengthTicks` for as long as the transport runs: `lengthTicks`
+ * stays the finite part that sets the scroll bounds and the export's end.
+ */
+export type MidiClip = { id: string; trackId: string; kind: 'midi'; start: number; bpm: number; ppq: number; lengthTicks: number; loopTicks?: number; forever?: boolean; view?: 'drums' }
 export type Clip = AudioClip | MidiClip
 export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number }
-export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number> }
+/** `name`, `keyLo` and `keyHi` are optional: an instrument's label and its note range (MIDI 0..127 inclusive; absent = 0 and 127). Not params. */
+export type Device = { id: string; trackId: string; type: number; order: number; bypass: boolean; params: Record<string, number>; name?: string; keyLo?: number; keyHi?: number }
+export const KEY_MIN = 0
+export const KEY_MAX = 127
 /** Loop region in source time (samples of the track's source clips); `length` 0 means unset. */
 /** `gain` (0..1), `muted` and the tape controls are absent on loopers saved before they existed: read them with `?? 1` / `?? false` /
  * `?? 0` (`sat`: saturation 0..1; `warble`: wow/flutter depth 0..1) / `?? LOOP_CUTOFF_MAX` (`cutoff`: low-pass Hz). */
@@ -172,9 +184,9 @@ const patchMap = (doc: Y.Doc, m: YM | undefined, patch: object) => {
 }
 
 // --- tracks
-export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', order?: number): string {
+export function addTrack(doc: Y.Doc, name: string, kind: TrackKind = 'audio', order?: number, role?: TrackRole): string {
   const id = newId()
-  const t: Track = { id, name, kind, order: order ?? orderBetween(getTracks(doc).at(-1)?.order), gain: 1, pan: 0, muted: false, soloed: false }
+  const t: Track = { id, name, kind, order: order ?? orderBetween(getTracks(doc).at(-1)?.order), gain: 1, pan: 0, muted: false, soloed: false, ...(role ? { role } : {}) }
   doc.transact(() => {
     tracksMap(doc).set(id, toMap(t))
     if (kind === 'soundscape') for (let slot = 0; slot < LOOPERS_PER_TRACK; slot++) addLooper(doc, id, slot)
@@ -247,6 +259,12 @@ export function addMidiClip(doc: Y.Doc, c: Pick<MidiClip, 'trackId' | 'start'> &
 export const updateClip = (doc: Y.Doc, id: string, patch: Partial<Omit<AudioClip, 'id' | 'kind'> & Omit<MidiClip, 'id' | 'kind'>>) =>
   patchMap(doc, clipsMap(doc).get(id), patch)
 
+/** Show a MIDI clip as a drum grid or a piano roll (`view` is absent for the latter). Same notes either way. */
+export function setMidiView(doc: Y.Doc, id: string, view: 'drums' | 'piano') {
+  const m = clipsMap(doc).get(id)
+  if (m) doc.transact(() => (view === 'drums' ? m.set('view', 'drums') : m.delete('view')))
+}
+
 export function deleteClip(doc: Y.Doc, id: string) {
   doc.transact(() => {
     for (const n of getNotes(doc)) if (n.clipId === id) notesMap(doc).delete(n.id)
@@ -278,19 +296,19 @@ export const deleteNote = (doc: Y.Doc, id: string) => doc.transact(() => notesMa
 
 // --- devices
 /** Append a device to a track's chain with default params. */
-export function addDevice(doc: Y.Doc, trackId: string, type: number): string {
+export function addDevice(doc: Y.Doc, trackId: string, type: number, extra: Partial<Pick<Device, 'name' | 'keyLo' | 'keyHi'>> = {}, initial: Record<string, number> = {}): string {
   const id = newId()
   const order = orderBetween(getDevices(doc).filter((d) => d.trackId === trackId).at(-1)?.order)
   doc.transact(() => {
-    const m = toMap({ id, trackId, type, order, bypass: false })
+    const m = toMap({ id, trackId, type, order, bypass: false, ...extra })
     const params = new Y.Map<number>()
-    for (const p of DEVICES[type]?.params ?? []) params.set(String(p.id), p.def)
+    for (const p of DEVICES[type]?.params ?? []) params.set(String(p.id), initial[String(p.id)] ?? p.def)
     m.set('params', params)
     devicesMap(doc).set(id, m)
   })
   return id
 }
-export const updateDevice = (doc: Y.Doc, id: string, patch: Partial<Pick<Device, 'order' | 'bypass'>>) =>
+export const updateDevice = (doc: Y.Doc, id: string, patch: Partial<Pick<Device, 'order' | 'bypass' | 'name' | 'keyLo' | 'keyHi'>>) =>
   patchMap(doc, devicesMap(doc).get(id), patch)
 export function setParam(doc: Y.Doc, deviceId: string, paramId: number, value: number) {
   const params = devicesMap(doc).get(deviceId)?.get('params') as Y.Map<number> | undefined
@@ -301,6 +319,58 @@ export function deleteDevice(doc: Y.Doc, id: string) {
     for (const l of getLanes(doc)) if (l.kind !== 'looper' && l.owner === id) deleteLane(doc, l.id)
     devicesMap(doc).delete(id)
   })
+}
+
+/** The first MIDI note a new drum takes (GM kick); further drums count up from it. */
+export const DRUM_KEY_FIRST = 36
+const DRUM_NAMES = ['kick', 'rim', 'snare', 'clap', 'tom', 'hat', 'open hat', 'perc']
+/** An instrument whose note range is a single note: a row in the drum grid. */
+export const isDrum = (d: Pick<Device, 'type' | 'keyLo' | 'keyHi'>) => !!DEVICES[d.type]?.instrument && (d.keyLo ?? KEY_MIN) === (d.keyHi ?? KEY_MAX)
+
+/** The lowest single-note key from `DRUM_KEY_FIRST` up that no drum on the track has. */
+export function nextDrumKey(doc: Y.Doc, trackId: string): number {
+  const used = new Set(getDevices(doc).filter((d) => d.trackId === trackId && isDrum(d)).map((d) => d.keyLo))
+  let k = DRUM_KEY_FIRST
+  while (used.has(k) && k < KEY_MAX) k++
+  return k
+}
+
+/** Add a lofi drum to a MIDI track's synths lane on a single note (default: the lowest unused one from 36), named after it. */
+export function addDrum(doc: Y.Doc, trackId: string, o: { key?: number; name?: string; params?: Record<string, number> } = {}): string {
+  const key = o.key ?? nextDrumKey(doc, trackId)
+  const name = o.name ?? DRUM_NAMES[(key - DRUM_KEY_FIRST) % DRUM_NAMES.length] ?? 'drum'
+  return addDevice(doc, trackId, LOFI_DRUM, { name, keyLo: key, keyHi: key }, o.params)
+}
+
+/** The pattern length of a MIDI clip in ticks: its loop when it loops, else its whole length. */
+export const patternTicks = (c: Pick<MidiClip, 'lengthTicks' | 'loopTicks'>) => (c.loopTicks && c.loopTicks > 0 && c.loopTicks < c.lengthTicks ? c.loopTicks : c.lengthTicks)
+/** Whether a MIDI clip repeats a shorter pattern. */
+export const isLooping = (c: Pick<MidiClip, 'lengthTicks' | 'loopTicks'>) => patternTicks(c) < c.lengthTicks
+/** Whether a MIDI clip repeats past its end: a `forever` flag only counts while it loops. */
+export const isForever = (c: Pick<MidiClip, 'lengthTicks' | 'loopTicks' | 'forever'>) => !!c.forever && isLooping(c)
+/** How long a `forever` clip plays: the engine has no infinite length, so it gets this many seconds' worth of ticks. */
+export const FOREVER_SECONDS = 24 * 3600
+export const foreverTicks = (c: Pick<MidiClip, 'bpm' | 'ppq'>) => (FOREVER_SECONDS * c.bpm * c.ppq) / 60
+
+/**
+ * The metronome: a MIDI track named "click" (`role: 'click'`, first in the list) with two lofi drums, "accent" (the higher,
+ * brighter one) and "tick", and a drum-grid clip at 0, 120 bpm in 4/4: one bar looped across four, with the tick on all four
+ * beats and the accent doubled onto beat 1 (so muting the accent synth leaves a plain click). The clip loops `forever`. One transaction,
+ * so one undo step. Returns the track id.
+ */
+export function addClickTrack(doc: Y.Doc): string {
+  let id = ''
+  doc.transact(() => {
+    id = addTrack(doc, 'click', 'midi', orderBetween(undefined, getTracks(doc)[0]?.order), 'click')
+    const accent = 37, tick = 36
+    addDrum(doc, id, { key: accent, name: 'accent', params: { 0: 3500, 1: 0.8, 2: 40, 3: 0.8 } })
+    addDrum(doc, id, { key: tick, name: 'tick', params: { 0: 1500, 1: 0.65, 2: 35, 3: 0.6 } })
+    const ppq = DEFAULT_PPQ
+    const clip = addMidiClip(doc, { trackId: id, start: 0, bpm: 120, ppq, lengthTicks: 16 * ppq, loopTicks: 4 * ppq, forever: true, view: 'drums' })
+    for (let beat = 0; beat < 4; beat++) addNote(doc, { clipId: clip, tick: beat * ppq, durTicks: ppq / 4, pitch: tick, velocity: 1 })
+    addNote(doc, { clipId: clip, tick: 0, durTicks: ppq / 4, pitch: accent, velocity: 1 })
+  })
+  return id
 }
 
 // --- automation

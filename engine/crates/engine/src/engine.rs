@@ -20,10 +20,11 @@
 //! 2. Clear the per-track scratch buffers; if playing, mix every overlapping audio clip into
 //!    its track's scratch.
 //! 3. Per track, walk the block in control segments of at most 32 frames, additionally split
-//!    at the next note-on and the next scheduled note-off of the track's instrument. At each
-//!    segment start: release due voices, fire notes starting exactly there. Then run the
-//!    device chain over the segment and add the result, scaled by the ramped gain/pan, into
-//!    the master output.
+//!    at the next note-on and the next scheduled note-off of the track's instruments. At each
+//!    segment start: release due voices, fire notes starting exactly there (each goes to every
+//!    instrument whose note range holds its pitch). Then run the instruments (summed), then the
+//!    effects in `order` over the segment, and add the result, scaled by the ramped gain/pan,
+//!    into the master output.
 //! 4. Mix in the M1 test voice if its gate is on; advance the transport.
 //!
 //! # Automation
@@ -38,7 +39,7 @@
 //! timeline position, stopped or not.
 
 use crate::clip::{clip_notes, AudioClip, Clip, MidiClip, NoteEntry};
-use crate::device::{Device, DeviceKind};
+use crate::device::Device;
 use crate::handle_map::HandleMap;
 use crate::source::Source;
 use crate::transport::Transport;
@@ -86,6 +87,8 @@ struct Track {
     pan: f32,
     muted: bool,
     soloed: bool,
+    /// Ignores other tracks' solo (the metronome's click track); its own mute still applies.
+    solo_safe: bool,
     /// New tracks snap to their first target instead of ramping up from silence.
     fresh: bool,
     /// Linear ramps of the final per-channel coefficient `gain * pan_law * audible`.
@@ -390,9 +393,7 @@ impl Engine {
 
     fn release_all_voices(&mut self) {
         for d in self.devices.values_mut() {
-            if let DeviceKind::Synth(s) = &mut d.kind {
-                s.release_all();
-            }
+            d.release_all();
         }
     }
 
@@ -454,11 +455,11 @@ impl Engine {
 
     // ---- tracks ---------------------------------------------------------------------------
 
-    pub fn track_upsert(&mut self, h: u32, kind: u32, gain: f32, pan: f32, muted: bool, soloed: bool) {
+    pub fn track_upsert(&mut self, h: u32, kind: u32, gain: f32, pan: f32, muted: bool, soloed: bool, solo_safe: bool) {
         let gain = if gain.is_finite() { gain.max(0.0) } else { 1.0 };
         let pan = if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 };
         if let Some(t) = self.tracks.get_mut(h) {
-            (t.gain, t.pan, t.muted, t.soloed) = (gain, pan, muted, soloed);
+            (t.gain, t.pan, t.muted, t.soloed, t.solo_safe) = (gain, pan, muted, soloed, solo_safe);
             t.soundscape = kind == KIND_SOUNDSCAPE;
             return;
         }
@@ -469,6 +470,7 @@ impl Engine {
                 pan,
                 muted,
                 soloed,
+                solo_safe,
                 fresh: true,
                 gain_l: Ramp::new(0.0),
                 gain_r: Ramp::new(0.0),
@@ -521,8 +523,9 @@ impl Engine {
         self.rebuild_routing();
     }
 
-    pub fn clip_midi_upsert(&mut self, h: u32, track: u32, start: i64, bpm: f64, ppq: u32, length_ticks: f64) {
-        self.clips.insert(h, Clip::Midi(MidiClip { track, start, bpm, ppq, length_ticks }));
+    #[allow(clippy::too_many_arguments)]
+    pub fn clip_midi_upsert(&mut self, h: u32, track: u32, start: i64, bpm: f64, ppq: u32, length_ticks: f64, loop_ticks: f64) {
+        self.clips.insert(h, Clip::Midi(MidiClip { track, start, bpm, ppq, length_ticks, loop_ticks }));
         self.rebuild_routing();
     }
 
@@ -752,7 +755,12 @@ impl Engine {
             }
             // New handle, or the kind changed: start from defaults.
             _ => {
-                self.devices.insert(h, Device::new(track, kind, order, bypass, self.sample_rate));
+                let keys = self.devices.get(h).map(|d| (d.key_lo, d.key_hi));
+                let mut d = Device::new(track, kind, order, bypass, self.sample_rate);
+                if let Some((lo, hi)) = keys {
+                    (d.key_lo, d.key_hi) = (lo, hi); // a kind change resets the sound, not the note range
+                }
+                self.devices.insert(h, d);
             }
         }
         self.rebuild_routing();
@@ -761,6 +769,15 @@ impl Engine {
     pub fn device_remove(&mut self, h: u32) {
         self.devices.remove(h);
         self.rebuild_routing();
+    }
+
+    /// An instrument's note range, MIDI pitches `lo..=hi` (clamped to 0..127; `hi` below `lo` is
+    /// raised to `lo`). Unknown devices are ignored. It is not a param: not smoothed or automated.
+    pub fn device_keys(&mut self, h: u32, lo: u32, hi: u32) {
+        if let Some(d) = self.devices.get_mut(h) {
+            d.key_lo = lo.min(127);
+            d.key_hi = hi.min(127).max(d.key_lo);
+        }
     }
 
     pub fn param_set(&mut self, device: u32, param: u32, value: f32) {
@@ -873,7 +890,7 @@ impl Engine {
         //    Mute always wins. Silence is a gain target of 0, so it ramps over 10 ms.
         let any_solo = tracks.values().any(|t| t.soloed);
         for t in tracks.values_mut() {
-            let audible = !t.muted && (!any_solo || t.soloed);
+            let audible = !t.muted && (!any_solo || t.soloed || t.solo_safe);
             let g = if audible { t.gain } else { 0.0 };
             let (pl, pr) = equal_power(t.pan);
             let (tl, tr) = ((g * pl) as f64, (g * pr) as f64);
@@ -1057,32 +1074,40 @@ impl Engine {
                 t.gain_r.advance(n);
                 continue;
             }
-            // MIDI events go to the first instrument in the chain.
-            let instrument = t.chain.iter().copied().find(|h| devices.get(*h).is_some_and(|d| d.is_instrument()));
             let (sl, sr_buf) = t.scratch.split_at_mut(BLOCK);
             let mut i = 0;
             while i < n {
                 let at = p + i as i64;
                 let mut end = (i + SUB_BLOCK).min(n);
 
-                if let Some(Device { bypass: false, kind: DeviceKind::Synth(synth), .. }) =
-                    instrument.and_then(|h| devices.get_mut(h))
-                {
-                    synth.release_due(at);
-                    let mut next = synth.next_release_after(at);
-                    if playing {
-                        for &ch in &t.midi_clips {
-                            if let Some(Clip::Midi(mc)) = clips.get(ch) {
-                                let notes = clip_notes(note_index, ch);
-                                mc.fire_at(notes, at, sr, synth);
-                                next = next.min(mc.next_note_on_after(notes, at, sr));
-                            }
+                // MIDI notes go to every sounding instrument whose note range holds the pitch.
+                // Release due voices, fire the notes starting exactly here, and split the segment
+                // at the next note-on / scheduled release.
+                let mut next = i64::MAX;
+                for dh in &t.chain {
+                    if let Some(d) = devices.get_mut(*dh).filter(|d| d.is_instrument() && !d.bypass) {
+                        d.release_due(at);
+                        next = next.min(d.next_release_after(at));
+                    }
+                }
+                if playing {
+                    for &ch in &t.midi_clips {
+                        if let Some(Clip::Midi(mc)) = clips.get(ch) {
+                            let notes = clip_notes(note_index, ch);
+                            mc.fire_at(notes, at, sr, &mut |pitch, vel, off, start| {
+                                for dh in &t.chain {
+                                    if let Some(d) = devices.get_mut(*dh).filter(|d| d.takes_note(pitch)) {
+                                        d.note_on(pitch, vel, off, start);
+                                    }
+                                }
+                            });
+                            next = next.min(mc.next_note_on_after(notes, at, sr));
                         }
                     }
-                    // `next > at`, so the segment always makes progress.
-                    if next < p + end as i64 {
-                        end = (next - p) as usize;
-                    }
+                }
+                // `next > at`, so the segment always makes progress.
+                if next < p + end as i64 {
+                    end = (next - p) as usize;
                 }
 
                 // Automated device params: the value at the segment start, which ends at the next breakpoint.
@@ -1094,10 +1119,13 @@ impl Engine {
                     end = end.min(lane.next_break(at).saturating_sub(p).clamp(i as i64 + 1, n as i64) as usize);
                 }
 
+                // The instruments run first and sum into the buffer, then the effects in `order`.
                 let (l, r) = (&mut sl[i..end], &mut sr_buf[i..end]);
-                for dh in &t.chain {
-                    if let Some(d) = devices.get_mut(*dh) {
-                        d.process(l, r, sr32);
+                for instruments in [true, false] {
+                    for dh in &t.chain {
+                        if let Some(d) = devices.get_mut(*dh).filter(|d| d.is_instrument() == instruments) {
+                            d.process(l, r, sr32);
+                        }
                     }
                 }
 

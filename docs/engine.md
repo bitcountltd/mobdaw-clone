@@ -43,6 +43,8 @@ what we chose, why, and what we gave up.
     `clip.start + round(tick * 60 * sampleRate / (bpm * ppq))`. The mapping is computed in
     f64 and rounded once per event, so it's deterministic.
   - Changing `bpm` keeps the start fixed and moves the end. Polytempo comes for free.
+  - A clip may **loop** (`loopTicks`): its first `loopTicks` repeat until `lengthTicks`. The extent stays
+    in ticks, so changing `bpm` rescales it like any other MIDI clip.
 - **No global grid.** The UI snaps to:
   - clip edges
   - the selected MIDI clip's grid
@@ -61,18 +63,18 @@ uses fractional `order` numbers. As a result:
 | map | key → value (Y.Map unless noted) |
 |---|---|
 | `meta` | `schemaVersion: 2`, `sampleRate`, `guideBpm?` |
-| `tracks` | `{ id, name, kind: 'audio'\|'midi'\|'soundscape', order, gain, pan, muted, soloed }` |
-| `clips` | Audio clips: `{ id, trackId, kind:'audio', start, length, sourceHash, sourceOffset, gain, fadeIn, fadeOut, fadeShape }`. MIDI clips: `{ id, trackId, kind:'midi', start, bpm, ppq, lengthTicks }` |
+| `tracks` | `{ id, name, kind: 'audio'\|'midi'\|'soundscape', order, gain, pan, muted, soloed, role?: 'click' }` |
+| `clips` | Audio clips: `{ id, trackId, kind:'audio', start, length, sourceHash, sourceOffset, gain, fadeIn, fadeOut, fadeShape }`. MIDI clips: `{ id, trackId, kind:'midi', start, bpm, ppq, lengthTicks, loopTicks?, view?: 'drums' }` |
 | `notes` | `{ id, clipId, tick, durTicks, pitch, velocity }` |
-| `devices` | `{ id, trackId, type, order, bypass, params: Y.Map<paramId, number> }` |
+| `devices` | `{ id, trackId, type, order, bypass, params: Y.Map<paramId, number>, keyLo?, keyHi? }`. `keyLo`/`keyHi` (MIDI 0..127, default 0 and 127) are an instrument's note range; they are not params. |
 | `lanes` | Automation lanes, one per automated param: `{ id, enabled, order, scope, kind: 'synth'\|'effect'\|'looper', owner, param }`. `scope` is a track id, or `'master'` for the global fx chain; `owner` is the device or looper id; `param` is the device's param id (as a string) or the looper's field name (`gain`, `speed`, `sat`, `cutoff`, `warble`). The registry (`shared/src/params.ts`) resolves it to a range and scale. While `enabled` the lane *replaces* the param's value; the doc keeps the static value, and it comes back when the lane is disabled or deleted. |
 | `points` | `{ id, laneId, pos (timeline samples), value (normalised 0..1 along the param's own scale), curve: 'linear'\|'hold' }`. `curve` shapes the segment *after* the point. |
 | `samples` | Plain objects: `hash → { hash, name, duration, size, mime, status?: 'incoming'\|'missing', by?, peaks? }` (`by` is the recorder's username; `peaks` a base64 waveform). No `status` means the audio is in storage and anyone in the project can load it. See §9 for `incoming` and `missing`. |
 
 - **Track kinds:**
   - An `audio` track sums its audio clips into its device chain.
-  - A `midi` track feeds its MIDI clips to the first device in the chain, which must be an
-    instrument.
+  - A `midi` track feeds its MIDI clips to every instrument in the chain whose note range holds the
+    pitch; the instruments are summed and the effects run on the sum.
   - Separate kinds keep the engine and UI simple. Mixed tracks may come later.
 - **Cascading deletes:** deleting a parent deletes its children in the same `transact`.
 - **Concurrent orphans** (for example, A adds a note while B deletes its clip) are

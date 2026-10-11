@@ -84,3 +84,9 @@ export function trimMidiLeft(c: { start: number; bpm: number; ppq: number; lengt
   const d = clamp(Math.round((dSmp * k) / step) * step, Math.ceil((-c.start * k) / step) * step, c.lengthTicks - step)
   return { start: Math.max(0, c.start + Math.round(d / k)), lengthTicks: c.lengthTicks - d, d }
 }
+
+/**
+ * Where a note at `tick` of a looping pattern (`loop` ticks long, the notes in `[0, loop)`) goes when the clip's left edge
+ * moves `d` ticks to the right: back by `d`, turning round the loop's start so it stays inside the pattern.
+ */
+export const rotateTick = (tick: number, d: number, loop: number) => (((tick - d) % loop) + loop) % loop

@@ -1,5 +1,5 @@
 // Bare piano-roll panel for one MIDI clip: pitch x tick grid at the clip's own bpm/ppq.
-import { addNote, deleteNote, updateClip, updateNote, type MidiClip, type Note } from '@mobdaw/shared'
+import { addNote, deleteNote, isForever, isLooping, setMidiView, updateClip, updateNote, type MidiClip, type Note } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
 import { deleteMenu } from './popover'
@@ -28,10 +28,15 @@ export function noteEditor({ doc, undo, readOnly, selectNote }: NoteEditorDeps) 
   const bars = h('input', { type: 'number', min: 1, step: 1, title: 'length in bars (4/4)', disabled: readOnly })
   bpm.onchange = () => clip && Number(bpm.value) > 0 && updateClip(doc, clip.id, { bpm: Number(bpm.value) })
   bars.onchange = () => clip && Number(bars.value) >= 1 && updateClip(doc, clip.id, { lengthTicks: Math.round(Number(bars.value)) * 4 * clip.ppq })
+  const loop = h('input', { type: 'number', min: 0, step: 1, title: 'loop length in beats: the notes before it repeat to the end of the clip (0 = no loop)', disabled: readOnly })
+  loop.onchange = () => clip && Number(loop.value) >= 0 && updateClip(doc, clip.id, { loopTicks: Math.round(Number(loop.value) * clip.ppq) })
+  const forever = h('button', { title: 'keep repeating the pattern past the end of the clip, for as long as the transport runs', disabled: readOnly, hidden: true,
+    onclick: () => clip && updateClip(doc, clip.id, { forever: !clip.forever }) }, 'forever')
+  const view = h('button', { title: 'show this clip as a drum grid', disabled: readOnly, onclick: () => clip && setMidiView(doc, clip.id, 'drums') }, 'piano roll ▾')
   const head = h('div', { className: 'ne-head' },
-    h('span', {}, 'midi ▾'), h('label', {}, 'bpm ', bpm), h('label', {}, 'bars ', bars))
+    view, h('label', {}, 'bpm ', bpm), h('label', {}, 'bars ', bars), h('label', {}, 'loop ', loop), forever)
   // inputs must not start a clip drag / zoom-out click on the clip underneath
-  head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label') && e.stopPropagation()
+  head.onpointerdown = (e) => (e.target as HTMLElement).closest('input, label, button') && e.stopPropagation()
   const grid = h('div', { className: 'ne-grid' })
   grid.style.height = `${(PMAX - PMIN + 1) * ROW}px`
   for (let p = PMIN; p <= PMAX; p += 12) {
@@ -39,6 +44,8 @@ export function noteEditor({ doc, undo, readOnly, selectNote }: NoteEditorDeps) 
     c.style.top = `${(PMAX - p) * ROW}px`
     grid.append(c)
   }
+  const loopEnd = h('div', { className: 'ne-loop', hidden: true }) // the pattern's end: the notes past it are ignored
+  grid.append(loopEnd)
   const scroll = h('div', { className: 'ne-scroll' }, grid)
   scroll.onpointerdown = (e) => e.stopPropagation() // scrollbar drags must not reach the clip
   const el = h('div', { className: 'ne' }, head, scroll)
@@ -94,14 +101,24 @@ export function noteEditor({ doc, undo, readOnly, selectNote }: NoteEditorDeps) 
     addEventListener('pointercancel', up)
   }
 
-  function update(c: MidiClip, list: Note[], selected: string | null, pps: number) {
+  /** `extent` is how many ticks to draw (a `forever` clip is drawn out to the end of the timeline); it defaults to the clip's length. */
+  function update(c: MidiClip, list: Note[], selected: string | null, pps: number, extent = c.lengthTicks) {
     clip = c
     pxBeat = (pps * 60) / c.bpm
     grid.style.setProperty('--beat', `${pxBeat}px`)
     notes = new Map(list.map((n) => [n.id, n]))
-    grid.style.width = `${px(c.lengthTicks)}px`
+    grid.style.width = `${px(extent)}px`
     if (document.activeElement !== bpm) bpm.value = String(c.bpm)
     if (document.activeElement !== bars) bars.value = String(c.lengthTicks / (4 * c.ppq))
+    const looping = isLooping(c)
+    if (document.activeElement !== loop) loop.value = String(looping ? c.loopTicks! / c.ppq : 0)
+    loopEnd.hidden = !looping
+    forever.hidden = !looping
+    forever.classList.toggle('on', isForever(c))
+    if (looping) {
+      loopEnd.style.left = `${px(c.loopTicks!)}px`
+      loopEnd.style.width = `${px(extent - c.loopTicks!)}px`
+    }
     for (const [id, e] of els) if (!notes.has(id)) { e.remove(); els.delete(id) }
     for (const n of list) {
       let e = els.get(n.id)
@@ -115,6 +132,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote }: NoteEditorDeps) 
       e.style.top = `${(PMAX - n.pitch) * ROW}px`
       e.style.width = `${Math.max(3, px(n.durTicks))}px`
       e.classList.toggle('sel', n.id === selected)
+      e.classList.toggle('ignored', looping && n.tick >= c.loopTicks!)
     }
     if (!centered && el.isConnected) { // centre on the notes (C4 when empty)
       const mid = list.length ? (Math.min(...list.map((n) => n.pitch)) + Math.max(...list.map((n) => n.pitch))) / 2 : 60

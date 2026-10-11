@@ -1,17 +1,10 @@
 // Offline render of a whole project: the same engine and doc bridge as playback, run in an OfflineAudioContext.
-import { clipLength, getClips, getPads, getTracks, type SampleMeta } from '@mobdaw/shared'
+import type { SampleMeta } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { getSampleBuffer, playable } from '../samples'
 import { Bridge } from './bridge'
+import { contentEnd, contentStart } from './range'
 import { EngineHost } from './engine-host'
-
-/** Where the project's sound ends (samples): the last clip on the timeline or pad. Soundscape source clips live in their own time. */
-export function contentEnd(doc: Y.Doc, rate: number) {
-  const scapes = new Set(getTracks(doc).filter((t) => t.kind === 'soundscape').map((t) => t.id))
-  return Math.max(0,
-    ...getClips(doc).filter((c) => !scapes.has(c.trackId)).map((c) => c.start + clipLength(c, rate)),
-    ...getPads(doc).map((p) => p.start + p.length))
-}
 
 export type RenderOptions = {
   /** Seconds of silence after the last clip, for reverb and delay tails. */
@@ -28,9 +21,11 @@ export class RenderAborted extends Error {
 }
 
 export async function renderProject(doc: Y.Doc, projectId: string, rate: number, me: number | null | undefined, opts: RenderOptions): Promise<Rendered> {
+  // Only what is audible: muted (and solo-silenced) tracks neither count nor sound, so a muted count-in is trimmed off.
+  const from = contentStart(doc, rate)
   const end = contentEnd(doc, rate)
-  if (end === 0) throw new Error('nothing to export: the project has no clips')
-  const frames = Math.ceil(end + Math.max(0, opts.tail) * rate)
+  if (end <= from) throw new Error('nothing to export: no audible clips')
+  const frames = Math.ceil(end - from + Math.max(0, opts.tail) * rate)
   const ctx = new OfflineAudioContext(2, frames, rate)
   const host = await EngineHost.create(ctx)
   host.node.connect(ctx.destination)
@@ -61,7 +56,7 @@ export async function renderProject(doc: Y.Doc, projectId: string, rate: number,
     )
     await Promise.all(loads)
     check()
-    host.call('engine_play', [0])
+    host.call('engine_play', [from])
     await host.sync() // everything above has reached the engine before the first block is rendered
 
     // Render in one-second slices: the suspend points give progress and a place to stop.

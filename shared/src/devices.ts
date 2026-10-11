@@ -19,6 +19,7 @@ export const REVERB = 3
 export const COMPRESSOR = 4
 export const TREMOLO = 5
 export const DELAY = 6
+export const LOFI_DRUM = 7
 
 export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
@@ -71,6 +72,15 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 7, name: 'resonance', min: 0, max: 1, def: 0, scale: 'lin' },
     ],
   },
+  [LOFI_DRUM]: {
+    type: LOFI_DRUM, name: 'lofi drum', instrument: true,
+    params: [
+      { id: 0, name: 'cutoff', min: 20, max: 20000, def: 2000, scale: 'log', unit: 'hz' },
+      { id: 1, name: 'resonance', min: 0, max: 1, def: 0.3, scale: 'lin' },
+      { id: 2, name: 'decay', min: 1, max: 2000, def: 60, scale: 'pow', unit: 'ms' },
+      { id: 3, name: 'gain', min: 0, max: 2, def: 0.5, scale: 'lin' },
+    ],
+  },
   [FINNWAVE]: {
     type: FINNWAVE, name: 'finnwave', instrument: true,
     params: [
@@ -85,8 +95,10 @@ export const DEVICES: Record<number, DeviceDef> = {
   },
 }
 
-/** Effects offered by the "+" dialog (instruments are inserted with their track). */
+/** Effects offered by the fx bar's "+". */
 export const EFFECTS = Object.values(DEVICES).filter((d) => !d.instrument)
+/** Instruments offered by the synths lane's "+". */
+export const INSTRUMENTS = Object.values(DEVICES).filter((d) => d.instrument)
 
 export function paramToValue(p: ParamDef, t: number): number {
   if (p.options) return Math.round(p.min + t * (p.max - p.min))

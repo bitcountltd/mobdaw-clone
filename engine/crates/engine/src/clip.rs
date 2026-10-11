@@ -2,7 +2,7 @@
 
 use crate::source::Source;
 use dsp::fade::clip_edge_gain;
-use dsp::{FadeShape, Synth};
+use dsp::FadeShape;
 
 pub enum Clip {
     Audio(AudioClip),
@@ -59,12 +59,15 @@ impl AudioClip {
 }
 
 /// A MIDI clip with its own clock: notes live in ticks, `bpm` and `ppq` map them to samples.
+/// With `loop_ticks > 0` the notes in `[0, loop_ticks)` repeat every `loop_ticks` up to
+/// `length_ticks`, and notes at or after `loop_ticks` are ignored.
 pub struct MidiClip {
     pub track: u32,
     pub start: i64,
     pub bpm: f64,
     pub ppq: u32,
     pub length_ticks: f64,
+    pub loop_ticks: f64,
 }
 
 /// One note, kept in the engine-wide index sorted by `(clip, tick, handle)`. Sorting by tick
@@ -92,6 +95,11 @@ impl MidiClip {
         self.bpm > 0.0 && self.bpm.is_finite() && self.ppq > 0
     }
 
+    /// The pattern length when the clip loops (shorter than the clip), else `None`.
+    fn looping(&self) -> Option<f64> {
+        (self.loop_ticks > 0.0 && self.loop_ticks.is_finite() && self.loop_ticks < self.length_ticks).then_some(self.loop_ticks)
+    }
+
     /// `start + round(tick * 60 * sr / (bpm * ppq))`, in f64, rounded once per event
     /// (engine.md section 2). The same expression is used for every event so results are
     /// deterministic on every client.
@@ -103,30 +111,66 @@ impl MidiClip {
         self.tick_to_sample(self.length_ticks, sample_rate)
     }
 
-    /// Notes at or after the clip end (or before its start) never play.
-    fn note_plays(&self, e: &NoteEntry, on: i64, end: i64) -> bool {
-        e.tick >= 0.0 && e.tick < self.length_ticks && on < end
+    /// The notes that can play: all of them, or the first pass's (`tick < loop`) when looping.
+    /// `notes` is sorted by tick.
+    fn pattern<'a>(&self, notes: &'a [NoteEntry]) -> &'a [NoteEntry] {
+        match self.looping() {
+            Some(lp) => &notes[..notes.partition_point(|e| e.tick < lp)],
+            None => notes,
+        }
     }
 
-    /// Start every note whose first sample is exactly `at`. Notes whose start lies before
-    /// `at` are *not* started: that is the "starting mid-note doesn't retrigger" rule.
+    /// The passes (loop iterations) whose notes may start near sample `at`: one without a loop,
+    /// else the one `at` falls in and its neighbours (the rounding of ticks to samples can move a
+    /// note by half a sample across a pass edge).
+    fn passes(&self, at: i64, sample_rate: f64) -> std::ops::Range<i64> {
+        let Some(lp) = self.looping() else { return 0..1 };
+        let ticks = (at - self.start) as f64 * self.bpm * self.ppq as f64 / (60.0 * sample_rate);
+        let here = (ticks / lp).floor().max(0.0) as i64;
+        let count = (self.length_ticks / lp).ceil() as i64;
+        (here - 1).max(0)..(here + 2).min(count)
+    }
+
+    /// The start tick of pass `k`.
+    fn pass_origin(&self, k: i64) -> f64 {
+        self.looping().map_or(0.0, |lp| k as f64 * lp)
+    }
+
+    /// Notes at or after the clip end (or before its start) never play.
+    fn note_plays(&self, tick: f64, on: i64, end: i64) -> bool {
+        tick >= 0.0 && tick < self.length_ticks && on < end
+    }
+
+    /// Start every note whose first sample is exactly `at`, by calling `on(pitch, velocity,
+    /// release_at, start)`. Notes whose start lies before `at` are *not* started: that is the
+    /// "starting mid-note doesn't retrigger" rule.
     ///
     /// The note's release time is `min(start + round((tick + dur) * k), clip end)`, and at
-    /// least one sample after the start, so a note longer than the clip is cut at the clip end.
-    pub fn fire_at(&self, notes: &[NoteEntry], at: i64, sample_rate: f64, synth: &mut Synth) {
+    /// least one sample after the start, so a note longer than the clip is cut at the clip end
+    /// (a looping clip's note is also cut at the end of its pass).
+    pub fn fire_at(&self, notes: &[NoteEntry], at: i64, sample_rate: f64, on: &mut impl FnMut(u32, f32, i64, i64)) {
         if !self.playable() {
             return;
         }
         let end = self.end_sample(sample_rate);
-        let first = notes.partition_point(|e| self.tick_to_sample(e.tick, sample_rate) < at);
-        for e in &notes[first..] {
-            let on = self.tick_to_sample(e.tick, sample_rate);
-            if on != at {
-                break;
-            }
-            if self.note_plays(e, on, end) {
-                let off = self.tick_to_sample(e.tick + e.dur_ticks.max(0.0), sample_rate).min(end).max(on + 1);
-                synth.note_on(e.pitch, e.velocity, off);
+        let notes = self.pattern(notes);
+        for k in self.passes(at, sample_rate) {
+            let origin = self.pass_origin(k);
+            let first = notes.partition_point(|e| self.tick_to_sample(origin + e.tick, sample_rate) < at);
+            for e in &notes[first..] {
+                let tick = origin + e.tick;
+                let start = self.tick_to_sample(tick, sample_rate);
+                if start != at {
+                    break;
+                }
+                if self.note_plays(tick, start, end) {
+                    let mut stop = tick + e.dur_ticks.max(0.0);
+                    if let Some(lp) = self.looping() {
+                        stop = stop.min(origin + lp);
+                    }
+                    let off = self.tick_to_sample(stop, sample_rate).min(end).max(start + 1);
+                    on(e.pitch, e.velocity, off, start);
+                }
             }
         }
     }
@@ -138,14 +182,19 @@ impl MidiClip {
             return i64::MAX;
         }
         let end = self.end_sample(sample_rate);
-        let first = notes.partition_point(|e| self.tick_to_sample(e.tick, sample_rate) <= at);
-        for e in &notes[first..] {
-            let on = self.tick_to_sample(e.tick, sample_rate);
-            if self.note_plays(e, on, end) {
-                return on;
-            }
-            if e.tick >= self.length_ticks {
-                break; // sorted by tick: nothing later can play
+        let notes = self.pattern(notes);
+        for k in self.passes(at, sample_rate) {
+            let origin = self.pass_origin(k);
+            let first = notes.partition_point(|e| self.tick_to_sample(origin + e.tick, sample_rate) <= at);
+            for e in &notes[first..] {
+                let tick = origin + e.tick;
+                let on = self.tick_to_sample(tick, sample_rate);
+                if self.note_plays(tick, on, end) {
+                    return on;
+                }
+                if tick >= self.length_ticks {
+                    break; // sorted by tick: nothing later can play
+                }
             }
         }
         i64::MAX

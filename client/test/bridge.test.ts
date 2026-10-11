@@ -7,6 +7,7 @@ import {
   orderBetween, getDevices, updateDevice, updateClip, updateLooper, updateNote, updateTrack, type SampleMeta, setSampleStatus, discardSample, getSamples, undoScope,
 } from '@mobdaw/shared'
 import { Bridge } from '../src/audio/bridge'
+import { addClickTrack, addDrum, getNotes, isLooping, nextDrumKey, patternTicks } from '@mobdaw/shared'
 
 const meta = (hash: string): SampleMeta => ({ hash, name: hash, duration: 1, size: 10, mime: 'audio/wav' })
 const setup = (init?: (doc: Y.Doc) => void) => {
@@ -44,7 +45,7 @@ describe('bridge', () => {
     expect(n.filter((x) => x === 'engine_device_upsert')).toHaveLength(1)
     expect(n.filter((x) => x === 'engine_param_set')).toHaveLength(7)
     const midi = calls.find((c) => c[0] === 'engine_clip_midi_upsert')!
-    expect(midi.slice(3)).toEqual([100, 120, 960, 15360]) // start, bpm, ppq, lengthTicks
+    expect(midi.slice(3)).toEqual([100, 120, 960, 15360, 0]) // start, bpm, ppq, lengthTicks, loopTicks (0: none)
   })
 
   it('upserts, updates and removes through cascades with stable, never-reused handles', () => {
@@ -53,7 +54,7 @@ describe('bridge', () => {
     const [[, th, kind]] = take().filter((c) => c[0] === 'engine_track_upsert')
     expect(kind).toBe(0)
     updateTrack(doc, t, { gain: 0.5, muted: true })
-    expect(take()).toEqual([['engine_track_upsert', th, 0, 0.5, 0, 1, 0]])
+    expect(take()).toEqual([['engine_track_upsert', th, 0, 0.5, 0, 1, 0, 0]]) // kind, gain, pan, muted, soloed, solo_safe
     const c = addAudioClip(doc, { trackId: t, sourceHash: 'h', start: 5, length: 6 })
     const up = take()[0]
     expect(up.slice(0, 2)).toEqual(['engine_clip_audio_upsert', 2])
@@ -486,3 +487,77 @@ describe('automation', () => {
   })
 })
 
+
+describe('metronome, looping clips and note ranges', () => {
+  it('sends a clip\'s loop length, a device\'s note range (default 0..127) and a click track\'s solo-safety', () => {
+    const { doc, take } = setup()
+    const t = addTrack(doc, 'm', 'midi')
+    const c = addMidiClip(doc, { trackId: t, start: 0 })
+    const d = addDevice(doc, t, 2)
+    take()
+    expect(take()).toEqual([])
+    updateClip(doc, c, { loopTicks: 3840 })
+    expect(take()[0].slice(3)).toEqual([0, 120, 960, 15360, 3840])
+    updateDevice(doc, d, { keyLo: 36, keyHi: 40 })
+    const keys = take().filter((x) => x[0] === 'engine_device_keys')
+    expect(keys).toHaveLength(1)
+    expect(keys[0].slice(2)).toEqual([36, 40])
+    const dh = keys[0][1]
+    const other = addDevice(doc, t, 2)
+    expect(take().find((x) => x[0] === 'engine_device_keys' && x[1] !== dh)!.slice(2)).toEqual([0, 127])
+    expect(other).toBeTruthy()
+    const click = addClickTrack(doc)
+    const tracks = take().filter((x) => x[0] === 'engine_track_upsert')
+    expect(tracks.map((x) => x[7])).toEqual([1]) // solo_safe, only for the click track
+    expect(click).toBeTruthy()
+  })
+
+  it('a forever clip is sent with a far-out length, and only while it loops', () => {
+    const { doc, take } = setup()
+    const t = addTrack(doc, 'm', 'midi')
+    const c = addMidiClip(doc, { trackId: t, start: 0 })
+    take()
+    updateClip(doc, c, { forever: true }) // not looping: the flag is inert
+    expect(take()[0].slice(3)).toEqual([0, 120, 960, 15360, 0])
+    updateClip(doc, c, { loopTicks: 3840 })
+    const [, , , , , , length, loop] = take()[0]
+    expect(loop).toBe(3840)
+    expect(length).toBe((24 * 3600 * 120 * 960) / 60) // 24 hours of ticks at the clip's bpm
+    updateClip(doc, c, { forever: false })
+    expect(take()[0].slice(3)).toEqual([0, 120, 960, 15360, 3840])
+  })
+
+  it('addClickTrack makes the whole metronome in one undo step', () => {
+    const doc = new Y.Doc()
+    addTrack(doc, 'existing', 'midi')
+    const undo = new Y.UndoManager(undoScope(doc))
+    const id = addClickTrack(doc)
+    const tracks = getTracks(doc)
+    expect(tracks.map((x) => x.id)[0]).toBe(id) // first in the list
+    expect(tracks[0]).toMatchObject({ name: 'click', kind: 'midi', role: 'click', muted: false })
+    const devs = getDevices(doc).filter((x) => x.trackId === id)
+    expect(devs.map((x) => [x.name, x.type, x.keyLo, x.keyHi])).toEqual([['accent', 7, 37, 37], ['tick', 7, 36, 36]])
+    const [clip] = getClips(doc).filter((x) => x.trackId === id)
+    expect(clip).toMatchObject({ kind: 'midi', start: 0, bpm: 120, view: 'drums', loopTicks: 3840, lengthTicks: 15360, forever: true })
+    if (clip.kind !== 'midi') throw new Error()
+    expect(isLooping(clip)).toBe(true)
+    expect(patternTicks(clip)).toBe(3840)
+    expect(getNotes(doc).map((n) => [n.tick, n.pitch]).sort((a, b) => a[0] - b[0] || a[1] - b[1])).toEqual([[0, 36], [0, 37], [960, 36], [1920, 36], [2880, 36]]) // the tick on every beat, the accent doubled on beat 1
+    undo.undo()
+    expect(getTracks(doc).map((x) => x.name)).toEqual(['existing'])
+    expect(getDevices(doc)).toEqual([])
+    expect(getNotes(doc)).toEqual([])
+  })
+
+  it('addDrum takes the lowest unused single note from 36 and names it after the note', () => {
+    const doc = new Y.Doc()
+    const t = addTrack(doc, 'm', 'midi')
+    addDevice(doc, t, 2) // a wide-range synth takes no key
+    const a = addDrum(doc, t), b = addDrum(doc, t)
+    expect(getDevices(doc).filter((d) => d.id === a || d.id === b).map((d) => [d.keyLo, d.keyHi])).toEqual([[36, 36], [37, 37]])
+    expect(nextDrumKey(doc, t)).toBe(38)
+    deleteDevice(doc, a)
+    expect(nextDrumKey(doc, t)).toBe(36) // the freed key comes back
+    expect(getDevices(doc).find((d) => d.id === b)!.name).toBe('rim')
+  })
+})

@@ -3,7 +3,7 @@
 // by id: present and parented -> upsert, otherwise -> remove. Command order never matters.
 import * as Y from 'yjs'
 import {
-  LFO_DEFAULTS, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
+  KEY_MAX, KEY_MIN, LFO_DEFAULTS, foreverTicks, isForever, LOOP_CUTOFF_MAX, MASTER_TRACK, SCALE_CODE, clipsMap, devicesMap, getClips, getDevices, getLanes, getLoopers, getNotes, getPads, getPoints, lanesMap,
   looperParamDef, loopersMap, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, tracksMap,
   type AudioClip, type Clip, type Device, type Lane, type Looper, type MidiClip, type Pad, type Note, type ParamTarget, type Point, type SampleMeta, type Track,
 } from '@mobdaw/shared'
@@ -371,7 +371,7 @@ export class Bridge {
   private upsertTrack(t: Track): boolean {
     const code = { audio: 0, midi: 1, soundscape: 2 }[t.kind]
     if (code == null) return false
-    this.sink.call('engine_track_upsert', this.handle('track', t.id), code, t.gain, t.pan, +t.muted, +t.soloed)
+    this.sink.call('engine_track_upsert', this.handle('track', t.id), code, t.gain, t.pan, +t.muted, +t.soloed, +(t.role === 'click'))
     return true
   }
 
@@ -381,7 +381,7 @@ export class Bridge {
     const track = this.handle('track', c.trackId)
     if (c.kind === 'midi') {
       const m = c as MidiClip
-      this.sink.call('engine_clip_midi_upsert', h, track, m.start, m.bpm, m.ppq, m.lengthTicks)
+      this.sink.call('engine_clip_midi_upsert', h, track, m.start, m.bpm, m.ppq, isForever(m) ? Math.max(m.lengthTicks, foreverTicks(m)) : m.lengthTicks, m.loopTicks ?? 0)
     } else if (c.kind === 'audio') {
       const a = c as AudioClip
       this.wantSource(a.sourceHash)
@@ -418,6 +418,7 @@ export class Bridge {
     const h = this.handle('device', d.id)
     if (dirty.all || dirty.fields) {
       this.sink.call('engine_device_upsert', h, d.trackId === MASTER_TRACK ? MASTER_HANDLE : this.handle('track', d.trackId), d.type, d.order, +d.bypass)
+      this.sink.call('engine_device_keys', h, d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
     }
     for (const [p, v] of Object.entries(d.params ?? {})) {
       if (dirty.all || dirty.params.has(p)) {

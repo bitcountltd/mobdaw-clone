@@ -65,7 +65,7 @@ engine_source_free(e, h)
 ## Tracks
 ```
 engine_track_upsert(e, h, kind: u32 /*0 audio, 1 midi*/, gain: f32, pan: f32 /*-1..1*/,
-                    muted: u32, soloed: u32)
+                    muted: u32, soloed: u32, solo_safe: u32)
 engine_track_remove(e, h)       // also stops rendering its clips/devices (bridge removes those too)
 ```
 - **Gain:** linear. Changes are smoothed with a 10 ms linear ramp.
@@ -74,7 +74,9 @@ engine_track_remove(e, h)       // also stops rendering its clips/devices (bridg
   - `R = sin((pan+1)·π/4)`
   - smoothed the same way as gain.
 - **Solo:** if any track is soloed, non-soloed tracks are silent. Mute always wins.
-- **Signal flow:** clips (audio) or instrument output (midi) → device chain in `order` →
+  A `solo_safe` track (the metronome's click track) ignores other tracks' solo, so it stays audible;
+  its own mute still applies.
+- **Signal flow:** clips (audio) or instrument outputs (midi, summed) → effects in `order` →
   gain/pan → master sum → **global fx chain**.
 - **Global fx:** a device upserted with `track = 0xFFFFFFFF` (`MASTER_TRACK`) sits on the master
   bus instead of a track. Those devices run in `order` over the summed mix, before the test voice.
@@ -175,7 +177,7 @@ engine_clip_remove(e, h)        // any clip kind
 
 ## MIDI clips and notes
 ```
-engine_clip_midi_upsert(e, h, track: u32, start: f64, bpm: f64, ppq: u32, length_ticks: f64)
+engine_clip_midi_upsert(e, h, track: u32, start: f64, bpm: f64, ppq: u32, length_ticks: f64, loop_ticks: f64)
 engine_note_upsert(e, h, clip: u32, tick: f64, dur_ticks: f64, pitch: u32, velocity: f32 /*0..1*/)
 engine_note_remove(e, h)
 ```
@@ -185,14 +187,28 @@ engine_note_remove(e, h)
   - Note-on and note-off are **sample-accurate**: sub-blocks split at event offsets.
   - Notes at or after `length_ticks` don't play. A note longer than the clip is cut off at
     the clip end.
+- **Looping:** `loop_ticks > 0` (and shorter than `length_ticks`) makes the clip a repeating pattern.
+  The notes in `[0, loop_ticks)` repeat every `loop_ticks` until `length_ticks`; notes at or after
+  `loop_ticks` are ignored. Pass `k`'s note at `tick` plays at `tick_to_sample(k·loop_ticks + tick)`,
+  so every repeat is sample-accurate and rounded once like any other event. A note longer than what
+  is left of its pass is cut at the end of the pass (and still at the clip end). `loop_ticks` of 0,
+  or at least `length_ticks`, is a plain clip.
+- **Forever:** the engine has no separate flag. The host's `forever` clips (a looping clip that keeps
+  repeating past its finite end) are sent with a `length_ticks` of 24 hours' worth of ticks at the
+  clip's bpm. Passes are computed on the fly, so that costs nothing, and nothing in the engine stops
+  at the end of the content, so a click keeps going under a take recorded past everything else.
 - **Seek and stop** release every sounding voice. Starting playback in the middle of a note
   doesn't retrigger it (simple rule for now).
-- MIDI events go to the track's **instrument**: the first device in `order` whose type is
-  an instrument. Without one, the clip is silent.
+- MIDI events go to **every** sounding (not bypassed) instrument on the track whose note range (see
+  `engine_device_keys`) holds the note's pitch. Ranges that overlap layer; ranges that don't make a split
+  keyboard. Without a matching instrument the note is silent.
+- The instruments of a track run in parallel and their outputs are summed; the track's effects then run in
+  `order` over that sum (an effect ordered before an instrument still processes it).
 
 ## Devices
 ```
 engine_device_upsert(e, h, track: u32, kind: u32, order: f64, bypass: u32)
+engine_device_keys(e, h, lo: u32, hi: u32)                 // instrument note range, MIDI pitches, inclusive
 engine_device_remove(e, h)
 engine_param_set(e, device: u32, param: u32, value: f32)   // smoothed per engine.md §6.4
 ```
@@ -200,7 +216,11 @@ engine_param_set(e, device: u32, param: u32, value: f32)   // smoothed per engin
 - **Bypass:**
   - An effect passes audio through unchanged.
   - An instrument outputs silence.
-- **Changing kind** on an existing handle resets the device.
+- **Note range:** `engine_device_keys` sets the pitches (`lo..=hi`, clamped to 0..127, `hi` raised to `lo`)
+  an instrument receives. The default is 0..127. It is a property of the device, not a param (never
+  smoothed or automated), it is ignored by effects, and an unknown device is a silent no-op. Changing
+  the kind of a handle keeps its range.
+- **Changing kind** on an existing handle resets the device (but not its note range).
 - Defaults apply until `param_set` is called.
 
 ### Automation
@@ -325,6 +345,23 @@ resampler, with an SVF and a soft saturator in the feedback loop.
   - Frequency is `440·2^((pitch−69)/12)`, and velocity scales amplitude linearly.
 - **ADSR:** segments are linear in amplitude for now (attack linear, decay and release
   linear to target). Exponential segments come later.
+- Output is mono, written to both channels.
+
+**kind 7: Lofi drum** (instrument). `dsp::lofidrum`: white noise → SVF low-pass (`dsp::svf`) → exponential
+decay envelope → gain. A one-shot.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| cutoff | 0 | 20..20000 Hz | 2000 | Smoothed in the log2 domain. |
+| resonance | 1 | 0..1 | 0.3 | Damping runs from Butterworth (0.7071) at 0 to 0.04 (Q 12.5) at 1, which rings: a pitched, woodblock-ish click. Smoothed. |
+| decay | 2 | 1..2000 ms | 60 | The envelope falls 60 dB over this time. Read per control block. |
+| gain | 3 | 0..2 | 0.5 | Smoothed. |
+
+- Velocity scales amplitude linearly. Pitch and note length are ignored: a hit always rings out.
+- **Monophonic.** A new hit restarts the envelope; the old tail keeps sounding for 64 samples, fading out
+  linearly, so a retrigger never clicks. Seek and stop fade the tail the same way.
+- **Deterministic.** The noise (xorshift) is seeded from the note's start position (its timeline
+  sample), so the same hit at the same place renders the same samples on every client and in every bounce.
 - Output is mono, written to both channels.
 
 ## Host messages (worklet port, main → processor)

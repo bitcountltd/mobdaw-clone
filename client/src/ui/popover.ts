@@ -26,11 +26,11 @@ export function popover(anchor: HTMLElement, items: [label: string, run: () => v
   addEventListener('keydown', esc, true)
 }
 
-/** Right-click on `el` offers a single delete entry. `run` is skipped (no menu) when `enabled` says no. */
-export function deleteMenu(el: HTMLElement, label: string, run: () => void, enabled: () => boolean = () => true) {
+/** Right-click on `el` offers a delete entry (after any `extra` ones). `run` is skipped (no menu) when `enabled` says no. */
+export function deleteMenu(el: HTMLElement, label: string, run: () => void, enabled: () => boolean = () => true, extra: [string, () => void][] = []) {
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault()
     e.stopPropagation() // not the lane's background menu underneath
-    if (enabled()) popover(el, [[label, run]], [e.clientX, e.clientY])
+    if (enabled()) popover(el, [...extra, [label, run]], [e.clientX, e.clientY])
   })
 }

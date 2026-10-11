@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { grabAt, trimBlock, trimMidiLeft } from '../src/ui/blocks'
+import { grabAt, rotateTick, trimBlock, trimMidiLeft } from '../src/ui/blocks'
 
 const box = (left: number, width: number) => ({ left, right: left + width, width }) as DOMRect
 
@@ -42,5 +42,14 @@ describe('trimMidiLeft', () => {
     expect(out).toEqual({ start: 36000, lengthTicks: 16 * 960 + 480, d: -480 })
     expect(trimMidiLeft(c, -9e6, 48000).start).toBe(0)
     expect(trimMidiLeft(c, 9e6, 48000).lengthTicks).toBe(240)
+  })
+})
+
+describe('rotateTick', () => {
+  it('moves a looping pattern\'s notes back by the left trim, turning round the loop start', () => {
+    expect(rotateTick(960, 240, 3840)).toBe(720)
+    expect(rotateTick(0, 240, 3840)).toBe(3600) // before the new start: it is the next pass's now
+    expect(rotateTick(100, -240, 3840)).toBe(340) // dragged back out to the left
+    expect(rotateTick(100, 3840 * 5, 3840)).toBe(100) // whole passes change nothing
   })
 })

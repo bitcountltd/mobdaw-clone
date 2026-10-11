@@ -1,9 +1,10 @@
 // FX chain cards: title (click for the delete menu), on/off switch and param controls for one device.
-import { DEVICES, SIMPLE_FILTER, filterHasGain, paramToPos, paramToValue, type Device, type ParamDef, type ParamTarget } from '@mobdaw/shared'
+import { DEVICES, KEY_MAX, KEY_MIN, SIMPLE_FILTER, filterHasGain, paramToPos, paramToValue, type Device, type ParamDef, type ParamTarget } from '@mobdaw/shared'
 import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
 import { CARD_W, FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type FilterMember } from './filterCurve'
 import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
+import { noteName, parseNote } from './noteName'
 import { dragToReorder } from './reorder'
 import { valueTip } from './valueTip'
 
@@ -19,6 +20,9 @@ export type CardDeps = {
   commitMany(deviceId: string, values: Record<number, number>): void
   bypass(deviceId: string, bypass: boolean): void
   remove(deviceId: string): void
+  /** Instruments: set the note range (MIDI pitches, inclusive), and rename the card. */
+  keys(deviceId: string, lo: number, hi: number): void
+  rename(deviceId: string): void
   /** The run of adjacent filters this one is in, in chain order, with `self` standing in for it. */
   run(deviceId: string, self: FilterMember): FilterMember[]
   /** This filter's values changed: the card that hosts its run's curve redraws it. */
@@ -46,7 +50,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   const bypass = onOffSwitch('bypass', () => deps.bypass(id, !current.bypass))
   bypass.disabled = deps.readOnly
   let current = dev
-  const title = h('strong', {}, def?.name ?? `device ${dev.type}`)
+  const title = h('strong', {}, dev.name ?? def?.name ?? `device ${dev.type}`)
 
   /** What each param currently shows (doc, automation, a remote drag or this card's own drag). */
   const shown = new Map<number, number>()
@@ -138,16 +142,34 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     return { p, input, out, label }
   })
 
+  // Instruments take the notes inside their range: two note-name fields, lo and hi (c2, f#3, or a pitch number).
+  const keyIn = (tip: string) => h('input', { className: 'key', title: tip, spellcheck: false, disabled: deps.readOnly })
+  const lo = keyIn('lowest note'), hi = keyIn('highest note')
+  const range = def?.instrument ? h('div', { className: 'prm keys' }, h('span', { className: 'dim' }, 'notes'), h('div', {}, lo, '–', hi)) : null
+  const setKeys = (which: 'lo' | 'hi') => {
+    const p = parseNote((which === 'lo' ? lo : hi).value)
+    const [kl, kh] = [current.keyLo ?? KEY_MIN, current.keyHi ?? KEY_MAX]
+    if (p == null) return showKeys(kl, kh) // not a note: put the old one back
+    deps.keys(id, which === 'lo' ? p : Math.min(kl, p), which === 'hi' ? p : Math.max(kh, p)) // the other end follows if they would cross
+  }
+  const showKeys = (kl: number, kh: number) => {
+    if (document.activeElement !== lo) lo.value = noteName(kl)
+    if (document.activeElement !== hi) hi.value = noteName(kh)
+  }
+  lo.onchange = () => setKeys('lo')
+  hi.onchange = () => setKeys('hi')
+  for (const i of [lo, hi]) i.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') i.blur() }
+
   const head = h('div', { className: 'dev-head' }, title, h('span', { className: 'grow' }), bypass)
   const el = h('div', { className: 'dev', 'data-device': id },
     head,
     slot,
-    ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input)))
+    ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input)),
+    range)
   if (slot) el.style.width = `${CARD_W}px` // filters stay narrow: their run shares one curve view, a card wide per filter
-  if (!def?.instrument && !deps.readOnly) {
-    dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })
-  }
-  if (!def?.instrument) cardMenu(el, head, title, 'delete effect', () => deps.remove(id), () => !deps.readOnly)
+  if (!deps.readOnly) dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })
+  cardMenu(el, head, title, def?.instrument ? 'delete instrument' : 'delete effect', () => deps.remove(id), () => !deps.readOnly,
+    def?.instrument ? [['rename', () => deps.rename(id)]] : [])
 
   /**
    * `remote`: in-progress values from other users' drags, keyed by param id. `auto`: the params a lane
@@ -158,6 +180,8 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     current = d
     lastRemote = remote
     setSwitch(bypass, el, !d.bypass)
+    title.textContent = d.name ?? def?.name ?? `device ${d.type}`
+    showKeys(d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
     for (const { p, input, out, label } of rows) {
       const a = auto.get(String(p.id))
       const driven = !!a?.on && a.value != null

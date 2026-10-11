@@ -13,10 +13,10 @@ export function setSwitch(sw: HTMLElement, card: HTMLElement, on: boolean) {
 
 /**
  * Right-click anywhere on `card`, or a plain click on its `title` (not a drag, not on a shut chain, where a click opens
- * the chain), offers a single delete entry. Nothing opens when `enabled` says no.
+ * the chain), offers a delete entry (after any `extra` ones). Nothing opens when `enabled` says no.
  */
-export function cardMenu(card: HTMLElement, head: HTMLElement, title: HTMLElement, label: string, run: () => void, enabled: () => boolean) {
-  deleteMenu(card, label, run, enabled)
+export function cardMenu(card: HTMLElement, head: HTMLElement, title: HTMLElement, label: string, run: () => void, enabled: () => boolean, extra: [string, () => void][] = []) {
+  deleteMenu(card, label, run, enabled, extra)
   let down: { x: number; y: number; onTitle: boolean; closing: boolean } | null = null
   head.addEventListener('pointerdown', (e) => {
     down = { x: e.clientX, y: e.clientY, onTitle: e.button === 0 && e.target === title, closing: closedBy(e) }
@@ -24,6 +24,6 @@ export function cardMenu(card: HTMLElement, head: HTMLElement, title: HTMLElemen
   head.addEventListener('click', (e) => {
     if (!down?.onTitle || down.closing || !enabled() || card.closest('.collapsed')) return
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return
-    popover(title, [[label, run]], [e.clientX, e.clientY])
+    popover(title, [...extra, [label, run]], [e.clientX, e.clientY])
   })
 }
