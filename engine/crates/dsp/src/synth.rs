@@ -282,6 +282,15 @@ impl Synth {
         self.voices.iter().filter(|v| v.state != State::Free).count()
     }
 
+    /// Whether rendering would do anything: a voice is sounding or a control is mid-glide.
+    pub fn is_active(&self) -> bool {
+        self.active_voices() > 0 || self.is_ramping()
+    }
+
+    pub fn is_ramping(&self) -> bool {
+        self.rolloff.is_moving() || self.env_amount.is_moving() || self.sustain.is_moving() || self.gain.is_moving()
+    }
+
     /// Add the mono output into `out`.
     pub fn render_add(&mut self, out: &mut [f32]) {
         for chunk in out.chunks_mut(SUB_BLOCK) {
