@@ -5,19 +5,38 @@
 //! read the same value at the same place. All shapes are in phase with the sine: they start at
 //! zero going up.
 
+use crate::fast;
+
 /// Number of shapes: sine, triangle, soft square.
 pub const SHAPES: u32 = 3;
 /// How hard the sine is driven to make the "square", so the edges stay a few ms long (no clicks).
 const SQUARE_DRIVE: f32 = 6.0;
 
+/// The shape `S` (0 sine, 1 triangle, 2 soft square; anything else reads as the sine) at phase
+/// `f`, in cycles, where `f` should be in `0..1` (the sine is [`fast::sin2pi`]: error about 1e-3).
+/// The const parameter lets a caller pick the shape once, outside its loop.
+#[inline(always)]
+pub fn shape_at<const S: u32>(f: f32) -> f32 {
+    match S {
+        1 => {
+            let g = f + 0.25;
+            1.0 - 4.0 * ((g - g.floor()) - 0.5).abs()
+        }
+        2 => (fast::sin2pi(f) * SQUARE_DRIVE).clamp(-1.0, 1.0),
+        _ => fast::sin2pi(f),
+    }
+}
+
 /// The wave at phase `u` (cycles; any value, only the fractional part matters), in -1..1.
-/// `shape` past the last one reads as the sine.
+/// `shape` past the last one reads as the sine. The sine is an approximation (see
+/// [`shape_at`]); the result is still a pure function of `u`.
 #[inline]
 pub fn wave(u: f64, shape: u32) -> f32 {
+    let f = (u - u.floor()) as f32;
     match shape {
-        1 => (1.0 - 4.0 * ((u + 0.25).rem_euclid(1.0) - 0.5).abs()) as f32,
-        2 => ((std::f64::consts::TAU * u).sin() as f32 * SQUARE_DRIVE).clamp(-1.0, 1.0),
-        _ => (std::f64::consts::TAU * u).sin() as f32,
+        1 => shape_at::<1>(f),
+        2 => shape_at::<2>(f),
+        _ => shape_at::<0>(f),
     }
 }
 
@@ -58,5 +77,14 @@ mod tests {
         // 2 Hz at 48 kHz: a quarter cycle is 6000 samples
         assert!((at_position(6000, 48000.0, 2.0, 0) - 1.0).abs() < 1e-6);
         assert!(at_position(24000, 48000.0, 2.0, 0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_sine_is_within_a_thousandth_of_exact() {
+        for i in -2000..2000 {
+            let u = i as f64 * 0.00123;
+            let exact = (std::f64::consts::TAU * u).sin();
+            assert!((wave(u, 0) as f64 - exact).abs() < 1.1e-3, "at {u}");
+        }
     }
 }

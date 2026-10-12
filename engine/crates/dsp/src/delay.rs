@@ -63,8 +63,11 @@ pub const WARBLE_TAU_S: f64 = 0.15;
 const MIN_DELAY: f64 = 2.0;
 /// Spare room on the tape past the longest delay for the warble's offset (ms).
 const MARGIN_MS: f64 = 10.0;
-/// One-pole DC blocker pole in the feedback path (about 38 Hz at 48 kHz).
-const DC_POLE: f32 = 0.995;
+/// Corner of the one-pole DC blocker in the feedback path (Hz); the pole follows the sample rate.
+const DC_CORNER_HZ: f64 = 38.0;
+/// The warble is evaluated every this many samples and interpolated linearly in between
+/// (a power of two). The fastest component is 7 Hz, so a segment is under 0.5% of its cycle.
+const WOB_EVERY: u32 = 32;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DelayParams {
@@ -92,7 +95,10 @@ impl Default for DelayParams {
 
 #[derive(Clone, Debug)]
 pub struct TapeDelay {
+    /// A power-of-two length, so indices wrap with a mask.
     tape: Vec<(f32, f32)>,
+    /// The longest delay the warbled read may ask for (samples).
+    max_delay: f64,
     /// Absolute index of the next sample to write.
     n: i64,
     head: Resampler,
@@ -100,6 +106,12 @@ pub struct TapeDelay {
     delay: Option<f64>,
     warble: Warble,
     depth: f64,
+    /// The warble's delay offset (samples) at both ends of the current control segment and the
+    /// position within it.
+    wob_a: f32,
+    wob_b: f32,
+    wob_i: u32,
+    dc_pole: f32,
     svf: [Svf; 2],
     /// DC blocker state per channel: previous input and output.
     dc: [(f32, f32); 2],
@@ -110,13 +122,19 @@ impl TapeDelay {
     pub fn new(sample_rate: f32) -> Self {
         let sr = sample_rate as f64;
         let len = ((TIME_MAX_MS as f64 + MARGIN_MS) * 1e-3 * sr).ceil() as usize + 2;
+        let wob0 = (Warble::new().delay_seconds() * sr) as f32;
         Self {
-            tape: vec![(0.0, 0.0); len],
+            max_delay: (len - 2) as f64,
+            tape: vec![(0.0, 0.0); len.next_power_of_two()],
             n: 0,
             head: Resampler::new(),
             delay: None,
             warble: Warble::new(),
             depth: 0.0,
+            wob_a: wob0,
+            wob_b: wob0,
+            wob_i: 0,
+            dc_pole: (-std::f64::consts::TAU * DC_CORNER_HZ / sr).exp() as f32,
             svf: [Svf::new(), Svf::new()],
             dc: [(0.0, 0.0); 2],
             sample_rate: sr,
@@ -151,17 +169,12 @@ impl TapeDelay {
         for svf in self.svf.iter_mut() {
             svf.set_hz(cutoff, damping, sr as f32);
         }
-        let pick: fn(&Svf) -> f32 = match mode {
-            0 => Svf::lp,
-            1 => Svf::hp,
-            _ => Svf::bp,
-        };
         let time_coef = 1.0 / (TIME_TAU_S * sr);
         let depth_coef = 1.0 - (-1.0 / (WARBLE_TAU_S * sr)).exp();
-        let len = self.tape.len() as i64;
-        let max_delay = (len - 2) as f64;
+        let mask = self.tape.len() as i64 - 1;
+        let max_delay = self.max_delay;
 
-        let Self { tape, n, head, delay, warble: wob, depth, svf, dc, .. } = self;
+        let Self { tape, n, head, delay, warble: wob, depth, wob_a, wob_b, wob_i, dc_pole, svf, dc, .. } = self;
         let mut cur = match *delay {
             Some(d) => d,
             None => {
@@ -170,39 +183,62 @@ impl TapeDelay {
                 target
             }
         };
-        for k in 0..l.len().min(r.len()) {
+        let nn = l.len().min(r.len());
+        for k in 0..nn {
             cur += ((target - cur) * time_coef).clamp(-MAX_SLEW, MAX_SLEW);
             *depth += (warble - *depth) * depth_coef;
             if *depth < 1e-6 && warble == 0.0 {
                 *depth = 0.0;
             }
-            wob.advance(inv_sr);
-            let offset = if *depth > 0.0 { *depth * wob.delay_seconds() * sr } else { 0.0 };
+            if *wob_i == 0 {
+                *wob_a = *wob_b;
+                wob.advance_n(WOB_EVERY, inv_sr);
+                *wob_b = (wob.delay_seconds() * sr) as f32;
+            }
+            let offset = if *depth > 0.0 {
+                let wv = *wob_a + (*wob_b - *wob_a) * (*wob_i as f32 * (1.0 / WOB_EVERY as f32));
+                (*depth as f32 * wv) as f64
+            } else {
+                0.0
+            };
+            *wob_i = (*wob_i + 1) & (WOB_EVERY - 1);
             let d = (cur + offset).clamp(MIN_DELAY, max_delay);
 
             // Read: `to` is at most `n - 2`, so everything the head touches is already written.
             let to = (*n as f64 - d).max(head.pos());
             let speed = (to - head.pos()).max(0.05);
             let scale = (1.0 / speed).min(1.0) as f32;
-            let (wl, wr) = head.advance(&mut |i| tape[i.rem_euclid(len) as usize], to, scale);
-            let wl = pick(svf[0].process(wl));
-            let wr = pick(svf[1].process(wr));
+            let (wl, wr) = head.advance(&mut |i| tape[(i & mask) as usize], to, scale);
+            let wl = match mode {
+                0 => svf[0].process(wl).lp(),
+                1 => svf[0].process(wl).hp(),
+                _ => svf[0].process(wl).bp(),
+            };
+            let wr = match mode {
+                0 => svf[1].process(wr).lp(),
+                1 => svf[1].process(wr).hp(),
+                _ => svf[1].process(wr).bp(),
+            };
 
             // Feedback: saturate, remove DC, write.
             let mut back = [wl, wr];
             for (b, (x1, y1)) in back.iter_mut().zip(dc.iter_mut()) {
                 let x = sat.shape(*b) * sat_gain;
-                let y = flush_denormal(x - *x1 + DC_POLE * *y1);
+                let y = x - *x1 + *dc_pole * *y1;
                 (*x1, *y1) = (x, y);
                 *b = y * feedback;
             }
             let (dl, dr) = (l[k], r[k]);
             let (il, ir) = (fin(dl, 0.0), fin(dr, 0.0));
-            tape[(*n).rem_euclid(len) as usize] = (flush_denormal(il + back[0]), flush_denormal(ir + back[1]));
+            tape[(*n & mask) as usize] = (flush_denormal(il + back[0]), flush_denormal(ir + back[1]));
             *n += 1;
 
             l[k] = dl * (1.0 - mix) + wl * mix;
             r[k] = dr * (1.0 - mix) + wr * mix;
+        }
+        for (x1, y1) in dc.iter_mut() {
+            *x1 = flush_denormal(*x1);
+            *y1 = flush_denormal(*y1);
         }
         *delay = Some(cur);
     }
