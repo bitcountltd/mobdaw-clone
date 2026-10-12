@@ -70,6 +70,13 @@ impl Device {
         }
     }
 
+    /// Let go of a held live key (see [`Engine::note_live`]); the drum is a one-shot and ignores it.
+    pub fn note_off(&mut self, pitch: u32) {
+        if let DeviceKind::Synth(s) = &mut self.kind {
+            s.release_key(pitch);
+        }
+    }
+
     /// Let go of the notes whose release time has come (instruments only).
     pub fn release_due(&mut self, now: i64) {
         if let DeviceKind::Synth(s) = &mut self.kind {

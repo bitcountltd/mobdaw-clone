@@ -67,6 +67,15 @@ pub unsafe extern "C" fn engine_monitor(e: *mut Engine, h: u32, on: u32) {
     (*e).monitor((on != 0).then_some(h));
 }
 
+/// A live key on track `h`: `on` 1 starts `pitch` on the track's instruments (held), 0 lets it go.
+///
+/// # Safety
+/// `e` must come from `engine_new` and not yet be freed.
+#[no_mangle]
+pub unsafe extern "C" fn engine_note_live(e: *mut Engine, h: u32, pitch: u32, velocity: f32, on: u32) {
+    (*e).note_live(h, pitch, velocity, on != 0);
+}
+
 /// Set a test-voice parameter (ids in `test_voice::PARAM_*`).
 ///
 /// # Safety

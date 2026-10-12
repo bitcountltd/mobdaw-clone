@@ -1567,3 +1567,18 @@ fn live_source_takes_the_input_buffer() {
     let (l, r) = e.output();
     assert!(l[50] > 0.0 && r[50] < 0.0);
 }
+
+#[test]
+fn live_note_is_held_until_its_off_and_sounds_with_the_transport_stopped() {
+    let mut e = midi_engine();
+    e.note_live(1, 69, 1.0, true);
+    let (on, _) = render(&mut e, 8192);
+    assert!(level(&on, 2000, 8192) > 0.01, "a held live key sounds while stopped");
+    let (held, _) = render(&mut e, 8192);
+    assert!(level(&held, 0, 8192) > 0.01, "...and keeps sounding");
+    e.note_live(1, 69, 1.0, false);
+    render(&mut e, 48_000);
+    let (after, _) = render(&mut e, 4096);
+    assert!(after.iter().all(|v| v.abs() < 1e-4), "the off releases it");
+    e.note_live(9, 69, 1.0, true); // unknown track: a no-op
+}

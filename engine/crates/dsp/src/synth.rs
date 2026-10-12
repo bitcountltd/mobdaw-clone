@@ -46,6 +46,7 @@ pub const P_GAIN: u32 = 6;
 
 #[derive(Clone, Copy)]
 struct Pending {
+    key: u32,
     freq: f32,
     velocity: f32,
     release_at: i64,
@@ -64,6 +65,7 @@ struct Voice {
     osc: Finnwave,
     adsr: Adsr,
     state: State,
+    key: u32,
     velocity: f32,
     /// Monotonic note counter; the smallest age is the oldest voice.
     age: u64,
@@ -79,6 +81,7 @@ impl Voice {
             osc: Finnwave::new(sample_rate),
             adsr: Adsr::new(),
             state: State::Free,
+            key: 0,
             velocity: 0.0,
             age: 0,
             release_at: i64::MAX,
@@ -94,6 +97,7 @@ impl Voice {
         self.osc.set_amp(1.0);
         self.osc.snap_params();
         self.adsr.note_on();
+        self.key = n.key;
         self.velocity = n.velocity;
         self.age = n.age;
         self.release_at = n.release_at;
@@ -171,6 +175,7 @@ impl Synth {
     pub fn note_on(&mut self, pitch: u32, velocity: f32, release_at: i64) {
         let freq = 440.0 * (((pitch.min(127) as f64) - 69.0) / 12.0).exp2();
         let note = Pending {
+            key: pitch,
             freq: freq as f32,
             velocity: velocity.clamp(0.0, 1.0),
             release_at,
@@ -200,6 +205,25 @@ impl Synth {
             .min_by_key(|v| v.pending.map_or(u64::MAX, |p| p.age))
         {
             v.pending = Some(note);
+        }
+    }
+
+    /// Release the notes of `pitch` that were started with no scheduled release (`release_at` of `i64::MAX`: a held,
+    /// live key). Notes with a release time of their own are left to it.
+    pub fn release_key(&mut self, pitch: u32) {
+        for v in self.voices.iter_mut() {
+            match v.state {
+                State::Active if !v.released && v.key == pitch && v.release_at == i64::MAX => {
+                    v.released = true;
+                    v.adsr.release();
+                }
+                State::Stealing => {
+                    if v.pending.is_some_and(|p| p.key == pitch && p.release_at == i64::MAX) {
+                        v.pending = None;
+                    }
+                }
+                _ => {}
+            }
         }
     }
 

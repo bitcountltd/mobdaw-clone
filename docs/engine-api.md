@@ -36,6 +36,15 @@ engine_is_playing(e) -> u32
 - The M1 test-voice functions (`engine_set_param`) may stay for `#/engine-test`.
 - The test voice is only mixed in while its gate is on.
 
+## Live notes
+```
+engine_note_live(e, track: u32, pitch: u32, velocity: f32, on: u32)  // on = 1 holds the key, 0 lets it go
+```
+A key played by hand (the piano roll's gate while a note is drawn or dragged). It goes to the track's sounding
+instruments whose note range holds `pitch`, like a clip note, but is held until the matching off instead of for a
+duration; it sounds with the transport stopped too. Applied between blocks (not sample-accurate). Only the
+notes started live are released by an off; a transport stop or seek releases everything. Unknown tracks are ignored.
+
 ## Input monitoring
 ```
 engine_input_ptr(e) -> *mut f32         // planar stereo: 128 L then 128 R, like the output

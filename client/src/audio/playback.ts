@@ -83,6 +83,9 @@ export function openPlayback(doc: Y.Doc, projectId: string, rate: number, me?: n
     },
     /** Hear the armed microphone through this track's effects (null: stop). Only audible while the recorder is armed. */
     monitor: (trackId: string | null) => void hostP.then((h) => h.monitor(trackId == null ? null : bridge.trackHandle(trackId)), () => {}),
+    /** Gate a key on the track's instruments (held until `on` is false), whether or not the transport runs. */
+    noteLive: (trackId: string, pitch: number, velocity: number, on: boolean) =>
+      void hostP.then((h) => h.call('engine_note_live', [bridge.trackHandle(trackId), pitch, velocity, on ? 1 : 0]), () => {}),
     /** A looper's read head on the source tape (samples), or null while it isn't sounding. */
     looperHead: (id: string) => bridge.looperHead(id),
     /**

@@ -378,6 +378,25 @@ impl Engine {
         self.monitor = h;
     }
 
+    // ---- live notes -----------------------------------------------------------------------
+
+    /// A key pressed (`on`) or let go on track `h`, played by the track's sounding instruments whose note range holds
+    /// `pitch`, like a MIDI clip note but held until the matching off. Applied between blocks, whether or not the
+    /// transport runs; a transport stop or seek releases it with everything else.
+    pub fn note_live(&mut self, h: u32, pitch: u32, velocity: f32, on: bool) {
+        let at = self.main.position;
+        let Some(t) = self.tracks.get(h) else { return };
+        for dh in &t.chain {
+            if let Some(d) = self.devices.get_mut(*dh).filter(|d| d.takes_note(pitch)) {
+                if on {
+                    d.note_on(pitch, velocity, i64::MAX, at);
+                } else {
+                    d.note_off(pitch);
+                }
+            }
+        }
+    }
+
     // ---- output ---------------------------------------------------------------------------
 
     pub fn out_ptr(&mut self) -> *mut f32 {

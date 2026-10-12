@@ -224,12 +224,17 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
     pedalBtn.classList.toggle('on', pedalOn)
   }
   syncPedalBtn()
+  const glass = (sign: string) => `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 18 18M6 8.5h5${sign}"/></svg>`
+  const zoomOut = h('button', { className: 'bar-btn zoom', title: 'zoom out (ctrl + scroll)', onclick: () => zoomButton(1 / 1.5) })
+  zoomOut.innerHTML = glass('')
+  const zoomIn = h('button', { className: 'bar-btn zoom', title: 'zoom in (ctrl + scroll)', onclick: () => zoomButton(1.5) })
+  zoomIn.innerHTML = glass('M8.5 6v5')
   const bar = h('header', { className: 'bar' },
     h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), projectTitle(),
       readOnly ? h('span', { className: 'dim' }, 'view only') : null,
       s.local ? h('span', { className: 'dim', title: 'saved in this browser, on this device' }, 'local') : null),
     transport.el,
-    h('div', { className: 'bar-r' }, pedalText, cpu, status, presence, h('div', { className: 'bar-btns' }, exportBtn, s.local ? null : chatBtn)))
+    h('div', { className: 'bar-r' }, pedalText, cpu, status, presence, h('div', { className: 'bar-btns' }, zoomOut, zoomIn, exportBtn, s.local ? null : chatBtn)))
   const ruler = h('div', { className: 'ruler' }, h('div', { className: 'corner' }))
   const rulerBody = h('div', { className: 'ruler-body' })
   ruler.append(rulerBody)
@@ -304,6 +309,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   const ne = noteEditor({
     doc, undo, readOnly,
     selectNote: (id) => ((noteSel = id), draw()),
+    noteLive: (trackId, pitch, velocity, on) => pb?.noteLive(trackId, pitch, velocity, on),
   })
   const dg = drumGrid({ doc, undo, readOnly })
 
@@ -1866,15 +1872,23 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   ruler.onpointerdown = (e) => seek(fromX(e.clientX - rulerBody.getBoundingClientRect().left))
   scroll.addEventListener('scroll', schedule, { passive: true })
   addEventListener('resize', schedule)
+  /** Zoom the timeline by `factor`, keeping the time under screen x `clientX` where it is. */
+  function zoomAt(factor: number, clientX: number) {
+    const t = (clientX - rulerBody.getBoundingClientRect().left) / pps
+    pps = Math.min(800, Math.max(10, pps * factor))
+    draw()
+    scroll.scrollLeft += HEADER + t * pps - (clientX - scroll.getBoundingClientRect().left) - scroll.scrollLeft
+  }
   scroll.addEventListener('wheel', (e) => {
     if (!(e.ctrlKey || e.metaKey)) return
     e.preventDefault()
-    const r = rulerBody.getBoundingClientRect()
-    const t = (e.clientX - r.left) / pps
-    pps = Math.min(800, Math.max(10, pps * Math.exp(-e.deltaY * 0.01)))
-    draw()
-    scroll.scrollLeft += HEADER + t * pps - (e.clientX - scroll.getBoundingClientRect().left) - scroll.scrollLeft
+    zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX)
   }, { passive: false })
+  /** The buttons zoom around the middle of what is visible (right of the track headers). */
+  function zoomButton(factor: number) {
+    const r = scroll.getBoundingClientRect()
+    zoomAt(factor, r.left + HEADER + (r.width - HEADER) / 2)
+  }
   const key = (e: KeyboardEvent) => {
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'SELECT' || (tag === 'INPUT' && (e.target as HTMLInputElement).type !== 'range')) return
