@@ -112,6 +112,57 @@ impl Adsr {
         self.stage == Stage::Idle
     }
 
+    /// Fill `out` with the next `out.len()` levels: exactly the values `next()` would return,
+    /// sample by sample (same formulas, same f32 operations), but each linear segment runs as a
+    /// tight loop with no per-sample stage dispatch; only the sample on which a segment ends
+    /// goes through `next()`.
+    pub fn fill(&mut self, out: &mut [f32]) {
+        let n = out.len();
+        let mut i = 0;
+        while i < n {
+            // Samples that stay strictly inside the current segment: pos + j < seg.
+            let inside = match self.stage {
+                Stage::Idle | Stage::Sustain => {
+                    let l = self.next();
+                    out[i..].fill(l);
+                    return;
+                }
+                _ => (self.seg.ceil() as u32).saturating_sub(self.pos).saturating_sub(1) as usize,
+            };
+            let run = inside.min(n - i);
+            let (pos, seg) = (self.pos, self.seg);
+            let dst = &mut out[i..i + run];
+            match self.stage {
+                Stage::Attack => {
+                    for (j, o) in dst.iter_mut().enumerate() {
+                        *o = (pos + 1 + j as u32) as f32 / seg;
+                    }
+                }
+                Stage::Decay => {
+                    let range = 1.0 - self.sustain;
+                    for (j, o) in dst.iter_mut().enumerate() {
+                        *o = 1.0 - range * ((pos + 1 + j as u32) as f32 / seg);
+                    }
+                }
+                _ => {
+                    let from = self.release_from;
+                    for (j, o) in dst.iter_mut().enumerate() {
+                        *o = from * (1.0 - (pos + 1 + j as u32) as f32 / seg);
+                    }
+                }
+            }
+            if run > 0 {
+                self.pos += run as u32;
+                self.level = out[i + run - 1];
+                i += run;
+            }
+            if i < n {
+                out[i] = self.next(); // the sample that ends the segment
+                i += 1;
+            }
+        }
+    }
+
     /// Advance one sample and return the new level.
     #[inline]
     pub fn next(&mut self) -> f32 {

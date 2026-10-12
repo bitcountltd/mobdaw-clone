@@ -144,12 +144,19 @@ impl Finnwave {
     /// Add the oscillator's output into `out` (does not clear it).
     pub fn render_add(&mut self, out: &mut [f32]) {
         for chunk in out.chunks_mut(SUB_BLOCK) {
-            self.render_sub_block(chunk);
+            self.render_sub_block::<false>(chunk, &[]);
         }
     }
 
+    /// Add `osc * mult[i]` into `out[i]` for one control sub-block (`out.len() <= SUB_BLOCK`,
+    /// `mult.len() >= out.len()`). Fuses the caller's per-sample multiplier (envelope, velocity)
+    /// with the oscillator, so no scratch buffer is needed.
+    pub fn render_mul_add(&mut self, out: &mut [f32], mult: &[f32]) {
+        self.render_sub_block::<true>(out, &mult[..out.len()]);
+    }
+
     /// One control sub-block: everything that depends only on (f, b) is computed here once.
-    fn render_sub_block(&mut self, out: &mut [f32]) {
+    fn render_sub_block<const MUL: bool>(&mut self, out: &mut [f32], mult: &[f32]) {
         let n_samples = out.len();
         let f = self.freq;
 
@@ -183,12 +190,13 @@ impl Finnwave {
             let mut amp = amp_start;
             let d_amp = (amp_end - amp_start) / n_samples as f64;
 
-            for y in out.iter_mut() {
+            for (i, y) in out.iter_mut().enumerate() {
                 amp += d_amp;
                 let num = s_t * (e_b - e_n1 * c_p) + s_p * (e_n2 - e_n1 * c_t);
                 let den = 1.0 - 2.0 * e_b * c_t + e_2b;
                 let s = num / den - fade * e_n * s_p;
-                *y += (b * amp * s) as f32;
+                let o = (b * amp * s) as f32;
+                *y += if MUL { o * mult[i] } else { o };
 
                 // Rotate (c, s) by the per-sample angle: complex multiply by e^{i d}.
                 (s_t, c_t) = (s_t * cd_t + c_t * sd_t, c_t * cd_t - s_t * sd_t);
