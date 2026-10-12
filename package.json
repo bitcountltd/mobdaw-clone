@@ -16,6 +16,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "admin": "npm run admin -w @mobdaw/server --",
     "build:wasm": "PATH=\"$HOME/.cargo/bin:$PATH\" cargo build --release --target wasm32-unknown-unknown -p engine --manifest-path engine/Cargo.toml --config engine/.cargo/config.toml && mkdir -p client/src/audio/wasm && cp engine/target/wasm32-unknown-unknown/release/engine.wasm client/src/audio/wasm/engine.wasm",
+    "bench": "PATH=\"$HOME/.cargo/bin:$PATH\" cargo build --release --target wasm32-unknown-unknown -p bench --manifest-path engine/Cargo.toml --config engine/.cargo/config.toml && node engine/bench/run.mjs engine/target/wasm32-unknown-unknown/release/bench.wasm",
     "test:dsp": "PATH=\"$HOME/.cargo/bin:$PATH\" cargo test --manifest-path engine/Cargo.toml --workspace -- --nocapture"
   },
   "devDependencies": {
