@@ -381,10 +381,12 @@ fn run_device(slot: &Slot, devices: &mut HandleMap<Device>, lanes: &HandleMap<La
         return;
     }
     let n = l.len();
-    if slot.lanes.is_empty() {
+    if slot.lanes.is_empty() && !d.is_ramping() {
         d.process(l, r, sr32);
         return;
     }
+    // Lanes or a knob glide: control segments of at most 32 frames, since devices read their
+    // ramps at the start of each run.
     let mut i = 0;
     while i < n {
         let end = lane_limit(slot, lanes, p, i, n, (i + SUB_BLOCK).min(n));

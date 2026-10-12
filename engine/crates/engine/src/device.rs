@@ -140,6 +140,20 @@ impl Device {
         }
     }
 
+    /// Whether any smoothed param of this effect is mid-glide. Devices read their ramps at the
+    /// start of a run, so the engine cuts a gliding effect's run into control segments of at most
+    /// 32 frames; at rest it runs the whole block.
+    pub fn is_ramping(&self) -> bool {
+        match &self.kind {
+            DeviceKind::Filter(f) => f.cutoff_log2.is_moving() || f.damping.is_moving() || f.gain_db.is_moving(),
+            DeviceKind::Reverb(v) => v.mix.is_moving() || v.size.is_moving() || v.damp.is_moving(),
+            DeviceKind::Compressor(c) => c.threshold.is_moving() || c.ratio.is_moving() || c.makeup.is_moving(),
+            DeviceKind::Tremolo(t) => t.rate_log2.is_moving() || t.depth.is_moving() || t.spread.is_moving(),
+            DeviceKind::Delay(d) => d.mix.is_moving() || d.feedback.is_moving() || d.drive.is_moving() || d.cutoff_log2.is_moving() || d.resonance.is_moving(),
+            _ => false,
+        }
+    }
+
     /// Whether `param` of this device glides (a `Ramp`) rather than jumping. Keep in step with
     /// each device's `set_param_smooth`.
     fn is_smoothed(&self, param: u32) -> bool {
