@@ -6,6 +6,7 @@ pub mod analog;
 pub mod compressor;
 pub mod delay;
 pub mod fade;
+pub mod fast;
 pub mod finnwave;
 pub mod lfo;
 pub mod lofidrum;

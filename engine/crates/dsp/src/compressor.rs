@@ -8,7 +8,10 @@
 //! Both channels share one gain so the stereo image doesn't shift. The smoothing runs on the
 //! reduction in dB (rises with `attack`, falls with `release`), which is the usual "smooth
 //! decoupled" detector. With the signal under the threshold and no makeup the gain is exactly 1.
+//! The dB conversions use [`crate::fast`] `log2`/`exp2` (error well under 0.001 dB), and are skipped
+//! entirely while the signal is under the knee and there is no reduction.
 
+use crate::fast;
 use crate::util::flush_denormal;
 
 pub const THRESHOLD_MIN: f32 = -60.0;
@@ -24,7 +27,8 @@ pub const MAKEUP_MAX: f32 = 24.0;
 const KNEE_DB: f32 = 6.0;
 /// Level floor so silence doesn't take `ln` to -inf.
 const FLOOR: f32 = 1e-6;
-const DB_PER_NEPER: f32 = 8.685_89; // 20 / ln(10)
+/// dB per octave of amplitude: 20 log10(2).
+const DB_PER_LOG2: f32 = 6.020_6;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CompParams {
@@ -85,15 +89,36 @@ impl Compressor {
         let release = coef(p.release_ms.clamp(RELEASE_MIN_MS, RELEASE_MAX_MS));
         let makeup = p.makeup_db.clamp(0.0, MAKEUP_MAX);
 
+        // Below `threshold - knee/2` the computer returns 0, so while the reduction is also 0 the
+        // gain is just the makeup (exactly 1 with none). That is a compare in the linear domain:
+        // no log and no exp for a signal that isn't being compressed.
+        let quiet_below = 10f32.powf((threshold - 0.5 * KNEE_DB) / 20.0);
+        let makeup_gain = 10f32.powf(makeup / 20.0);
+        let db_to_log2 = 1.0 / DB_PER_LOG2;
+
         for (a, b) in l.iter_mut().zip(r.iter_mut()) {
-            let level_db = DB_PER_NEPER * a.abs().max(b.abs()).max(FLOOR).ln();
+            let level = a.abs().max(b.abs());
+            if level < quiet_below && self.reduction == 0.0 {
+                if makeup_gain != 1.0 {
+                    *a *= makeup_gain;
+                    *b *= makeup_gain;
+                }
+                continue;
+            }
+            let level_db = DB_PER_LOG2 * fast::log2(level.max(FLOOR));
             let target = Self::computer(level_db, threshold, slope);
             let c = if target > self.reduction { attack } else { release };
-            self.reduction = flush_denormal(target + c * (self.reduction - target));
-            let gain = ((makeup - self.reduction) / DB_PER_NEPER).exp();
+            self.reduction = target + c * (self.reduction - target);
+            // A reduction this small is inaudible; snapping it to 0 lets the quiet path resume
+            // (and keeps the state out of the denormals without a flush per sample).
+            if target == 0.0 && self.reduction < 1e-4 {
+                self.reduction = 0.0;
+            }
+            let gain = fast::exp2((makeup - self.reduction) * db_to_log2);
             *a *= gain;
             *b *= gain;
         }
+        self.reduction = flush_denormal(self.reduction);
     }
 }
 
