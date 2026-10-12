@@ -4,7 +4,7 @@ Notes on how the client looks. The styles live in `client/src/styles.css`.
 
 ## General
 
-- Flat and tiled: surfaces are told apart by background hints and 1px lines. The exception is the timeline's tracks: rounded (5px) tiles on a black background with a small gutter between them.
+- Flat and tiled: surfaces are told apart by background hints and 1px lines. Use margin and corner radius sparingly. Where used, the radius is 5px: the timeline's tracks (tiles on a black background with a small gutter between them) and the project tiles on the home page.
 - Labels are lowercase ("audio", "midi", "bypass").
 
 ## Buttons

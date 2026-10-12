@@ -71,7 +71,7 @@ summary::-webkit-details-marker { display: none; }
 .up-menu > div { top: 100%; margin-top: 0; }
 .tiles { list-style: none; padding: 0; margin: 12px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
 .tiles > li.dim { grid-column: 1 / -1; }
-.tile { position: relative; background: var(--panel); border: 1px solid var(--line); }
+.tile { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .tile:hover { border-color: var(--dim); }
 .tile-link { display: flex; flex-direction: column; gap: 4px; padding: 10px; color: var(--fg); }
 .tile-link .picture { height: 64px; margin-bottom: 6px; background: var(--bg); display: flex; align-items: center; justify-content: center; }
@@ -111,7 +111,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .bar-btns { display: flex; }
 .cpu { font-size: 11px; font-variant-numeric: tabular-nums; color: #5c5152; cursor: default; }
 .cpu.hot { color: var(--danger); }
-.bar-btn, .chat-btn { height: 36px; padding: 0 14px; border: 0; border-left: 1px solid var(--line); background: none; color: var(--dim); }
+.bar-btn, .chat-btn { height: 36px; padding: 0 14px; border: 0; background: none; color: var(--dim); }
 .chat-btn.on { color: var(--fg); background: var(--raise); }
 .bar-btn.zoom { width: 36px; padding: 0; display: grid; place-items: center; }
 .bar-btn.zoom:hover { color: var(--fg); }
