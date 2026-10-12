@@ -188,6 +188,7 @@ fast random reads into multi-GB files. Downloads from S3 are streamed into OPFS.
   48 kHz), with per-sample linear ramps inside each sub-block.
   - This gives sample-accurate automation breakpoints within 32 frames, at a fraction of the
     cost of per-sample evaluation.
+  - Not yet true for automation lanes: they are applied as a step per segment (see [`dsp.md`](dsp.md) §11).
   - Note events are **sample-accurate**: sub-blocks split at event offsets.
 - **Precision:**
   - Audio buffers are f32.
@@ -214,6 +215,9 @@ fast random reads into multi-GB files. Downloads from S3 are streamed into OPFS.
   - Parameter changes, transport and note events **never** allocate.
 
 ### 6.4 DSP choices (defaults, open to challenge)
+How DSP code is written for speed (inner loops, approximations, filter stacking, the resampler) is in
+[`dsp.md`](dsp.md).
+
 | area | choice | rationale |
 |---|---|---|
 | Automation | Keyframe points with direct interpolation between them, as in Logic. Ramp durations are entirely user-determined, with no hidden smoothing. Curves are `linear` or `hold` (step); per-segment bend comes later. Control sub-blocks **split at breakpoints**, so corners are sample-exact. | The user draws exactly what they get. The renderer never second-guesses the curve. |

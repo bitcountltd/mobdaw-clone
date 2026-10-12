@@ -2,7 +2,7 @@
 
 Setup, scripts, layout and implementation notes for working on mobdaw. For what it is and why it is
 good, see the [README](../README.md). Design docs: [`spec.md`](spec.md) (server, API, access policy),
-[`engine.md`](engine.md) and [`engine-api.md`](engine-api.md) (audio engine), [`pro-tier.md`](pro-tier.md),
+[`engine.md`](engine.md), [`engine-api.md`](engine-api.md) and [`dsp.md`](dsp.md) (audio engine, DSP performance principles), [`pro-tier.md`](pro-tier.md),
 [`data-policy.md`](data-policy.md), [`style.md`](style.md) (UI conventions).
 
 ## Quick start
