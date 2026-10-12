@@ -17,7 +17,7 @@ export function projectPage(me: Me | null, id: string) {
     // Viewers can't edit; neither can anyone while the account (or the project's owner) is read-only.
     const tl = mountTimeline(session, p.name, !me || p.role === 'viewer' || p.frozen || me.planStatus !== 'active',
       me && p.role === 'owner' && !p.frozen && me.planStatus === 'active' ? (n) => api.renameProject(id, n) : undefined,
-      { projectId: id, me: me?.username ?? '', role: p.role, owner: p.role === 'owner', locked: p.frozen || !me || me.planStatus !== 'active', public: p.public })
+      { projectId: id, me: me?.username ?? '', role: p.role, owner: p.role === 'owner', locked: p.frozen || !me || me.planStatus !== 'active', public: p.public, admin: !!me?.isAdmin, demo: p.demo })
     mount(tl.el)
     // The server closes our connection when access changes (removed, role changed, project deleted).
     const lost = () => {

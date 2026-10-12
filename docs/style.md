@@ -4,7 +4,7 @@ Notes on how the client looks. The styles live in `client/src/styles.css`.
 
 ## General
 
-- Flat, square, tiled: no radii, no margins. Surfaces are told apart by background hints and 1px lines.
+- Flat and tiled: surfaces are told apart by background hints and 1px lines. The exception is the timeline's tracks: rounded (5px) tiles on a black background with a small gutter between them.
 - Labels are lowercase ("audio", "midi", "bypass").
 
 ## Buttons

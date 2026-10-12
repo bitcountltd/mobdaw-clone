@@ -1,4 +1,4 @@
-/* Flat, square, tiled: no radii, no margins; surfaces are told apart by background hints and 1px lines. */
+/* Flat and tiled: surfaces are told apart by background hints and 1px lines; only the timeline's tracks are rounded tiles with a gutter between them. */
 * { scrollbar-width: none; }
 *::-webkit-scrollbar { display: none; }
 /* the timeline's horizontal scrollbar stays visible (a plain mouse has no sideways wheel); the vertical one stays hidden */
@@ -9,7 +9,7 @@
 .scroll::-webkit-scrollbar-thumb:hover { background: #6b4a4a; }
 @supports not selector(::-webkit-scrollbar) { .scroll { scrollbar-width: thin; scrollbar-color: #4a3536 var(--panel); } }
 :root {
-  --bg: #160f10; --panel: #1d1314; --raise: #271c1d; --line: #2f2223; --fg: #ddd5d5; --dim: #8c7f80; --accent: #ffa84a; --danger: #ff7a7a; --divider: #8c1818; --switch: #a32424; --switch-track: #4a1616;
+  --bg: #000; --panel: #1d1314; --raise: #271c1d; --line: #2f2223; --fg: #ddd5d5; --dim: #8c7f80; --accent: #ffa84a; --danger: #ff7a7a; --divider: #8c1818; --switch: #a32424; --switch-track: #4a1616;
   color-scheme: dark;
   font: 14px/1.4 system-ui, -apple-system, sans-serif;
 }
@@ -31,6 +31,17 @@ button:hover { background: var(--line); }
 nav { display: flex; gap: 20px; align-items: center; padding: 14px 24px; }
 main { width: 100%; max-width: 640px; margin: 0 auto; padding: 24px; }
 main.wide { max-width: 860px; }
+.home { flex: 1 0 auto; display: flex; } /* grows with its tallest column (the page scrolls), so the about column's tint runs the full height */
+.home > main { flex: 1; min-width: 0; align-self: flex-start; }
+.about { flex: none; width: 320px; padding: 24px; border-right: 1px solid var(--line); background: var(--panel); line-height: 1.5; }
+.about[hidden] { display: none; }
+.about h2 { margin: 0 0 8px; }
+.about h3 { margin: 24px 0 8px; font-size: 13px; color: var(--dim); font-weight: normal; }
+.about p { margin: 0 0 10px; }
+.about dt { font-weight: bold; margin-top: 10px; }
+.about dd { margin: 2px 0 0; color: var(--dim); }
+.about ul { margin: 0; padding-left: 18px; }
+.about li { margin-bottom: 8px; }
 main.center { margin: auto; text-align: center; }
 .card { display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .card form { display: flex; flex-direction: column; gap: 10px; min-width: 260px; }
@@ -130,8 +141,15 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .body { display: flex; flex: 1; min-height: 0; }
 .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
 .content { position: relative; min-width: 100%; }
-.ruler { display: flex; height: 24px; position: sticky; top: 0; z-index: 3; background: var(--panel); border-bottom: 1px solid var(--line); cursor: pointer; }
-.corner, .head { width: 140px; flex: none; position: sticky; left: 0; z-index: 2; background: var(--panel); }
+.ruler { display: flex; height: 24px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
+/* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */
+.ruler::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); z-index: 0; pointer-events: none; }
+/* tracks are tiles with a gutter around them: the ruler's corner is the track header plus the gutter, so its line meets the headers' */
+:root { --gutter: 6px; --head: 140px; }
+.corner, .head { flex: none; position: sticky; z-index: 2; background: var(--panel); }
+.corner { left: 0; width: calc(var(--head) + var(--gutter)); border-bottom: 1px solid var(--line); }
+/* (the shadow keeps the gutter black while clips scroll under the pinned header) */
+.head { left: var(--gutter); width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); }
 .corner { border-right: 1px solid var(--line); }
 .ruler-body { position: relative; height: 100%; overflow: hidden; }
 .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
@@ -145,12 +163,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .snap-line[hidden] { display: none; }
 
 /* lanes: header, clip row, FX chain */
-.lane { --lane: #1a1112; background: var(--lane); border-bottom: 3px solid var(--divider); position: relative; }
-.lanes > .lane:first-child { border-top: 3px solid var(--divider); }
-/* the dividers are repainted above the playhead overlay (z-index 1), so the playhead never crosses them */
-.lane:not(.master)::after, .lanes > .lane:first-child::before { content: ''; position: absolute; left: 0; right: 0; height: 3px; background: var(--divider); z-index: 2; pointer-events: none; }
-.lane:not(.master)::after { bottom: -3px; }
-.lanes > .lane:first-child::before { top: -3px; }
+.lane { --lane: #1a1112; background: var(--lane); position: relative; margin: var(--gutter) 0 0 var(--gutter); border-radius: 5px; overflow: clip; } /* clip, not hidden: the sticky headers must still stick to the scroller */
 .lane-row { display: flex; height: 72px; }
 .lane.editing .lane-row { height: 320px; }
 /* the drum grid: header, a row per drum, the "add drum" button */
@@ -213,9 +226,9 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 
 /* bottom bar of every lane: the toggle is its header-width left cell, the chain opens to its right */
 .fx-row { position: relative; z-index: 2; display: flex; background: var(--lane); border-top: 1px solid var(--line); }
-.fx-toggle { position: sticky; left: 0; flex: none; width: 140px; min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
+.fx-toggle { position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
 .fx-toggle.on { color: var(--fg); }
-.fx { position: sticky; left: 140px; width: calc(100vw - 140px); display: flex; flex-wrap: wrap; align-items: stretch; min-height: 72px; } /* cards stretch to the row's tallest, so borders line up */
+.fx { position: sticky; left: calc(var(--head) + var(--gutter)); width: calc(100vw - var(--head) - var(--gutter)); display: flex; flex-wrap: wrap; align-items: stretch; min-height: 72px; } /* cards stretch to the row's tallest, so borders line up */
 .fx[hidden] { display: none; }
 /* shut: only each card's title bar */
 .fx.collapsed { min-height: 0; align-items: stretch; }
@@ -224,11 +237,10 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .fx.collapsed .dev-head { height: auto; flex: 1; color: var(--dim); }
 .fx.collapsed .dev-head strong { opacity: .65; } /* filter colour-coding stays, darkened */
 .fx-row[hidden] { display: none; }
-/* global fx: pinned under the scroller; opens upward into a capped, scrollable strip */
-.lane.master { flex: none; max-height: 45vh; overflow: auto; border-top: 1px solid var(--divider); border-bottom: 0; }
-.lane.master .fx-row { border-top: 0; min-width: 100%; width: max-content; }
-.lane.master .fx { position: static; width: auto; max-width: calc(100vw - 140px); }
+/* global fx: between the ruler and the first track */
+.lane.master .fx-row { border-top: 0; }
 .lane.master .fx-toggle { min-height: 44px; padding-left: 12px; font-size: 14px; line-height: 44px; align-items: center; color: var(--fg); }
+.lane.master .fx-toggle:not(.on) { min-height: 31px; font-size: 12px; line-height: 31px; } /* shut: ~30% slimmer */
 .lane-body.arming { cursor: crosshair; }
 /* looper regions: coloured outline boxes over the track's audio */
 .loop-box { position: absolute; top: 0; bottom: 0; cursor: grab; z-index: 1; background: color-mix(in srgb, var(--c) 14%, transparent); }
@@ -338,7 +350,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 /* The source lane is opaque and above the playhead overlay: the timeline's playhead means nothing in source time. */
 .src-row { position: relative; z-index: 2; background: var(--lane); border-top: 1px solid var(--line); }
 .src-head { padding: 0; gap: 0; justify-content: flex-start; align-items: stretch; }
-.src-head .fx-toggle { position: relative; width: auto; flex: none; border-right: 0; }
+.src-head .fx-toggle { position: relative; left: 0; width: auto; flex: none; border-right: 0; box-shadow: none; }
 .src-head .transport.sm { padding: 3px 0 0 6px; }
 /* collapsed source lane: a thin row showing only the clip names */
 .src-row.collapsed { height: 20px; }
@@ -346,7 +358,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .src-row.collapsed .src-body .clip { top: 0; padding: 0 6px; line-height: 20px; }
 .src-row.collapsed .wave, .src-row.collapsed .src-ticks, .src-row.collapsed .loop-box, .src-row.collapsed .playhead { display: none; }
 .transport[hidden] { display: none; }
-.src-view { position: sticky; left: 140px; flex: none; width: calc(var(--view, 100vw) - 140px); height: 100%;
+.src-view { position: sticky; left: calc(var(--head) + var(--gutter)); flex: none; width: calc(var(--view, 100vw) - var(--head) - var(--gutter)); height: 100%;
   overflow-x: auto; overflow-y: hidden; }
 .src-body { height: 100%; }
 .src-body .clip { top: 14px; }
@@ -361,8 +373,8 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .transport.sm .play { width: 24px; height: 18px; border: 1px solid var(--line); background: var(--raise); }
 .transport.sm .play::before { width: 8px; height: 10px; }
 .transport.sm .time { width: auto; padding: 0 6px; font-size: 11px; text-align: left; line-height: 18px; }
-.fx-head { position: sticky; left: 0; flex: none; width: 140px; display: flex; flex-direction: column; align-items: stretch; background: var(--lane); border-right: 1px solid var(--line); }
-.fx-head .fx-toggle { position: relative; width: auto; flex: none; border-right: 0; }
+.fx-head { position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; align-items: stretch; background: var(--lane); border-right: 1px solid var(--line); }
+.fx-head .fx-toggle { position: relative; left: 0; width: auto; flex: none; border-right: 0; box-shadow: none; }
 .fx-head .transport.sm { padding: 3px 0 0 6px; }
 .loop-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--c); pointer-events: none; z-index: 2; }
 .dev.looper .prm > .btns { grid-column: 2; }
@@ -397,7 +409,7 @@ nav a.on { color: var(--fg); }
 /* a track someone else is recording on is read-only */
 .lane.locked .clip, .lane.locked .fx, .lane.locked .x { pointer-events: none; }
 .lane.locked .fx { opacity: 0.6; }
-/* a muted track is dimmed whole (its children, not the lane: the lane's divider pseudo-elements must keep their z-order over the playhead) */
+/* a muted track is dimmed through its children (dimming the lane itself would fade its background tile too) */
 .lane.muted > * { opacity: .45; }
 .tile-new { background: none; border-style: dashed; }
 .tile-new button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%; height: 100%; min-height: 128px; border: 0; background: none; color: var(--dim); font-size: 44px; line-height: 1; }

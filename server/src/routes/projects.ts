@@ -2,22 +2,22 @@ import { randomBytes } from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import * as Y from 'yjs'
 import { docName, projectPreview, type Member, type ProjectPreview, type ProjectDetail, type ProjectSummary, type Role } from '@mobdaw/shared'
-import { accountBlocked, findUser, isDevUser, memberRole, projectRole, requireSignedInOrPublic, writeBlock, type Ctx, type Env } from '../auth.ts'
+import { accountBlocked, findUser, isAdmin, isDevUser, memberRole, projectRole, requireSignedInOrPublic, writeBlock, type Ctx, type Env } from '../auth.ts'
 import { kick, KICK_REASON, type Collab } from '../collab.ts'
 import { tx } from '../db.ts'
 
 type ProjectRow = {
   id: string; name: string; owner_username: string; created_at: number; role: Role
   plan_status: 'active' | 'read_only'; retention_ends_at: number | null // the owner's
-  is_public: number
+  is_public: number; is_demo: number
 }
 const summary = (p: ProjectRow): ProjectSummary => ({
-  id: p.id, name: p.name, ownerUsername: p.owner_username, createdAt: p.created_at, role: p.role, public: p.is_public === 1,
+  id: p.id, name: p.name, ownerUsername: p.owner_username, createdAt: p.created_at, role: p.role, public: p.is_public === 1, demo: p.is_demo === 1,
   frozen: p.plan_status === 'read_only', retentionEndsAt: p.plan_status === 'read_only' ? p.retention_ends_at : null,
 })
 // Projects joined with their owner's plan, which decides whether the project is frozen.
 const WITH_OWNER = 'JOIN users o ON o.id = p.owner_id'
-const COLS = 'p.id, p.name, p.created_at, p.is_public, o.username AS owner_username, o.plan_status, o.retention_ends_at'
+const COLS = 'p.id, p.name, p.created_at, p.is_public, p.is_demo, o.username AS owner_username, o.plan_status, o.retention_ends_at'
 
 export function projectRoutes(ctx: Ctx, collab: Collab) {
   const { db } = ctx
@@ -49,6 +49,18 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
              WHERE m.user_id = ? ORDER BY p.created_at DESC`,
           )
           .all(me) as ProjectRow[])
+    return c.json(rows.map(summary))
+  })
+
+  // Demo projects: public projects an admin has flagged. Listed for everyone, signed in or not.
+  r.get('/demos', (c) => {
+    const me = c.var.session?.id ?? null
+    const rows = db
+      .prepare(
+        `SELECT ${COLS}, COALESCE((SELECT m.role FROM project_members m WHERE m.project_id = p.id AND m.user_id = ?), 'viewer') AS role
+         FROM projects p ${WITH_OWNER} WHERE p.is_public = 1 AND p.is_demo = 1 ORDER BY p.created_at DESC`,
+      )
+      .all(me) as ProjectRow[]
     return c.json(rows.map(summary))
   })
 
@@ -100,15 +112,22 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
     const body = await c.req.json().catch(() => ({}))
     const name = body.name === undefined ? undefined : String(body.name).trim()
     const isPublic = body.public === undefined ? undefined : body.public
-    if ((name === undefined && isPublic === undefined) || name === '' || (isPublic !== undefined && typeof isPublic !== 'boolean'))
+    const isDemo = body.demo === undefined ? undefined : body.demo
+    if ((name === undefined && isPublic === undefined && isDemo === undefined) || name === '' ||
+      (isPublic !== undefined && typeof isPublic !== 'boolean') || (isDemo !== undefined && typeof isDemo !== 'boolean'))
       return c.json({ error: 'bad_request' }, 400)
+    if (isDemo !== undefined && !isAdmin(ctx, c.var.session!.id)) return c.json({ error: 'forbidden' }, 403)
+    if (isDemo && (isPublic === false || (isPublic === undefined && !db.prepare('SELECT 1 FROM projects WHERE id = ? AND is_public = 1').get(id))))
+      return c.json({ error: 'bad_request' }, 400) // a demo must be public
     if (name !== undefined) db.prepare('UPDATE projects SET name = ? WHERE id = ?').run(name, id)
     if (isPublic !== undefined) {
       db.prepare('UPDATE projects SET is_public = ? WHERE id = ?').run(isPublic ? 1 : 0, id)
+      if (!isPublic) db.prepare('UPDATE projects SET is_demo = 0 WHERE id = ?').run(id) // no longer public, so no longer a demo
       if (!isPublic) // making it private again drops everyone who was only here through the link
         for (const conn of collab.hocuspocus.documents.get(docName(id))?.getConnections() ?? [])
           if (conn.context.userId == null || !memberRole(ctx, id, conn.context.userId)) conn.close({ code: 1000, reason: KICK_REASON })
     }
+    if (isDemo !== undefined) db.prepare('UPDATE projects SET is_demo = ? WHERE id = ?').run(isDemo ? 1 : 0, id)
     return c.json(detail(id, c.var.session!.id))
   })
 

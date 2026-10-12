@@ -139,6 +139,8 @@ const migrations: (string | ((db: Db) => void))[] = [
   `ALTER TABLE invites ADD COLUMN memo TEXT NOT NULL DEFAULT '';`,
   // Public projects can be opened (read-only) by any signed-in account that has the link; they are not listed anywhere.
   'ALTER TABLE projects ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0;',
+  // A public project an admin has marked as a demo: listed on the home page for everyone, signed in or not.
+  'ALTER TABLE projects ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0;',
 ]
 
 export function openDb(path: string): Db {

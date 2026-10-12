@@ -96,6 +96,22 @@ describe('public projects', () => {
     expect((await alice.get(`/api/projects/${p}`)).status).toBe(404)
   })
 
+  it('only an admin can flag a public project as a demo, and demos are listed for everyone', async () => {
+    const p = await create('Showcase')
+    expect((await admin.patch(`/api/projects/${p}`, { demo: true })).status).toBe(400) // not public yet
+    await admin.patch(`/api/projects/${p}`, { public: true })
+    const on = await admin.patch(`/api/projects/${p}`, { demo: true })
+    expect(on.body).toMatchObject({ public: true, demo: true })
+    const mine = (await alice.post('/api/projects', { name: 'Mine' })).body.id
+    await alice.patch(`/api/projects/${mine}`, { public: true })
+    expect((await alice.patch(`/api/projects/${mine}`, { demo: true })).status).toBe(403)
+    expect((await alice.get('/api/projects/demos')).body.map((x: any) => x.id)).toEqual([p])
+    expect((await client(t.base).get('/api/projects/demos')).body.map((x: any) => x.id)).toEqual([p]) // signed out
+    await admin.patch(`/api/projects/${p}`, { public: false }) // private again: no longer a demo
+    expect((await alice.get('/api/projects/demos')).body).toEqual([])
+    expect((await admin.get(`/api/projects/${p}`)).body.demo).toBe(false)
+  })
+
   it('signed-out visitors can read a public project, read-only, and nothing else', async () => {
     const p = await create('Anon')
     const anon = client(t.base)

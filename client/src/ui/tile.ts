@@ -56,5 +56,5 @@ export function projectTile(o: {
       picture,
       h('strong', {}, o.name),
       h('span', { className: 'dim small' }, ...o.details)),
-    menu)
+    o.actions.length || o.extra?.length ? menu : null)
 }

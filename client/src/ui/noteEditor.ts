@@ -77,7 +77,7 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
     const scroller = grid.closest<HTMLElement>('.scroll')
     if (!scroller) return
     const head = scroller.querySelector<HTMLElement>('.head')
-    const visible = scroller.getBoundingClientRect().left + (head?.offsetWidth ?? 140)
+    const visible = head ? head.getBoundingClientRect().right : scroller.getBoundingClientRect().left + 146
     keys.style.transform = `translateX(${Math.max(0, visible - grid.getBoundingClientRect().left)}px)`
   }
   const loopEnd = h('div', { className: 'ne-loop', hidden: true }) // the pattern's end: the notes past it are ignored

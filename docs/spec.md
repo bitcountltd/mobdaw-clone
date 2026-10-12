@@ -371,6 +371,10 @@ All sample routes are scoped to a project, and the caller must be a member.
   as a read-only `viewer`, signed in or not (document, samples, preview; signed-out visitors can't list members or copy);
   it is not listed in anyone's projects.
   Turning it off closes the connections of everyone who was only there through the link. `ProjectSummary.public`.
+  `demo?: boolean` is admin only (403 otherwise) and needs the project to be public (400 otherwise); turning `public` off
+  clears it. `ProjectSummary.demo`.
+- `GET /projects/demos`: the public projects flagged `demo`, newest first. Open to signed-out visitors; the home page's
+  "demo" section lists them.
 - `DELETE /projects/:id`: owner only, as described under Deletion.
 - `POST /projects/:id/copy` with `{name?}`: any member. It creates a new project owned by
   the caller that:

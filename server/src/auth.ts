@@ -89,9 +89,12 @@ export const isPublic = (ctx: Ctx, projectId: string) => !!ctx.db.prepare('SELEC
 
 /** Anonymous visitors may only read a public project: its details, preview and sample list / download links. */
 const PUBLIC_READ = /\/projects\/([^/]+)(?:\/preview|\/samples|\/samples\/[^/]+\/url)?$/
+/** The list of demo projects is public too. */
+const DEMO_LIST = /\/projects\/demos$/
 /** Like `requireSignedIn`, but lets a signed-out GET through when it only reads a public project (handlers then see `session` null). */
 export const requireSignedInOrPublic = (ctx: Ctx): MiddlewareHandler<Env> => async (c, next) => {
   if (c.var.session) return next()
+  if (c.req.method === 'GET' && DEMO_LIST.test(c.req.path)) return next()
   const id = c.req.method === 'GET' ? PUBLIC_READ.exec(c.req.path)?.[1] : undefined
   if (!id || !isPublic(ctx, decodeURIComponent(id))) return c.json({ error: 'not_signed_in' }, 401)
   await next()

@@ -38,7 +38,7 @@ import { fmt, transportControls, type TransportControls } from './transport'
 import { fmtDb, gainToPos, posToGain, ticks, UNITY_POS } from './slider'
 import { valueTip } from './valueTip'
 
-const HEADER = 140
+const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in styles.css
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
 const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
 const MIN_SEC = 0.05
@@ -75,7 +75,7 @@ type Src = {
 
 /** The project's name in the bar opens its settings; `renameProject`, when given, lets them change the name (it saves it). `cloud` is set for server projects. */
 export function mountTimeline(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void,
-  cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean }) {
+  cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean }) {
   const { doc, undo } = s
   let rate = DEFAULT_SAMPLE_RATE
   let pb: Playback | null = null // created once the doc has synced (needs meta.sampleRate)
@@ -143,7 +143,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
         name: projectName,
         rename: renameProject,
         onRenamed: (n) => (el.textContent = projectName = n),
-        cloud: cloud && { ...cloud, onPublic: (v) => (cloud.public = v) },
+        cloud: cloud && { ...cloud, onPublic: (v) => (cloud.public = v), onDemo: (v) => (cloud.demo = v) },
         sampleRate: {
           value: rate,
           locked: readOnly ? 'readonly' : isBlank() ? null : 'tracks',
@@ -287,7 +287,7 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
       draw()
     })
   }
-  // The global fx lane: the master bus chain, pinned under the scroller (open or shut, it never scrolls away).
+  // The global fx lane: the master bus chain, between the ruler and the first track.
   let masterOpen = false
   const masterCards = new Map<string, ReturnType<typeof deviceCard>>()
   const masterMore = h('button', { className: 'fx-toggle', title: 'effects on the whole mix', onclick: () => {
@@ -300,7 +300,8 @@ export function mountTimeline(s: Session, projectName: string, readOnly = false,
   masterFx.append(masterAdd)
   openOnClick(masterFx, () => (masterOpen = true))
   const master = h('div', { className: 'lane master' }, h('div', { className: 'fx-row' }, masterMore, masterFx))
-  const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el), master)
+  ruler.after(master)
+  const el = h('div', { className: 'timeline' }, bar, h('div', { className: 'body' }, scroll, chat.el))
 
   const x = (smp: number) => (smp / rate) * pps
   const fromX = (px: number) => Math.max(0, Math.round((px / pps) * rate))

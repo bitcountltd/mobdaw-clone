@@ -13,7 +13,7 @@ export type ProjectMenuOpts = {
   rename?: (name: string) => Promise<unknown> | void
   onRenamed(name: string): void
   /** Absent for projects on this device. */
-  cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; onPublic(v: boolean): void }
+  cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean; onPublic(v: boolean): void; onDemo(v: boolean): void }
   /** The project's sample rate; `locked` says why it can't change (it is only possible while the project has no tracks). */
   sampleRate: { value: number; locked: 'tracks' | 'readonly' | null; set(rate: number): void }
   /** The microphone choice changed: re-open the input if it is in use. */
@@ -51,9 +51,22 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   if (c) {
     const pub = h('input', { type: 'checkbox', checked: c.public, disabled: !c.owner || c.locked })
     const link = h('button', { hidden: !c.public, title: 'copy the address of this project', onclick: () => void navigator.clipboard?.writeText(location.href) }, 'copy link')
+    const demo = h('input', { type: 'checkbox', checked: c.demo, disabled: !c.public || c.locked })
+    const demoRow = h('label', { className: 'check', hidden: !c.admin || !c.owner, title: 'list this project in the demo section of everyone\'s home page' }, demo, h('span', {}, 'demo: show on the home page'))
     pub.onchange = () => {
       const v = pub.checked
-      api.setProjectPublic(c.projectId, v).then(() => ((c.public = v), (link.hidden = !v), (msg.textContent = ''), c.onPublic(v)), (e) => ((pub.checked = !v), fail(e)))
+      api.setProjectPublic(c.projectId, v).then(() => {
+        c.public = v
+        if (!v) (c.demo = false), (demo.checked = false), c.onDemo(false) // the server drops the demo flag with it
+        demo.disabled = !v || c.locked
+        link.hidden = !v
+        msg.textContent = ''
+        c.onPublic(v)
+      }, (e) => ((pub.checked = !v), fail(e)))
+    }
+    demo.onchange = () => {
+      const v = demo.checked
+      api.setProjectDemo(c.projectId, v).then(() => ((c.demo = v), (msg.textContent = ''), c.onDemo(v)), (e) => ((demo.checked = !v), fail(e)))
     }
     const who = !c.me ? 'you are viewing without an account' : { owner: 'you are the owner', editor: 'you are a collaborator', viewer: 'you are a viewer' }[c.role]
     const people = h('div', { className: 'members', hidden: true })
@@ -65,6 +78,7 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
     sharing = section('sharing',
       h('p', { className: 'dim who' }, who),
       h('label', { className: 'check', title: 'anyone signed in who has the link can open it, read-only' }, pub, h('span', {}, 'public: anyone with the link can view')),
+      demoRow,
       h('div', { className: 'row' }, link, toggle), people)
   }
 
