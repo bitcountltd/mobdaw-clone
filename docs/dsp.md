@@ -5,8 +5,8 @@ How DSP code in `engine/` should be written so the engine stays fast as projects
 `engine.md`, each rule says what we do, why, and what it costs, so it can be challenged.
 
 The rules come from an audit of the engine (October 2026): reading the code, inspecting the compiled wasm, and
-timing every block in wasm under V8. The code was then brought in line with them; what remains is listed in
-[`engine/PERF-PLAN.md`](../engine/PERF-PLAN.md). Measure with `npm run bench` (§1).
+timing every block in wasm under V8. The code was then brought in line with them (see the git history); what remains is in §13. Measure with
+`npm run bench` (§1).
 
 ---
 
@@ -239,3 +239,20 @@ check where it touches audio.
 - Approximations are pure f32/integer code with no platform intrinsics that differ between hosts.
 - Changing an algorithm changes the rendered bits relative to older builds. That is fine, but note it in the
   commit, and update any golden-output tests deliberately.
+
+## 13. Open work
+
+- **Resampler alias rejection.** `clean()` reaches about −51 dB (19 kHz input at 1.37× speed). Try a 7th-order
+  elliptic design and first-order-hold droop compensation, then tighten the −45 dB spur bound in
+  `dsp/tests/resampler.rs` to just under what is measured.
+- **Looper voice event runs** (`dsp/src/looper.rs`): compute the run to the next wrap or seam, then a tight loop,
+  with crossfade gains from a phasor.
+- **Delay character.** Move the "every pass darkens" low-pass into an explicit tone stage, so the delay can read
+  through `Resampler::clean()`.
+- **Synth voices.** f32 fails (§6), so try f64x2 voice pairs.
+- **Explicit f32x4 kernels.** EQ (L, R × 2 bands, one-sample skew), resampler modes, the reverb's L and R comb banks.
+- **Sleep gaps.** A delay with warble never sleeps, and a tail device after another only sleeps once its input is
+  exactly zero.
+- **EQ device UI.** A multi-band curve instead of plain sliders.
+- *(Quality, later)* Exponential ADSR segments and an FDN reverb (both change existing projects' sound), decramped
+  bells and shelves near Nyquist.
