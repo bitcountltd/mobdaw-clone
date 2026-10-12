@@ -1,6 +1,38 @@
 use dsp::adsr::{Adsr, Stage};
 
 #[test]
+fn fill_matches_next_bit_for_bit_across_stage_changes() {
+    // fractional and tiny segment lengths, sustain moving mid-note, a release part way through
+    for (a, d, s, r) in [(100.3, 200.7, 0.5, 50.2), (1.0, 1.0, 0.0, 1.0), (37.5, 3.2, 0.9, 480.0), (0.0, 64.0, 1.0, 10.0)] {
+        for chunk in [1usize, 7, 32] {
+            let (mut x, mut y) = (Adsr::new(), Adsr::new());
+            for e in [&mut x, &mut y] {
+                e.set(a, d, s, r);
+                e.note_on();
+            }
+            for blk in 0..60 {
+                if blk == 25 {
+                    x.release();
+                    y.release();
+                }
+                if blk == 10 {
+                    x.set(a, d, s * 0.5, r);
+                    y.set(a, d, s * 0.5, r);
+                }
+                let mut buf = vec![0.0f32; chunk];
+                x.fill(&mut buf);
+                for (i, v) in buf.iter().enumerate() {
+                    let w = y.next();
+                    assert_eq!(v.to_bits(), w.to_bits(), "a={a} chunk={chunk} blk={blk} i={i}");
+                }
+                assert_eq!(x.stage(), y.stage());
+                assert_eq!(x.level().to_bits(), y.level().to_bits());
+            }
+        }
+    }
+}
+
+#[test]
 fn segments_are_linear_and_hit_their_times() {
     let mut e = Adsr::new();
     e.set(100.0, 200.0, 0.5, 50.0);

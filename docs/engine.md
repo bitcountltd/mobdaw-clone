@@ -186,18 +186,26 @@ fast random reads into multi-GB files. Downloads from S3 are streamed into OPFS.
 - The block size is 128 frames, which is the Web Audio render quantum.
 - Within a block, **control is evaluated at 32-frame sub-blocks** (1.5 kHz control rate at
   48 kHz), with per-sample linear ramps inside each sub-block.
+  - Instruments run in sub-blocks split at note events. Effects run over the whole 128-frame block, split
+    only at the breakpoints of lanes that drive them (and into 32-frame pieces when they have lanes or a
+    knob glide is in progress, since devices read their smoothed values once per run). Track
+    gain/pan ramps linearly across the block.
+  - Automation lanes evaluate at both ends of a sub-block and ramp across it.
   - This gives sample-accurate automation breakpoints within 32 frames, at a fraction of the
     cost of per-sample evaluation.
   - Note events are **sample-accurate**: sub-blocks split at event offsets.
+- **Sleep:** an effect that provably outputs zero (silent input, and its state is zero or its tail has fallen
+  below -120 dB) is skipped, and so is a track whose input is silent, whose instruments are idle and whose
+  effects all sleep. Its gain ramps still advance. See [`dsp.md`](dsp.md) §9.
 - **Precision:**
   - Audio buffers are f32.
   - Positions, phase accumulators and time math are f64 or i64.
   - Long accumulators such as oscillator phase wrap in f64 so they don't drift over
     hour-long renders.
 - **Denormals:** wasm has **no FTZ/DAZ control**, so subnormals are always enabled and can
-  be slow. Every feedback state (filters, delays, reverbs) is flushed with an explicit
-  `if x.abs() < 1e-20 { 0.0 }`, or gets a tiny alternating offset. This is enforced by a
-  helper used in every recursive structure.
+  be slow. Recursive state (filters, compressor, DC blockers, reverb and delay buffers) is flushed
+  with `flush_denormal` (`if x.abs() < 1e-20 { 0.0 }`): once per block for filter and detector states
+  (every 16 samples inside the per-sample `Svf::process`), and on write for values stored in delay lines.
 - **Summing** happens in f32. The master bus has no limiter by default; it shows a clip
   indicator and peak/RMS meters, sent to the UI at 30 Hz.
 
@@ -214,18 +222,22 @@ fast random reads into multi-GB files. Downloads from S3 are streamed into OPFS.
   - Parameter changes, transport and note events **never** allocate.
 
 ### 6.4 DSP choices (defaults, open to challenge)
+How DSP code is written for speed (inner loops, approximations, filter stacking, the resampler) is in
+[`dsp.md`](dsp.md).
+
 | area | choice | rationale |
 |---|---|---|
 | Automation | Keyframe points with direct interpolation between them, as in Logic. Ramp durations are entirely user-determined, with no hidden smoothing. Curves are `linear` or `hold` (step); per-segment bend comes later. Control sub-blocks **split at breakpoints**, so corners are sample-exact. | The user draws exactly what they get. The renderer never second-guesses the curve. |
 | Param smoothing | Only for **discrete, non-automated** jumps (knob commits, remote drag overrides): a linear ramp to the target over 10 ms. Frequency-like params ramp in the log2 domain. | Prevents zipper noise from UI edits. Reaches the target in a fixed time, unlike a one-pole's infinite tail. Never applied to automation. |
 | Clip fades | `fadeShape`: equal-power (sin/cos) default, linear, or S-curve (raised cosine). Every clip edge gets a 64-sample declick unless its fade is longer. | Equal-power keeps loudness constant through crossfades of uncorrelated material. The declick prevents edit clicks on cuts. |
-| Filters | Port of **wade `state_variable_filter`** (Zavalishin TPT/ZDF SVF): `g = tan(ω/2)` prewarp via `set_exact`, damping `R`, simultaneous LP/BP/HP. Notch = LP+HP, peak = LP−HP, and shelves/bells come from mixing the outputs. The port adds denormal flushing on `s1`/`s2`. | Stable and artifact-free under per-sample modulation, unlike direct-form biquads. It's the owner's proven implementation. |
-| EQ | Bells and shelves built from the same SVF's mixed outputs (Zavalishin multimode). | Same modulation robustness, and one tested core. |
-| Delay | Fractional delay with 4-point cubic Hermite interpolation. Feedback path has a TPT one-pole tone filter. | Hermite is cheap and clean for modulated delay times. Allpass interpolation sweeps badly under modulation. |
+| Filters | **TPT/ZDF state-variable filter** (Zavalishin; the wade `state_variable_filter`), computed in Simper/Cytomic form: `g = tan(ω/2)` prewarp, damping `R`, states `ic1`/`ic2`. Every response is one mix `m0·x + m1·bp + m2·lp` (LP, BP, HP, notch, peak, bells, shelves), so one branch-free kernel serves all modes; coefficients are computed once per run and shared by both channels. | Stable and artifact-free under per-sample modulation, unlike direct-form biquads. Simper's algebra is the same filter with a shorter dependency chain (see [`dsp.md`](dsp.md) §7). |
+| EQ | Device kind 8: low shelf, two bells and a high shelf from the same SVF mixes, run in one fused per-sample loop with both channels interleaved. A band at exactly 0 dB is skipped. | Same modulation robustness and one tested core; fusing the bands is about 3x cheaper than chaining filter devices. |
+| Delay | Tape echo: the read head is the variable-rate `Resampler` (its default design, below), so time changes bend pitch like a tape head. The feedback loop has an SVF tone filter, a rational-tanh saturator with unity small-signal gain, and a DC blocker. | A moving tape head instead of a crossfading or Hermite tap. The resampler's own low-pass is part of the sound: every pass darkens. |
 | Compressor | Feed-forward, log-domain gain computer with soft knee, and a smooth decoupled peak detector (Giannoulis, Massberg & Reiss 2012). | The well-characterized modern design. Attack and release behave as specified. |
 | Oscillators (synth) | Port of **wade `finnwave`**: a closed-form geometric series of `N = ⌊0.5/f⌋` harmonics with amplitudes `e^{-kb}`. Port changes, pending owner review: phase kept in f64 fundamental cycles; `e^{-b}` terms computed per block when the rolloff changes, not per sample; topmost harmonic crossfaded by fractional N. | **Exactly band-limited** (no aliasing at all, unlike PolyBLEP). The rolloff gives a natural low-pass timbre, and tying it to the envelope models frequency-proportional decay. |
 | Pan | Equal-power pan law (−3 dB center). | Constant perceived loudness across the field. |
 | Resampling | rubato synchronous FFT, f64, at import only. | See §5. |
+| Variable-rate reading | `dsp::Resampler`: an analog low-pass in modal (partial-fraction) form, stepped exactly over arbitrary intervals; state at integer input positions, fractional output from a table. `Resampler::new()` (the tape delay) is Chebyshev-I order 5, 2 dB, 1 rad, zero-order hold. `Resampler::clean()` (the looper) is Chebyshev-I order 7, 0.5 dB, 2.2 rad, first-order hold. | Exact stepping removes the spurs of the old Taylor truncation and lets the cutoff rise to about 15 kHz at 48 kHz without instability (see [`dsp.md`](dsp.md) §10). |
 
 Every DSP block lives in a **`dsp` crate with no wasm dependencies**, unit-tested natively
 with `cargo test`: frequency response, stability under modulation, null tests and THD.

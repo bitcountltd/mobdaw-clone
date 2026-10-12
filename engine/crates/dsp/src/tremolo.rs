@@ -6,8 +6,8 @@
 //! ```
 //!
 //! The gain peaks at exactly 1, so the effect only ever takes level away. With `depth` at 0 the
-//! gain is exactly 1 and the signal passes bit-exact. The LFO phase is kept in f64 cycles so
-//! it doesn't drift over a long session, and it starts at the sine's zero crossing going up.
+//! gain is exactly 1 and the signal passes bit-exact. The LFO phase is a `u32` (2^32 per cycle) so
+//! it wraps exactly and never drifts, the sine is [`crate::fast::sin2pi`], and it starts at the sine's zero crossing going up.
 
 use crate::lfo;
 
@@ -34,8 +34,25 @@ impl Default for TremParams {
 
 #[derive(Clone, Debug, Default)]
 pub struct Tremolo {
-    /// LFO phase in cycles, 0..1.
-    phase: f64,
+    /// LFO phase, 2^32 per cycle: it wraps exactly, never drifts, and the rate is quantised to
+    /// 2^-32 of a cycle per sample.
+    phase: u32,
+}
+
+/// 2^32 per cycle phase to cycles in `0..1` (the top 24 bits, so the conversion is exact).
+#[inline(always)]
+fn cycles(ph: u32) -> f32 {
+    (ph >> 8) as f32 * (1.0 / 16_777_216.0)
+}
+
+#[inline(always)]
+fn run<const S: u32>(l: &mut [f32], r: &mut [f32], ph0: u32, step: u32, spread: u32, depth: f32) {
+    for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+        let ph = ph0.wrapping_add(step.wrapping_mul(i as u32));
+        let pr = ph.wrapping_sub(spread);
+        *a *= 1.0 - depth * (0.5 - 0.5 * lfo::shape_at::<S>(cycles(ph)));
+        *b *= 1.0 - depth * (0.5 - 0.5 * lfo::shape_at::<S>(cycles(pr)));
+    }
 }
 
 impl Tremolo {
@@ -44,23 +61,31 @@ impl Tremolo {
     }
 
     pub fn reset(&mut self) {
-        self.phase = 0.0;
+        self.phase = 0;
+    }
+
+    /// Advance the LFO past `n` samples of silence (what `process` would do to the phase).
+    pub fn skip(&mut self, n: usize, p: &TremParams, sample_rate: f32) {
+        let rate = p.rate_hz.clamp(RATE_MIN, RATE_MAX) as f64;
+        let step = (rate / sample_rate as f64 * 4_294_967_296.0).round() as u32;
+        self.phase = self.phase.wrapping_add(step.wrapping_mul(n as u32));
     }
 
     /// Process `l`/`r` in place.
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], p: &TremParams, sample_rate: f32) {
         let rate = p.rate_hz.clamp(RATE_MIN, RATE_MAX) as f64;
         let depth = p.depth.clamp(0.0, 1.0);
-        let spread = p.spread.clamp(0.0, 1.0) as f64 * 0.5;
-        let step = rate / sample_rate as f64;
-        let shape = p.shape.min(SHAPES - 1);
+        let spread = (p.spread.clamp(0.0, 1.0) as f64 * 0.5 * 4_294_967_296.0) as u32;
+        let step = (rate / sample_rate as f64 * 4_294_967_296.0).round() as u32;
+        let n = l.len().min(r.len());
+        let (l, r) = (&mut l[..n], &mut r[..n]);
 
-        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
-            let ur = (self.phase - spread).rem_euclid(1.0);
-            *a *= 1.0 - depth * (0.5 - 0.5 * lfo::wave(self.phase, shape));
-            *b *= 1.0 - depth * (0.5 - 0.5 * lfo::wave(ur, shape));
-            self.phase = (self.phase + step).fract();
+        match p.shape.min(SHAPES - 1) {
+            1 => run::<1>(l, r, self.phase, step, spread, depth),
+            2 => run::<2>(l, r, self.phase, step, spread, depth),
+            _ => run::<0>(l, r, self.phase, step, spread, depth),
         }
+        self.phase = self.phase.wrapping_add(step.wrapping_mul(n as u32));
     }
 }
 

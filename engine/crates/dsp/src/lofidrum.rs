@@ -58,6 +58,43 @@ impl Strike {
         self.env > SILENT
     }
 
+    #[inline(always)]
+    fn step<const FADE: bool>(&mut self, k: f32, y: &mut f32, fade_left: u32, i: usize) {
+        let x = self.noise();
+        let mut v = self.svf.process(x).lp() * self.env * self.velocity;
+        if FADE {
+            v *= fade_left.saturating_sub(i as u32) as f32 / DECLICK as f32;
+        }
+        *y += v;
+        self.env = flush_denormal(self.env * k);
+    }
+
+    /// Add this strike's output into `y` until it ends or `y` is full. The envelope falls by
+    /// `k` per sample (`ln_k` = ln k < 0), so while it provably stays above `SILENT` for the
+    /// whole block the liveness test is skipped; near the end the run length is computed from
+    /// the decay (`ln(SILENT/env) / ln k`, less one sample of margin) and only the last few
+    /// samples are tested one by one.
+    fn run<const FADE: bool>(&mut self, k: f32, k_len: f32, ln_k: f32, y: &mut [f32], fade_left: u32) {
+        let n = y.len();
+        let mut i = 0;
+        if self.env > SILENT {
+            let fast = if self.env * k_len > SILENT * 1.001 {
+                n
+            } else {
+                let est = ((SILENT / self.env).ln() / ln_k) as usize;
+                est.saturating_sub(1).min(n)
+            };
+            while i < fast {
+                self.step::<FADE>(k, &mut y[i], fade_left, i);
+                i += 1;
+            }
+        }
+        while i < n && self.live() {
+            self.step::<FADE>(k, &mut y[i], fade_left, i);
+            i += 1;
+        }
+    }
+
     /// xorshift32, mapped to -1..1.
     #[inline]
     fn noise(&mut self) -> f32 {
@@ -158,6 +195,10 @@ impl LofiDrum {
         self.cur.live() || (self.old.live() && self.fade_left > 0)
     }
 
+    pub fn is_ramping(&self) -> bool {
+        self.cutoff_log2.is_moving() || self.resonance.is_moving() || self.gain.is_moving()
+    }
+
     /// Add the mono output into `out`.
     pub fn render_add(&mut self, out: &mut [f32]) {
         for chunk in out.chunks_mut(SUB_BLOCK) {
@@ -186,22 +227,18 @@ impl LofiDrum {
         if fading {
             self.old.svf.set_hz(cutoff, damping, self.sample_rate);
         }
-        let mut g = g0;
-        for (i, o) in out.iter_mut().enumerate() {
-            g += dg;
-            let mut y = 0.0;
-            if self.cur.live() {
-                let x = self.cur.noise();
-                y += self.cur.svf.process(x).lp() * self.cur.env * self.cur.velocity;
-                self.cur.env = flush_denormal(self.cur.env * k);
-            }
-            if fading {
-                let fade = self.fade_left.saturating_sub(i as u32) as f32 / DECLICK as f32;
-                let x = self.old.noise();
-                y += self.old.svf.process(x).lp() * self.old.env * self.old.velocity * fade;
-                self.old.env = flush_denormal(self.old.env * k);
-            }
-            *o += y * g;
+        let mut y = [0.0f32; SUB_BLOCK];
+        let y = &mut y[..len];
+        let ln_k = -6.907_755_3 / (self.decay_ms * 1e-3 * self.sample_rate);
+        let k_len = (ln_k * len as f32).exp();
+        if self.cur.live() {
+            self.cur.run::<false>(k, k_len, ln_k, y, 0);
+        }
+        if fading {
+            self.old.run::<true>(k, k_len, ln_k, y, self.fade_left);
+        }
+        for (i, (o, v)) in out.iter_mut().zip(y.iter()).enumerate() {
+            *o += v * (g0 + dg * (i + 1) as f32);
         }
         if fading {
             self.fade_left = self.fade_left.saturating_sub(len as u32);

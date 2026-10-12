@@ -5,3 +5,4 @@ dist/
 *.log
 engine/target/
 client/src/audio/wasm/
+.claude/

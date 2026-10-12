@@ -60,5 +60,6 @@ Open http://localhost:5173. Setup details, scripts, repo layout and implementati
 - [`docs/development.md`](docs/development.md): setup, scripts, layout, implementation notes
 - [`docs/spec.md`](docs/spec.md): server, API, auth, access policy
 - [`docs/engine.md`](docs/engine.md), [`docs/engine-api.md`](docs/engine-api.md): the audio engine
+- [`docs/dsp.md`](docs/dsp.md): DSP performance and design principles
 - [`docs/pro-tier.md`](docs/pro-tier.md), [`docs/data-policy.md`](docs/data-policy.md): plans and data
 - [`docs/style.md`](docs/style.md): UI conventions

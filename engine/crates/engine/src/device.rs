@@ -9,8 +9,13 @@ pub const KIND_COMPRESSOR: u32 = 4;
 pub const KIND_TREMOLO: u32 = 5;
 pub const KIND_DELAY: u32 = 6;
 pub const KIND_LOFI_DRUM: u32 = 7;
+pub const KIND_EQ: u32 = 8;
 
 const SMOOTH_MS: f64 = 10.0;
+
+fn all_zero(l: &[f32], r: &[f32]) -> bool {
+    l.iter().chain(r.iter()).all(|&x| x == 0.0)
+}
 
 pub struct Device {
     pub track: u32,
@@ -34,6 +39,7 @@ pub enum DeviceKind {
     Tremolo(Box<TremoloDevice>),
     Delay(Box<DelayDevice>),
     Lofi(Box<LofiDrum>),
+    Eq(Box<EqDevice>),
 }
 
 impl Device {
@@ -46,6 +52,7 @@ impl Device {
             KIND_TREMOLO => DeviceKind::Tremolo(Box::new(TremoloDevice::new(sample_rate))),
             KIND_DELAY => DeviceKind::Delay(Box::new(DelayDevice::new(sample_rate))),
             KIND_LOFI_DRUM => DeviceKind::Lofi(Box::new(LofiDrum::new(sample_rate))),
+            KIND_EQ => DeviceKind::Eq(Box::new(EqDevice::new(sample_rate))),
             _ => DeviceKind::Unknown,
         };
         Self { track, order, bypass, kind_id, kind, key_lo: 0, key_hi: 127 }
@@ -110,21 +117,110 @@ impl Device {
             DeviceKind::Tremolo(t) => t.set_param(param, value),
             DeviceKind::Delay(d) => d.set_param(param, value),
             DeviceKind::Lofi(d) => d.set_param(param, value),
+            DeviceKind::Eq(e) => e.set_param(param, value),
             DeviceKind::Unknown => {}
         }
     }
 
-    /// An automated value: applied at once, with none of the glide a knob move gets.
-    pub fn set_param_auto(&mut self, param: u32, value: f32) {
+    /// An automated value over one control segment of `len` samples: the param jumps to `from`
+    /// (none of the glide a knob move gets) and, if it is a smoothed one, ramps linearly to `to`
+    /// across the segment. Devices read their ramps at the segment start for coefficients and
+    /// advance them per segment, so a ramp shows per sample where a device interpolates (the
+    /// synth's and drum's gain) and as the exact end value for the next segment. Params that jump
+    /// (mode, times, attack...) take `from` only.
+    pub fn set_param_auto(&mut self, param: u32, from: f32, to: f32, len: usize) {
+        self.set_param_smooth_dispatch(param, from, 0.0);
+        if from != to && self.is_smoothed(param) {
+            self.set_param_smooth_dispatch(param, to, len as f64);
+        }
+    }
+
+    fn set_param_smooth_dispatch(&mut self, param: u32, value: f32, s: f64) {
         match &mut self.kind {
-            DeviceKind::Filter(f) => f.set_param_smooth(param, value, 0.0),
-            DeviceKind::Synth(s) => s.set_param_smooth(param, value, 0.0),
-            DeviceKind::Reverb(v) => v.set_param_smooth(param, value, 0.0),
-            DeviceKind::Compressor(c) => c.set_param_smooth(param, value, 0.0),
-            DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, 0.0),
-            DeviceKind::Delay(d) => d.set_param_smooth(param, value, 0.0),
-            DeviceKind::Lofi(d) => d.set_param_smooth(param, value, 0.0),
+            DeviceKind::Filter(f) => f.set_param_smooth(param, value, s),
+            DeviceKind::Synth(d) => d.set_param_smooth(param, value, s),
+            DeviceKind::Reverb(v) => v.set_param_smooth(param, value, s),
+            DeviceKind::Compressor(c) => c.set_param_smooth(param, value, s),
+            DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, s),
+            DeviceKind::Delay(d) => d.set_param_smooth(param, value, s),
+            DeviceKind::Lofi(d) => d.set_param_smooth(param, value, s),
+            DeviceKind::Eq(e) => e.set_param_smooth(param, value, s),
             DeviceKind::Unknown => {}
+        }
+    }
+
+    /// Whether any smoothed param of this effect is mid-glide. Devices read their ramps at the
+    /// start of a run, so the engine cuts a gliding effect's run into control segments of at most
+    /// 32 frames; at rest it runs the whole block.
+    pub fn is_ramping(&self) -> bool {
+        match &self.kind {
+            DeviceKind::Filter(f) => f.cutoff_log2.is_moving() || f.damping.is_moving() || f.gain_db.is_moving(),
+            DeviceKind::Reverb(v) => v.mix.is_moving() || v.size.is_moving() || v.damp.is_moving(),
+            DeviceKind::Compressor(c) => c.threshold.is_moving() || c.ratio.is_moving() || c.makeup.is_moving(),
+            DeviceKind::Tremolo(t) => t.rate_log2.is_moving() || t.depth.is_moving() || t.spread.is_moving(),
+            DeviceKind::Delay(d) => d.mix.is_moving() || d.feedback.is_moving() || d.drive.is_moving() || d.cutoff_log2.is_moving() || d.resonance.is_moving(),
+            DeviceKind::Synth(s) => s.is_ramping(),
+            DeviceKind::Lofi(d) => d.is_ramping(),
+            DeviceKind::Eq(e) => e.out_db.is_moving() || e.bands.iter().any(|b| b.freq_log2.is_moving() || b.gain_db.is_moving() || b.damping.is_moving()),
+            DeviceKind::Unknown => false,
+        }
+    }
+
+    /// An instrument with nothing sounding and nothing gliding: rendering it would add exact
+    /// zeros and change no state, so the engine skips it. Effects are never idle (see `is_asleep`).
+    pub fn is_idle_instrument(&self) -> bool {
+        match &self.kind {
+            DeviceKind::Synth(s) => !s.is_active(),
+            DeviceKind::Lofi(d) => !d.is_active() && !d.is_ramping(),
+            _ => false,
+        }
+    }
+
+    /// Whether this effect, fed zeros, would output zeros and leave its audible state as it is
+    /// (or within -120 dB of it), so the engine may skip it while its input is all zero. Never true
+    /// mid-glide (a skipped run would not advance the ramps).
+    pub fn is_asleep(&self) -> bool {
+        if self.bypass {
+            return true;
+        }
+        if self.is_ramping() {
+            return false;
+        }
+        match &self.kind {
+            DeviceKind::Unknown => true,
+            DeviceKind::Filter(f) => f.svf[0].is_zero() && f.svf[1].is_zero(),
+            DeviceKind::Compressor(c) => c.comp.reduction_db() == 0.0,
+            DeviceKind::Tremolo(_) => true,
+            DeviceKind::Reverb(v) => v.zero_run >= v.reverb.tail_samples(v.size_max),
+            DeviceKind::Delay(d) => d.is_asleep(),
+            DeviceKind::Eq(e) => e.bands.iter().all(|b| b.st == [[0.0; 2]; 2]),
+            DeviceKind::Synth(_) | DeviceKind::Lofi(_) => false,
+        }
+    }
+
+    /// Account for `n` skipped frames of silence on an asleep effect.
+    pub fn skip(&mut self, n: usize, sample_rate: f32) {
+        match &mut self.kind {
+            DeviceKind::Reverb(v) => v.zero_run += n as u64,
+            DeviceKind::Delay(d) => d.zero_run += n as u64,
+            DeviceKind::Tremolo(t) => t.skip(n, sample_rate),
+            _ => {}
+        }
+    }
+
+    /// Whether `param` of this device glides (a `Ramp`) rather than jumping. Keep in step with
+    /// each device's `set_param_smooth`.
+    fn is_smoothed(&self, param: u32) -> bool {
+        match &self.kind {
+            DeviceKind::Filter(_) => matches!(param, 1..=3),
+            DeviceKind::Synth(_) => matches!(param, dsp::synth::P_ROLLOFF | dsp::synth::P_ENV_TO_ROLLOFF | dsp::synth::P_SUSTAIN | dsp::synth::P_GAIN),
+            DeviceKind::Reverb(_) => matches!(param, 0..=2),
+            DeviceKind::Compressor(_) => matches!(param, 0 | 1 | 4),
+            DeviceKind::Tremolo(_) => matches!(param, 0 | 1 | 3),
+            DeviceKind::Delay(_) => matches!(param, 0 | 2 | 4 | 6 | 7),
+            DeviceKind::Lofi(_) => matches!(param, dsp::lofidrum::P_CUTOFF | dsp::lofidrum::P_RESONANCE | dsp::lofidrum::P_GAIN),
+            DeviceKind::Eq(_) => param <= 12,
+            DeviceKind::Unknown => false,
         }
     }
 
@@ -139,11 +235,14 @@ impl Device {
             DeviceKind::Tremolo(t) => t.reset(),
             DeviceKind::Delay(d) => d.reset(),
             DeviceKind::Lofi(d) => d.reset(),
+            DeviceKind::Eq(e) => e.reset(),
             DeviceKind::Unknown => {}
         }
     }
 
-    /// Process one control segment (at most 32 samples) of the track's stereo buffer.
+    /// Process a stretch of the track's stereo buffer (instruments get at most 32 samples at a
+    /// time: they are segmented at notes; effects get whole blocks or the pieces between their
+    /// own lane breakpoints).
     ///
     /// * Bypassed effect: the buffer is left untouched (bit-exact passthrough).
     /// * Bypassed instrument: contributes silence.
@@ -158,22 +257,27 @@ impl Device {
             DeviceKind::Compressor(c) => c.process(l, r, sample_rate),
             DeviceKind::Tremolo(t) => t.process(l, r, sample_rate),
             DeviceKind::Delay(d) => d.process(l, r),
+            DeviceKind::Eq(e) => e.process(l, r, sample_rate),
             DeviceKind::Synth(s) => {
-                let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
-                let mono = &mut mono[..l.len()];
-                s.render_add(mono);
-                for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
-                    *l += *m;
-                    *r += *m;
+                for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
+                    let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
+                    let mono = &mut mono[..l.len()];
+                    s.render_add(mono);
+                    for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
+                        *l += *m;
+                        *r += *m;
+                    }
                 }
             }
             DeviceKind::Lofi(d) => {
-                let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
-                let mono = &mut mono[..l.len()];
-                d.render_add(mono);
-                for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
-                    *l += *m;
-                    *r += *m;
+                for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
+                    let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
+                    let mono = &mut mono[..l.len()];
+                    d.render_add(mono);
+                    for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
+                        *l += *m;
+                        *r += *m;
+                    }
                 }
             }
             DeviceKind::Unknown => {}
@@ -195,6 +299,10 @@ pub struct FilterDevice {
     /// Bell and shelf gain in dB; linear ramp.
     gain_db: Ramp,
     svf: [Svf; 2],
+    /// Inputs the cached `coefs` were computed from: mode, cutoff Hz, damping, gain dB, sample rate. Coefficients
+    /// (a `tan`, a `powf`) are only recomputed when these change, i.e. not while all ramps are at rest.
+    key: Option<(u32, f32, f32, f32, f32)>,
+    coefs: dsp::svf::SvfCoefs,
 }
 
 impl FilterDevice {
@@ -206,6 +314,8 @@ impl FilterDevice {
             damping: Ramp::new(std::f64::consts::FRAC_1_SQRT_2),
             gain_db: Ramp::new(0.0),
             svf: [Svf::new(), Svf::new()],
+            key: None,
+            coefs: dsp::svf::SvfCoefs::from_g(0.0, 1.0),
         }
     }
 
@@ -238,10 +348,28 @@ impl FilterDevice {
         let cutoff = self.cutoff_log2.value().exp2().min(nyquist_limit) as f32;
         let damping = self.damping.value() as f32;
         let gain_db = self.gain_db.value() as f32;
+        let gain_at_rest = self.gain_db.value() == self.gain_db.target();
         self.cutoff_log2.advance(len);
         self.damping.advance(len);
         self.gain_db.advance(len);
 
+        // A bell or shelf at exactly 0 dB is the identity (A == 1 gives m0 = 1, m1 = m2 = 0): skip it, and clear the
+        // state so that when the gain moves away from 0 the filter starts clean instead of from stale memory.
+        if self.mode >= 5 && gain_db == 0.0 && gain_at_rest {
+            self.reset();
+            return;
+        }
+
+        let key = (self.mode, cutoff, damping, gain_db, sample_rate);
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.coefs = self.make_coefs(cutoff, damping, gain_db, sample_rate);
+        }
+        // One tan, shared by L and R; every mode is a mix of the same two SVF outputs.
+        Svf::process_block_stereo(&mut self.svf, l, r, &self.coefs);
+    }
+
+    fn make_coefs(&self, cutoff: f32, damping: f32, gain_db: f32, sample_rate: f32) -> dsp::svf::SvfCoefs {
         if self.mode >= 5 {
             // Bell and shelves (Cytomic's SVF mixes): out = m0*x + m1*bp + m2*lp, with A = 10^(dB/40).
             let a = 10f32.powf(gain_db / 40.0);
@@ -252,28 +380,159 @@ impl FilterDevice {
                 6 => (1.0 / a.sqrt(), damping, 1.0, k * (a - 1.0), a2 - 1.0), // low shelf
                 _ => (a.sqrt(), damping, a2, k * (1.0 - a) * a, 1.0 - a2), // high shelf
             };
-            for (svf, buf) in self.svf.iter_mut().zip([l, r]) {
-                svf.set_hz_warped(cutoff, damping, sample_rate, warp);
-                for x in buf.iter_mut() {
-                    let input = *x;
-                    svf.process(input);
-                    *x = m0 * input + m1 * svf.bp() + m2 * svf.lp();
-                }
-            }
+            return dsp::svf::SvfCoefs::from_hz(cutoff, damping, sample_rate, warp).with_mix(m0, m1, m2);
+        }
+        let c = dsp::svf::SvfCoefs::from_hz(cutoff, damping, sample_rate, 1.0);
+        match self.mode {
+            0 => c.lowpass(),
+            1 => c.highpass(),
+            2 => c.bandpass(),
+            3 => c.notch(),
+            _ => c.peak(),
+        }
+    }
+}
+
+/// Kind 8: four-band EQ (low shelf, bell, bell, high shelf). Params: `band*3 + {0 freq Hz, 1 gain dB, 2 damping}`
+/// for bands 0..3, and 12 output gain (dB). Same smoothing and SVF mixes as `FilterDevice`'s bell and shelves, but
+/// all active bands run in one fused per-sample loop with L and R interleaved.
+pub struct EqDevice {
+    smooth_samples: f64,
+    bands: [EqBand; 4],
+    out_db: Ramp,
+}
+
+struct EqBand {
+    freq_log2: Ramp,
+    gain_db: Ramp,
+    damping: Ramp,
+    /// Integrator states `[ic1, ic2]` per channel.
+    st: [[f32; 2]; 2],
+    key: Option<(f32, f32, f32, f32)>,
+    coefs: dsp::svf::SvfCoefs,
+}
+
+const EQ_DEFAULT_HZ: [f64; 4] = [100.0, 500.0, 2000.0, 8000.0];
+
+impl EqDevice {
+    pub fn new(sample_rate: f32) -> Self {
+        let band = |i: usize| EqBand {
+            freq_log2: Ramp::new(EQ_DEFAULT_HZ[i].log2()),
+            gain_db: Ramp::new(0.0),
+            damping: Ramp::new(std::f64::consts::FRAC_1_SQRT_2),
+            st: [[0.0; 2]; 2],
+            key: None,
+            coefs: dsp::svf::SvfCoefs::from_g(0.0, 1.0),
+        };
+        Self { smooth_samples: sample_rate as f64 * SMOOTH_MS * 1e-3, bands: [band(0), band(1), band(2), band(3)], out_db: Ramp::new(0.0) }
+    }
+
+    pub fn set_param(&mut self, param: u32, value: f32) {
+        self.set_param_smooth(param, value, self.smooth_samples);
+    }
+
+    pub fn set_param_smooth(&mut self, param: u32, value: f32, s: f64) {
+        if !value.is_finite() {
             return;
         }
+        if param == 12 {
+            self.out_db.set_target(value.clamp(-24.0, 24.0) as f64, s);
+            return;
+        }
+        let Some(b) = self.bands.get_mut((param / 3) as usize) else { return };
+        match param % 3 {
+            0 => b.freq_log2.set_target((value.clamp(20.0, 20000.0) as f64).log2(), s),
+            1 => b.gain_db.set_target(value.clamp(-24.0, 24.0) as f64, s),
+            _ => b.damping.set_target(value.clamp(0.05, 2.0) as f64, s),
+        }
+    }
 
-        let pick: fn(&Svf) -> f32 = match self.mode {
-            0 => Svf::lp,
-            1 => Svf::hp,
-            2 => Svf::bp,
-            3 => Svf::notch,
-            _ => Svf::peak,
-        };
-        for (svf, buf) in self.svf.iter_mut().zip([l, r]) {
-            svf.set_hz(cutoff, damping, sample_rate);
-            for x in buf.iter_mut() {
-                *x = pick(svf.process(*x));
+    pub fn reset(&mut self) {
+        for b in &mut self.bands {
+            b.st = [[0.0; 2]; 2];
+        }
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+        let len = l.len();
+        let nyquist_limit = 0.99 * 0.5 * sample_rate as f64;
+        let mut active = [0usize; 4];
+        let mut n = 0;
+        for (i, b) in self.bands.iter_mut().enumerate() {
+            let freq = b.freq_log2.value().exp2().min(nyquist_limit) as f32;
+            let damping = b.damping.value() as f32;
+            let gain_db = b.gain_db.value() as f32;
+            let at_rest = b.gain_db.value() == b.gain_db.target();
+            b.freq_log2.advance(len);
+            b.damping.advance(len);
+            b.gain_db.advance(len);
+            if gain_db == 0.0 && at_rest {
+                b.st = [[0.0; 2]; 2];
+                continue;
+            }
+            let key = (freq, damping, gain_db, sample_rate);
+            if b.key != Some(key) {
+                b.key = Some(key);
+                // Cytomic's SVF mixes, as in FilterDevice: out = m0*x + m1*bp + m2*lp, A = 10^(dB/40).
+                let a = 10f32.powf(gain_db / 40.0);
+                let a2 = a * a;
+                let k = 2.0 * damping;
+                let (warp, damping, m0, m1, m2) = match i {
+                    0 => (1.0 / a.sqrt(), damping, 1.0, k * (a - 1.0), a2 - 1.0),
+                    3 => (a.sqrt(), damping, a2, k * (1.0 - a) * a, 1.0 - a2),
+                    _ => (1.0, damping / a, 1.0, k / a * (a2 - 1.0), 0.0),
+                };
+                b.coefs = dsp::svf::SvfCoefs::from_hz(freq, damping, sample_rate, warp).with_mix(m0, m1, m2);
+            }
+            active[n] = i;
+            n += 1;
+        }
+        let out_db = self.out_db.value();
+        let out_rest = out_db == self.out_db.target();
+        self.out_db.advance(len);
+        let out_gain = if out_db == 0.0 && out_rest { None } else { Some(10f32.powf(out_db as f32 / 20.0)) };
+
+        if n > 0 {
+            let mut c = [self.bands[0].coefs; 4];
+            let mut s = [[[0.0f32; 2]; 2]; 4];
+            for (j, &i) in active[..n].iter().enumerate() {
+                c[j] = self.bands[i].coefs;
+                s[j] = self.bands[i].st;
+            }
+            for (x, y) in l.iter_mut().zip(r.iter_mut()) {
+                let (mut sl, mut sr) = (*x, *y);
+                for j in 0..n {
+                    let c = &c[j];
+                    let st = &mut s[j];
+                    let (xl, xr) = (sl, sr);
+                    let v3l = xl - st[0][1];
+                    let v3r = xr - st[1][1];
+                    let v1l = c.a1 * st[0][0] + c.a2 * v3l;
+                    let v1r = c.a1 * st[1][0] + c.a2 * v3r;
+                    let v2l = st[0][1] + c.a2 * st[0][0] + c.a3 * v3l;
+                    let v2r = st[1][1] + c.a2 * st[1][0] + c.a3 * v3r;
+                    st[0][0] = 2.0 * v1l - st[0][0];
+                    st[1][0] = 2.0 * v1r - st[1][0];
+                    st[0][1] = 2.0 * v2l - st[0][1];
+                    st[1][1] = 2.0 * v2r - st[1][1];
+                    sl = c.m0 * xl + c.m1 * v1l + c.m2 * v2l;
+                    sr = c.m0 * xr + c.m1 * v1r + c.m2 * v2r;
+                }
+                *x = sl;
+                *y = sr;
+            }
+            for (j, &i) in active[..n].iter().enumerate() {
+                let mut st = s[j];
+                for ch in st.iter_mut() {
+                    ch[0] = dsp::flush_denormal(ch[0]);
+                    ch[1] = dsp::flush_denormal(ch[1]);
+                }
+                self.bands[i].st = st;
+            }
+        }
+        if let Some(g) = out_gain {
+            for v in l.iter_mut().chain(r.iter_mut()) {
+                *v *= g;
             }
         }
     }
@@ -289,6 +548,9 @@ pub struct ReverbDevice {
     damp: Ramp,
     predelay_ms: f32,
     reverb: Reverb,
+    /// Consecutive frames of all-zero input, and the largest size over that stretch (sleep).
+    zero_run: u64,
+    size_max: f32,
 }
 
 impl ReverbDevice {
@@ -300,6 +562,8 @@ impl ReverbDevice {
             damp: Ramp::new(0.5),
             predelay_ms: 0.0,
             reverb: Reverb::new(sample_rate),
+            zero_run: u64::MAX / 2,
+            size_max: 0.0,
         }
     }
 
@@ -322,6 +586,7 @@ impl ReverbDevice {
     }
 
     pub fn reset(&mut self) {
+        self.zero_run = u64::MAX / 2;
         self.reverb.reset();
     }
 
@@ -330,6 +595,10 @@ impl ReverbDevice {
         self.mix.advance(l.len());
         self.size.advance(l.len());
         self.damp.advance(l.len());
+        let quiet = all_zero(l, r);
+        let size_now = size.max(self.size.target() as f32);
+        self.size_max = if quiet { self.size_max.max(size_now) } else { size_now };
+        self.zero_run = if quiet { self.zero_run + l.len() as u64 } else { 0 };
         self.reverb.process(l, r, size, damp, self.predelay_ms, mix);
     }
 }
@@ -447,6 +716,16 @@ impl TremoloDevice {
         self.trem.reset();
     }
 
+    pub fn skip(&mut self, n: usize, sample_rate: f32) {
+        let p = TremParams {
+            rate_hz: self.rate_log2.value().exp2() as f32,
+            depth: self.depth.value() as f32,
+            shape: self.shape,
+            spread: self.spread.value() as f32,
+        };
+        self.trem.skip(n, &p, sample_rate);
+    }
+
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let p = TremParams {
             rate_hz: self.rate_log2.value().exp2() as f32,
@@ -475,6 +754,11 @@ pub struct DelayDevice {
     resonance: Ramp,
     p: DelayParams,
     delay: TapeDelay,
+    sample_rate: f32,
+    /// Consecutive frames of all-zero input, and the largest feedback and time over that stretch (sleep).
+    zero_run: u64,
+    fb_max: f32,
+    time_max_ms: f32,
 }
 
 impl DelayDevice {
@@ -489,7 +773,22 @@ impl DelayDevice {
             resonance: Ramp::new(p.resonance as f64),
             p,
             delay: TapeDelay::new(sample_rate),
+            sample_rate,
+            zero_run: u64::MAX / 2,
+            fb_max: 0.0,
+            time_max_ms: 0.0,
         }
+    }
+
+    /// Asleep once zero input has outlasted every echo down to -120 dB. Never with feedback of 1 or
+    /// more, and not with warble on (it would stop the warble's phase, changing the next echoes).
+    fn is_asleep(&self) -> bool {
+        if self.fb_max >= 1.0 || self.p.warble != 0.0 {
+            return false;
+        }
+        let passes = if self.fb_max <= 0.0 { 1.0 } else { (1e-6f64.ln() / (self.fb_max as f64).ln()).ceil() };
+        let ms = self.time_max_ms as f64 + 100.0;
+        self.zero_run as f64 >= ms * 1e-3 * self.sample_rate as f64 * (passes * 1.5 + 2.0)
     }
 
     pub fn set_param(&mut self, param: u32, value: f32) {
@@ -515,6 +814,7 @@ impl DelayDevice {
     }
 
     pub fn reset(&mut self) {
+        self.zero_run = u64::MAX / 2;
         self.delay.reset();
     }
 
@@ -525,6 +825,11 @@ impl DelayDevice {
         self.p.cutoff_hz = self.cutoff_log2.value().exp2() as f32;
         self.p.resonance = self.resonance.value() as f32;
         let n = l.len();
+        let quiet = all_zero(l, r);
+        let (fb_now, t_now) = (self.p.feedback.max(self.feedback.target() as f32), self.p.time_ms);
+        self.fb_max = if quiet { self.fb_max.max(fb_now) } else { fb_now };
+        self.time_max_ms = if quiet { self.time_max_ms.max(t_now) } else { t_now };
+        self.zero_run = if quiet { self.zero_run + n as u64 } else { 0 };
         self.mix.advance(n);
         self.feedback.advance(n);
         self.drive.advance(n);

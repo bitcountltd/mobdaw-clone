@@ -44,6 +44,32 @@ impl<T> HandleMap<T> {
         }
     }
 
+    /// The dense position of handle `h` (an index into the sorted storage), or `None`.
+    ///
+    /// Positions shift whenever an entry is inserted or removed, so only keep one across a
+    /// stretch of code that makes no structural change (the engine rebuilds its routing, which
+    /// stores them, after every insert or remove).
+    pub fn index_of(&self, h: u32) -> Option<usize> {
+        self.find(h).ok()
+    }
+
+    /// The value at dense position `i` (see [`Self::index_of`]). Panics if out of range.
+    #[inline]
+    pub fn get_index(&self, i: usize) -> &T {
+        &self.items[i].1
+    }
+
+    #[inline]
+    pub fn get_index_mut(&mut self, i: usize) -> &mut T {
+        &mut self.items[i].1
+    }
+
+    /// The handle stored at dense position `i`.
+    #[inline]
+    pub fn handle_at(&self, i: usize) -> u32 {
+        self.items[i].0
+    }
+
     /// Insert or replace; returns the previous value if any.
     pub fn insert(&mut self, h: u32, value: T) -> Option<T> {
         match self.find(h) {

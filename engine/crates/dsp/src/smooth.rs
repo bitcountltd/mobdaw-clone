@@ -37,6 +37,11 @@ impl Ramp {
         self.step = 0.0;
     }
 
+    /// Whether it is partway through a ramp (not yet at its target).
+    pub fn is_moving(&self) -> bool {
+        self.step != 0.0 && self.value != self.target
+    }
+
     pub fn value(&self) -> f64 {
         self.value
     }

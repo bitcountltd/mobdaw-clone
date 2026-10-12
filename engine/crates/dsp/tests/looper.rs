@@ -209,3 +209,32 @@ fn warble_wobbles_the_pitch_but_zero_is_steady() {
     assert!(spread(&steady) <= 48.0, "steady transport drifts: {}", spread(&steady)); // +-1 crossing of quantisation
     assert!(spread(&wobbly) > 8.0 * 48.0 / 8.0, "no audible wobble: {}", spread(&wobbly));
 }
+
+#[test]
+fn output_does_not_depend_on_the_block_size() {
+    // Wraps, the seam crossfade and warble all happen mid-block at different places.
+    let mut p = params(1.37, 2000, 3000);
+    p.warble = 0.5;
+    let a = render(&mut LoopVoice::new(), &p, 0, 30_000, 128);
+    let b = render(&mut LoopVoice::new(), &p, 0, 30_000, 37);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn wraps_and_restarts_are_continuous_on_a_pure_tone() {
+    // A loop holding a whole number of cycles of a 1 kHz sine: every wrap is invisible, so the
+    // output should be one sine with no steps bigger than its own slope.
+    let f = 1000.0;
+    let len = 4800; // 100 cycles
+    let tone = |i: i64| {
+        let v = sine(f)(i);
+        (v, v)
+    };
+    for speed in [0.73, 1.0, 1.37, 2.0] {
+        let p = params(speed, 10_000, len);
+        let y = render_with(&mut LoopVoice::new(), 0, 0, 60_000, 100, |_| p, tone);
+        let slope = 2.0 * PI * f * speed / SR * 1.1;
+        let worst = y[2000..].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!((worst as f64) < slope.max(0.01) * 1.5, "speed {speed}: step {worst} vs slope {slope}");
+    }
+}

@@ -22,18 +22,19 @@
 //! 3. Per track, walk the block in control segments of at most 32 frames, additionally split
 //!    at the next note-on and the next scheduled note-off of the track's instruments. At each
 //!    segment start: release due voices, fire notes starting exactly there (each goes to every
-//!    instrument whose note range holds its pitch). Then run the instruments (summed), then the
-//!    effects in `order` over the segment, and add the result, scaled by the ramped gain/pan,
-//!    into the master output.
+//!    instrument whose note range holds its pitch). Run the instruments (summed) per segment.
+//!    Then run each effect in `order` over the whole block (split only at its own lanes'
+//!    breakpoints, and into pieces of at most 32 frames if it has lanes), and add the result,
+//!    scaled by the gain/pan ramp across the block, into the master output.
 //! 4. Mix in the M1 test voice if its gate is on; advance the transport.
 //!
 //! # Automation
 //! A [`Lane`] drives one param (a device's, or a looper's) from keyframes in *timeline* time; while
 //! it is enabled it replaces the param's static value. Points are normalised (0..1 along the
 //! param's own scale), so the curve between two of them is exactly what the editor draws, even
-//! for a log-scaled cutoff. Device lanes are evaluated at the start of every control segment, and
-//! segments are split at breakpoints, so a corner is sample-exact and the value is applied with no
-//! glide (`Device::set_param_auto`). Looper lanes are evaluated once per block: the level ramps
+//! for a log-scaled cutoff. Device lanes are evaluated at both ends of every control segment, and
+//! segments are split at breakpoints, so a corner is sample-exact: the value jumps to the segment
+//! start's and ramps to the end's (`Device::set_param_auto`), with no extra glide. Looper lanes are evaluated once per block: the level ramps
 //! linearly to the lane's value at the block's end, the rest (speed, warble, saturation, filter)
 //! take its value at the block's start and keep their own, short glides. Lanes follow the
 //! timeline position, stopped or not.
@@ -98,17 +99,36 @@ struct Track {
     scratch: Vec<f32>,
     /// Set when a clip wrote into `scratch` this block.
     has_audio: bool,
-    /// Device handles in ascending `order` (derived).
-    chain: Vec<u32>,
-    /// MIDI clip handles on this track (derived).
-    midi_clips: Vec<u32>,
-    /// Audio clip handles on this track (derived); the tape a looper track reads from.
+    /// The track's devices in ascending `order` (derived).
+    chain: Vec<Slot>,
+    /// MIDI clips on this track as `(index into clips, handle)` (derived).
+    midi_clips: Vec<(u32, u32)>,
+    /// Audio clip indices on this track in handle order (derived); the tape a looper track reads from.
     audio_clips: Vec<u32>,
+    /// Playable audio clips sorted by `(start, handle)`, with the running maximum of their ends
+    /// in `play_max_end`, so "which clips overlap this block" is two binary searches (derived).
+    play: Vec<ClipSpan>,
+    play_max_end: Vec<i64>,
     /// Soundscape track: its clips are the *source* tape the loopers read (in source time),
     /// never played linearly.
     soundscape: bool,
-    /// Enabled lanes driving this track's devices (derived).
-    dev_lanes: Vec<u32>,
+}
+
+/// A device in a chain, by dense index into the device map (derived by `rebuild_routing`, which
+/// runs after every structural change, so the index is valid whenever `process` runs).
+struct Slot {
+    dev: u32,
+    instrument: bool,
+    /// Enabled lanes driving this device (indices into the lane map), in lane-handle order.
+    lanes: Vec<u32>,
+}
+
+/// An audio clip's extent on the timeline, and where it is in the clip map.
+#[derive(Clone, Copy)]
+struct ClipSpan {
+    start: i64,
+    end: i64,
+    idx: u32,
 }
 
 /// One of a soundscape track's loop slots: reads the track's source audio inside the region
@@ -211,6 +231,20 @@ struct Lane {
 }
 
 impl Lane {
+    /// The value a segment *ending* at `pos` (exclusive) reaches: the limit from the left. It
+    /// differs from `norm_at(pos)` only at a breakpoint, where a `hold` step has not happened yet
+    /// (and a duplicated position has not jumped). A wave has no corners: same as `norm_at`.
+    fn norm_end(&self, pos: i64) -> Option<f64> {
+        if self.lfo.is_some() {
+            return self.norm_at(pos);
+        }
+        let i = self.points.partition_point(|p| p.pos < pos);
+        let a = self.points.get(i.saturating_sub(1))?;
+        let Some(b) = self.points.get(i).filter(|_| i > 0 && !a.hold) else { return Some(a.value as f64) };
+        let f = (pos - a.pos) as f64 / (b.pos - a.pos) as f64;
+        Some(a.value as f64 + (b.value as f64 - a.value as f64) * f)
+    }
+
     /// The normalised value at `pos`: before the first point and after the last it holds that
     /// point's value; between two, the left one's curve decides. `None` without points.
     fn norm_at(&self, pos: i64) -> Option<f64> {
@@ -227,12 +261,21 @@ impl Lane {
 
     /// The param's own value at `pos` (the normalised one mapped through the range and scale).
     fn value_at(&self, pos: i64) -> Option<f64> {
-        let t = self.norm_at(pos)?.clamp(0.0, 1.0);
-        Some(match self.scale {
+        Some(self.map(self.norm_at(pos)?))
+    }
+
+    /// The param's own value a segment ending at `pos` reaches (see `norm_end`).
+    fn value_end(&self, pos: i64) -> Option<f64> {
+        Some(self.map(self.norm_end(pos)?))
+    }
+
+    fn map(&self, norm: f64) -> f64 {
+        let t = norm.clamp(0.0, 1.0);
+        match self.scale {
             Scale::Log if self.min > 0.0 => self.min * (self.max / self.min).powf(t),
             Scale::Pow => self.min + (self.max - self.min) * t * t * t,
             _ => self.min + (self.max - self.min) * t,
-        })
+        }
     }
 
     /// The first breakpoint after `pos` (`i64::MAX` if none): a control segment must not run past it.
@@ -284,19 +327,75 @@ struct Pad {
     length: i64,
 }
 
-/// The track's clips summed at timeline sample `i`.
-fn tape_at(handles: &[u32], clips: &HandleMap<Clip>, sources: &HandleMap<Source>, i: i64) -> (f32, f32) {
-    let (mut l, mut r) = (0.0, 0.0);
-    for h in handles {
-        if let Some(Clip::Audio(a)) = clips.get(*h) {
-            if let Some(src) = sources.get(a.source).filter(|s| s.is_ready()) {
-                let (x, y) = a.sample_at(src, i);
-                l += x;
-                r += y;
+/// Resolve a track's audio clips to `(clip index, source index)` pairs for the block, skipping
+/// the ones whose source is missing or not ready. Done once per block so the per-sample tape
+/// reads below do no lookups.
+fn fill_tape(refs: &mut Vec<(u32, u32)>, idxs: &[u32], clips: &HandleMap<Clip>, sources: &HandleMap<Source>) {
+    refs.clear();
+    for &ci in idxs {
+        if let Clip::Audio(a) = clips.get_index(ci as usize) {
+            if let Some(si) = sources.index_of(a.source).filter(|&si| sources.get_index(si).is_ready()) {
+                refs.push((ci, si as u32));
             }
         }
     }
+}
+
+/// The track's clips summed at timeline sample `i` (`refs` from [`fill_tape`]).
+fn tape_at(refs: &[(u32, u32)], clips: &HandleMap<Clip>, sources: &HandleMap<Source>, i: i64) -> (f32, f32) {
+    let (mut l, mut r) = (0.0, 0.0);
+    for &(ci, si) in refs {
+        if let Clip::Audio(a) = clips.get_index(ci as usize) {
+            let (x, y) = a.sample_at(sources.get_index(si as usize), i);
+            l += x;
+            r += y;
+        }
+    }
     (l, r)
+}
+
+/// Set a device param from `lane` for the segment `[at, at + len)`: its value at the start, ramping
+/// to the value the lane reaches at the end (nothing moves while stopped).
+fn apply_lane(d: &mut Device, lane: &Lane, at: i64, len: usize, playing: bool) {
+    let Some(v0) = lane.value_at(at) else { return };
+    let v1 = if playing { lane.value_end(at + len as i64).unwrap_or(v0) } else { v0 };
+    d.set_param_auto(lane.param, v0 as f32, v1 as f32, len);
+}
+
+/// Where a segment starting at buffer index `i` (timeline `p + i`) must end for `slot`'s lanes:
+/// the next breakpoint of any of them, or `end` if sooner.
+fn lane_limit(slot: &Slot, lanes: &HandleMap<Lane>, p: i64, i: usize, n: usize, mut end: usize) -> usize {
+    for &li in &slot.lanes {
+        end = end.min(lanes.get_index(li as usize).next_break(p + i as i64).saturating_sub(p).clamp(i as i64 + 1, n as i64) as usize);
+    }
+    end
+}
+
+/// Run an effect (or a master-bus device) over the whole buffer `l`/`r`, which starts at timeline
+/// sample `p`. Without lanes that is one call; with lanes, pieces of at most `SUB_BLOCK` ending
+/// at the lanes' breakpoints, each with the lanes' values ramped across it.
+#[allow(clippy::too_many_arguments)]
+fn run_device(slot: &Slot, devices: &mut HandleMap<Device>, lanes: &HandleMap<Lane>, p: i64, playing: bool, l: &mut [f32], r: &mut [f32], sr32: f32) {
+    let d = devices.get_index_mut(slot.dev as usize);
+    if d.bypass {
+        return;
+    }
+    let n = l.len();
+    if slot.lanes.is_empty() && !d.is_ramping() {
+        d.process(l, r, sr32);
+        return;
+    }
+    // Lanes or a knob glide: control segments of at most 32 frames, since devices read their
+    // ramps at the start of each run.
+    let mut i = 0;
+    while i < n {
+        let end = lane_limit(slot, lanes, p, i, n, (i + SUB_BLOCK).min(n));
+        for &li in &slot.lanes {
+            apply_lane(d, lanes.get_index(li as usize), p + i as i64, end - i, playing);
+        }
+        d.process(&mut l[i..end], &mut r[i..end], sr32);
+        i = end;
+    }
 }
 
 pub struct Engine {
@@ -312,10 +411,14 @@ pub struct Engine {
     clips: HandleMap<Clip>,
     devices: HandleMap<Device>,
     loopers: HandleMap<Looper>,
-    /// Device handles on the master bus in ascending `order` (derived).
-    master_chain: Vec<u32>,
-    /// Enabled lanes driving master-chain devices (derived).
-    master_lanes: Vec<u32>,
+    /// The master bus's devices in ascending `order` (derived).
+    master_chain: Vec<Slot>,
+    /// Whether silent tracks skip their idle instruments and sleeping effects (on unless a test turns it off).
+    sleep: bool,
+    /// Track-blocks skipped by sleep (for tests).
+    sleep_skips: u64,
+    /// Scratch for [`fill_tape`], sized by `rebuild_routing`.
+    tape_refs: Vec<(u32, u32)>,
     lanes: HandleMap<Lane>,
     points: HandleMap<Point>,
     pads: HandleMap<Pad>,
@@ -351,7 +454,9 @@ impl Engine {
             devices: HandleMap::with_capacity(MAX_DEVICES),
             loopers: HandleMap::with_capacity(MAX_LOOPERS),
             master_chain: Vec::with_capacity(MAX_DEVICES),
-            master_lanes: Vec::new(),
+            sleep: true,
+            sleep_skips: 0,
+            tape_refs: Vec::new(),
             lanes: HandleMap::with_capacity(MAX_LANES),
             points: HandleMap::with_capacity(MAX_POINTS),
             pads: HandleMap::with_capacity(MAX_PADS),
@@ -386,8 +491,9 @@ impl Engine {
     pub fn note_live(&mut self, h: u32, pitch: u32, velocity: f32, on: bool) {
         let at = self.main.position;
         let Some(t) = self.tracks.get(h) else { return };
-        for dh in &t.chain {
-            if let Some(d) = self.devices.get_mut(*dh).filter(|d| d.takes_note(pitch)) {
+        for s in &t.chain {
+            let d = self.devices.get_index_mut(s.dev as usize);
+            if d.takes_note(pitch) {
                 if on {
                     d.note_on(pitch, velocity, i64::MAX, at);
                 } else {
@@ -545,8 +651,9 @@ impl Engine {
                 chain: Vec::new(),
                 midi_clips: Vec::new(),
                 audio_clips: Vec::new(),
+                play: Vec::new(),
+                play_max_end: Vec::new(),
                 soundscape: kind == KIND_SOUNDSCAPE,
-                dev_lanes: Vec::new(),
             },
         );
         self.rebuild_routing();
@@ -554,6 +661,7 @@ impl Engine {
 
     pub fn track_remove(&mut self, h: u32) {
         self.tracks.remove(h);
+        self.rebuild_routing();
     }
 
     // ---- clips and notes ------------------------------------------------------------------
@@ -859,61 +967,61 @@ impl Engine {
         }
     }
 
-    /// Recompute each track's device chain (sorted by `order`, ties by handle) and MIDI clip
-    /// list. Allocation is allowed here; this is never called from `process`.
+    /// Recompute the derived routing: each track's device chain (sorted by `order`, ties by
+    /// handle) with its lanes, its MIDI clips and its audio clips (as a tape in handle order, and
+    /// as a start-sorted list for playback), plus the looper lanes and pad gates. Chains and clip
+    /// lists hold *dense indices* into the entity maps, which shift on every insert or remove of
+    /// a device, clip, lane or track, so every such command must end here. Allocation is
+    /// allowed here; this is never called from `process`.
     fn rebuild_routing(&mut self) {
-        let Engine { tracks, devices, clips, loopers, pads, master_chain, master_lanes, lanes, .. } = self;
+        let Engine { tracks, devices, clips, loopers, pads, master_chain, lanes, tape_refs, .. } = self;
         master_chain.clear();
-        master_lanes.clear();
         for t in tracks.values_mut() {
-            t.dev_lanes.clear();
             t.chain.clear();
             t.midi_clips.clear();
             t.audio_clips.clear();
+            t.play.clear();
+            t.play_max_end.clear();
         }
-        for (h, d) in devices.iter() {
+        for (i, (_, d)) in devices.iter().enumerate() {
+            let slot = Slot { dev: i as u32, instrument: d.is_instrument(), lanes: Vec::new() };
             if d.track == MASTER_TRACK {
-                master_chain.push(h);
+                master_chain.push(slot);
             } else if let Some(t) = tracks.get_mut(d.track) {
-                t.chain.push(h);
+                t.chain.push(slot);
             }
         }
-        for (h, c) in clips.iter() {
+        for (i, (h, c)) in clips.iter().enumerate() {
             match c {
                 Clip::Midi(m) => {
                     if let Some(t) = tracks.get_mut(m.track) {
-                        t.midi_clips.push(h);
+                        t.midi_clips.push((i as u32, h));
                     }
                 }
                 Clip::Audio(a) => {
                     if let Some(t) = tracks.get_mut(a.track) {
-                        t.audio_clips.push(h);
+                        t.audio_clips.push(i as u32);
+                        if a.length > 0 {
+                            t.play.push(ClipSpan { start: a.start, end: a.start.saturating_add(a.length), idx: i as u32 });
+                        }
                     }
                 }
+            }
+        }
+        tape_refs.clear();
+        tape_refs.reserve(clips.len());
+        for t in tracks.values_mut() {
+            // `idx` order is handle order, so a start tie keeps the handle order.
+            t.play.sort_unstable_by_key(|c| (c.start, c.idx));
+            let mut m = i64::MIN;
+            for c in &t.play {
+                m = m.max(c.end);
+                t.play_max_end.push(m);
             }
         }
         for l in loopers.values_mut() {
             l.gates.clear();
             l.auto = [NO_LANE; LOOPER_PARAMS];
-        }
-        for (h, l) in lanes.iter().filter(|(_, l)| l.enabled) {
-            match l.kind {
-                LANE_DEVICE => match devices.get(l.target) {
-                    Some(d) if d.track == MASTER_TRACK => master_lanes.push(h),
-                    Some(d) => {
-                        if let Some(t) = tracks.get_mut(d.track) {
-                            t.dev_lanes.push(h);
-                        }
-                    }
-                    None => {}
-                },
-                LANE_LOOPER => {
-                    if let Some(lp) = loopers.get_mut(l.target).filter(|_| (l.param as usize) < LOOPER_PARAMS) {
-                        lp.auto[l.param as usize] = h;
-                    }
-                }
-                _ => {}
-            }
         }
         for p in pads.values().filter(|p| p.length > 0) {
             for l in loopers.values_mut().filter(|l| l.track == p.track) {
@@ -929,14 +1037,36 @@ impl Engine {
                 l.max_end.push(m);
             }
         }
-        let by_order = |a: &u32, b: &u32| {
-            let (da, db) = (devices.get(*a).map_or(0.0, |d| d.order), devices.get(*b).map_or(0.0, |d| d.order));
-            da.total_cmp(&db).then(a.cmp(b))
+        let by_order = |a: &Slot, b: &Slot| {
+            let (da, db) = (devices.get_index(a.dev as usize).order, devices.get_index(b.dev as usize).order);
+            da.total_cmp(&db).then(devices.handle_at(a.dev as usize).cmp(&devices.handle_at(b.dev as usize)))
         };
         for t in tracks.values_mut() {
             t.chain.sort_unstable_by(by_order);
         }
         master_chain.sort_unstable_by(by_order);
+        for (li, (h, l)) in lanes.iter().enumerate().filter(|(_, (_, l))| l.enabled) {
+            match l.kind {
+                LANE_DEVICE => {
+                    let Some(di) = devices.index_of(l.target) else { continue };
+                    let d = devices.get_index(di);
+                    let chain = if d.track == MASTER_TRACK {
+                        Some(&mut *master_chain)
+                    } else {
+                        tracks.get_mut(d.track).map(|t| &mut t.chain)
+                    };
+                    if let Some(slot) = chain.and_then(|c| c.iter_mut().find(|s| s.dev as usize == di)) {
+                        slot.lanes.push(li as u32);
+                    }
+                }
+                LANE_LOOPER => {
+                    if let Some(lp) = loopers.get_mut(l.target).filter(|_| (l.param as usize) < LOOPER_PARAMS) {
+                        lp.auto[l.param as usize] = h;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     // ---- M1 test voice --------------------------------------------------------------------
@@ -948,6 +1078,17 @@ impl Engine {
     // ---- rendering ------------------------------------------------------------------------
 
     /// Render `frames` (<= 128) into the output buffer. Never allocates.
+    /// Turn the sleep optimisation (skipping silent tracks' idle devices) on or off. Rendered
+    /// audio is the same either way; this exists for tests.
+    pub fn set_sleep(&mut self, on: bool) {
+        self.sleep = on;
+    }
+
+    /// How many track-blocks sleep has skipped so far.
+    pub fn sleep_skips(&self) -> u64 {
+        self.sleep_skips
+    }
+
     pub fn process(&mut self, frames: usize) {
         let n = frames.min(BLOCK);
         let p = self.main.position;
@@ -955,7 +1096,7 @@ impl Engine {
         let sr = self.sr;
         let sr32 = self.sample_rate;
         let smooth = self.smooth_samples;
-        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, master_lanes, lanes, input, monitor, monitor_gain, monitor_track, .. } = self;
+        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, lanes, input, monitor, monitor_gain, monitor_track, tape_refs, sleep, sleep_skips, .. } = self;
         out.fill(0.0);
         let (out_l, out_r) = out.split_at_mut(BLOCK);
 
@@ -985,20 +1126,28 @@ impl Engine {
             t.has_audio = false;
         }
 
-        // 2. Audio clips into their tracks' scratch (summed where they overlap).
+        // 2. Audio clips into their tracks' scratch (summed where they overlap). Each track's clips
+        //    are sorted by start, so the ones touching this block are found by binary search, and
+        //    overlapping ones sum in `(start, handle)` order.
         if playing {
-            for (_, c) in clips.iter() {
-                let Clip::Audio(a) = c else { continue };
-                if a.length <= 0 || a.start + a.length <= p || a.start >= p + n as i64 {
-                    continue;
-                }
-                let (Some(t), Some(src)) = (tracks.get_mut(a.track), sources.get(a.source)) else { continue };
-                if !src.is_ready() || t.soundscape {
+            let end = p + n as i64;
+            for t in tracks.values_mut() {
+                let Track { play, play_max_end, scratch, has_audio, soundscape, .. } = t;
+                if *soundscape || play.is_empty() {
                     continue; // looper tracks never play their clips linearly
                 }
-                let (l, r) = t.scratch.split_at_mut(BLOCK);
-                a.render_add(src, p, &mut l[..n], &mut r[..n]);
-                t.has_audio = true;
+                let lo = play_max_end.partition_point(|&e| e <= p);
+                let hi = play.partition_point(|c| c.start < end).max(lo);
+                for c in &play[lo..hi] {
+                    if c.end <= p {
+                        continue;
+                    }
+                    let Clip::Audio(a) = clips.get_index(c.idx as usize) else { continue };
+                    let Some(src) = sources.get(a.source).filter(|s| s.is_ready()) else { continue };
+                    let (l, r) = scratch.split_at_mut(BLOCK);
+                    a.render_add(src, p, &mut l[..n], &mut r[..n]);
+                    *has_audio = true;
+                }
             }
         }
 
@@ -1041,7 +1190,8 @@ impl Engine {
                     continue;
                 }
                 let (sl, sr_buf) = scratch.split_at_mut(BLOCK);
-                let mut tape = |i| tape_at(audio_clips, clips, sources, i);
+                fill_tape(tape_refs, audio_clips, clips, sources);
+                let mut tape = |i| tape_at(tape_refs, clips, sources, i);
                 let mut t = p;
                 while t < wend {
                     let (gate, seg_end) = lp.gate_at(t, wend);
@@ -1080,7 +1230,8 @@ impl Engine {
             let fade = sr * PAD_FADE_MS * 1e-3;
             let pos = pv.transport.position;
             let gain = |j: usize| fade_in_gain(FadeShape::EqualPower, ((pos - pv.started) + j as i64) as f64 / fade);
-            let mut tape = |i| tape_at(audio_clips, clips, sources, i);
+            fill_tape(tape_refs, audio_clips, clips, sources);
+            let mut tape = |i| tape_at(tape_refs, clips, sources, i);
             match pv.mode {
                 PreviewMode::Source => {
                     for j in 0..n {
@@ -1140,7 +1291,8 @@ impl Engine {
             monitor_gain.advance(n);
         }
 
-        // 3. Per track: control segments, device chain, gain/pan, master sum.
+        // 3. Per track: instruments in control segments, then the effects over the whole block,
+        //    then gain/pan into the master sum.
         for t in tracks.values_mut() {
             if t.chain.is_empty() && !t.has_audio {
                 t.gain_l.advance(n);
@@ -1148,94 +1300,103 @@ impl Engine {
                 continue;
             }
             let (sl, sr_buf) = t.scratch.split_at_mut(BLOCK);
-            let mut i = 0;
-            while i < n {
-                let at = p + i as i64;
-                let mut end = (i + SUB_BLOCK).min(n);
+            let (sl, sr_buf) = (&mut sl[..n], &mut sr_buf[..n]);
 
-                // MIDI notes go to every sounding instrument whose note range holds the pitch.
-                // Release due voices, fire the notes starting exactly here, and split the segment
-                // at the next note-on / scheduled release.
-                let mut next = i64::MAX;
-                for dh in &t.chain {
-                    if let Some(d) = devices.get_mut(*dh).filter(|d| d.is_instrument() && !d.bypass) {
-                        d.release_due(at);
-                        next = next.min(d.next_release_after(at));
+            // Instruments run in segments of at most 32 frames. MIDI notes go to every sounding
+            // instrument whose note range holds the pitch: release due voices, fire the notes
+            // starting exactly at the segment start, and split the segment at the next note-on /
+            // scheduled release and at the instruments' own lane breakpoints.
+            if t.chain.iter().any(|s| s.instrument) {
+                let mut i = 0;
+                while i < n {
+                    let at = p + i as i64;
+                    let mut end = (i + SUB_BLOCK).min(n);
+                    let mut next = i64::MAX;
+                    for s in t.chain.iter().filter(|s| s.instrument) {
+                        let d = devices.get_index_mut(s.dev as usize);
+                        if !d.bypass {
+                            d.release_due(at);
+                            next = next.min(d.next_release_after(at));
+                        }
                     }
-                }
-                if playing {
-                    for &ch in &t.midi_clips {
-                        if let Some(Clip::Midi(mc)) = clips.get(ch) {
-                            let notes = clip_notes(note_index, ch);
-                            mc.fire_at(notes, at, sr, &mut |pitch, vel, off, start| {
-                                for dh in &t.chain {
-                                    if let Some(d) = devices.get_mut(*dh).filter(|d| d.takes_note(pitch)) {
-                                        d.note_on(pitch, vel, off, start);
+                    if playing {
+                        for &(ci, ch) in &t.midi_clips {
+                            if let Clip::Midi(mc) = clips.get_index(ci as usize) {
+                                let notes = clip_notes(note_index, ch);
+                                mc.fire_at(notes, at, sr, &mut |pitch, vel, off, start| {
+                                    for s in &t.chain {
+                                        let d = devices.get_index_mut(s.dev as usize);
+                                        if d.takes_note(pitch) {
+                                            d.note_on(pitch, vel, off, start);
+                                        }
                                     }
-                                }
-                            });
-                            next = next.min(mc.next_note_on_after(notes, at, sr));
+                                });
+                                next = next.min(mc.next_note_on_after(notes, at, sr));
+                            }
                         }
                     }
-                }
-                // `next > at`, so the segment always makes progress.
-                if next < p + end as i64 {
-                    end = (next - p) as usize;
-                }
-
-                // Automated device params: the value at the segment start, which ends at the next breakpoint.
-                for &lh in &t.dev_lanes {
-                    let Some(lane) = lanes.get(lh) else { continue };
-                    if let (Some(v), Some(d)) = (lane.value_at(at), devices.get_mut(lane.target)) {
-                        d.set_param_auto(lane.param, v as f32);
+                    // `next > at`, so the segment always makes progress.
+                    if next < p + end as i64 {
+                        end = (next - p) as usize;
                     }
-                    end = end.min(lane.next_break(at).saturating_sub(p).clamp(i as i64 + 1, n as i64) as usize);
-                }
-
-                // The instruments run first and sum into the buffer, then the effects in `order`.
-                let (l, r) = (&mut sl[i..end], &mut sr_buf[i..end]);
-                for instruments in [true, false] {
-                    for dh in &t.chain {
-                        if let Some(d) = devices.get_mut(*dh).filter(|d| d.is_instrument() == instruments) {
-                            d.process(l, r, sr32);
+                    for s in t.chain.iter().filter(|s| s.instrument) {
+                        if !devices.get_index(s.dev as usize).bypass {
+                            end = lane_limit(s, lanes, p, i, n, end);
                         }
                     }
+                    for s in t.chain.iter().filter(|s| s.instrument) {
+                        let d = devices.get_index_mut(s.dev as usize);
+                        if !d.bypass {
+                            for &li in &s.lanes {
+                                apply_lane(d, lanes.get_index(li as usize), at, end - i, playing);
+                            }
+                            if *sleep && d.is_idle_instrument() {
+                                continue;
+                            }
+                            d.process(&mut sl[i..end], &mut sr_buf[i..end], sr32);
+                        }
+                    }
+                    i = end;
                 }
+            }
 
-                // Gain/pan: ramp per sample between the smoothed values at the segment edges.
-                let len = end - i;
-                let (l0, r0) = (t.gain_l.value() as f32, t.gain_r.value() as f32);
-                let (l1, r1) = (t.gain_l.advance(len) as f32, t.gain_r.advance(len) as f32);
-                let (dl, dr) = ((l1 - l0) / len as f32, (r1 - r0) / len as f32);
-                let (mut gl, mut gr) = (l0, r0);
-                for j in 0..len {
-                    gl += dl;
-                    gr += dr;
-                    out_l[i + j] += l[j] * gl;
-                    out_r[i + j] += r[j] * gr;
+            // Asleep: every effect is provably silent on zero input and the buffer is all zero, so
+            // the chain would output zeros and (up to -120 dB tails) change nothing. Skip it and
+            // the gain loop; the gain ramps still advance.
+            if *sleep
+                && t.chain.iter().filter(|s| !s.instrument).all(|s| s.lanes.is_empty() && devices.get_index(s.dev as usize).is_asleep())
+                && sl.iter().chain(sr_buf.iter()).all(|&x| x == 0.0)
+            {
+                for s in t.chain.iter().filter(|s| !s.instrument) {
+                    devices.get_index_mut(s.dev as usize).skip(n, sr32);
                 }
-                i = end;
+                t.gain_l.advance(n);
+                t.gain_r.advance(n);
+                *sleep_skips += 1;
+                continue;
+            }
+
+            // Effects in `order`, each over the whole block (split only at its own lanes' breakpoints).
+            for s in t.chain.iter().filter(|s| !s.instrument) {
+                run_device(s, devices, lanes, p, playing, sl, sr_buf, sr32);
+            }
+
+            // Gain/pan: a linear ramp across the block between the smoothed values at its edges,
+            // in closed form (`g0 + dg * (j + 1)`), so the loops are independent per sample.
+            let (l0, r0) = (t.gain_l.value() as f32, t.gain_r.value() as f32);
+            let (l1, r1) = (t.gain_l.advance(n) as f32, t.gain_r.advance(n) as f32);
+            let (dl, dr) = ((l1 - l0) / n as f32, (r1 - r0) / n as f32);
+            for (j, (o, x)) in out_l[..n].iter_mut().zip(sl.iter()).enumerate() {
+                *o += *x * (l0 + dl * (j as u32 + 1) as f32);
+            }
+            for (j, (o, x)) in out_r[..n].iter_mut().zip(sr_buf.iter()).enumerate() {
+                *o += *x * (r0 + dr * (j as u32 + 1) as f32);
             }
         }
 
         // 3b. The global fx chain, over everything the tracks summed.
-        let mut i = 0;
-        while i < n {
-            let at = p + i as i64;
-            let mut end = (i + SUB_BLOCK).min(n);
-            for &lh in master_lanes.iter() {
-                let Some(lane) = lanes.get(lh) else { continue };
-                if let (Some(v), Some(d)) = (lane.value_at(at), devices.get_mut(lane.target)) {
-                    d.set_param_auto(lane.param, v as f32);
-                }
-                end = end.min(lane.next_break(at).saturating_sub(p).clamp(i as i64 + 1, n as i64) as usize);
-            }
-            for dh in master_chain.iter() {
-                if let Some(d) = devices.get_mut(*dh) {
-                    d.process(&mut out_l[i..end], &mut out_r[i..end], sr32);
-                }
-            }
-            i = end;
+        for s in master_chain.iter() {
+            run_device(s, devices, lanes, p, playing, &mut out_l[..n], &mut out_r[..n], sr32);
         }
 
         // 4. Test voice and transport.

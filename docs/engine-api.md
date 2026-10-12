@@ -296,8 +296,11 @@ not). `kind` 0 drives a device (`target` = its handle, `param` = its param id); 
 interpolation is exactly the curve the editor draws. Before the first point and after the last a lane holds
 that point's value; between two, the left one's curve decides (`hold` non-zero = a step). Points may arrive
 before their lane and in any order. A disabled lane is kept but inert.
-- **Devices** (tracks and the master chain): evaluated at the start of every control segment, and segments
-  are split at breakpoints, so a corner is sample-exact. The value is applied at once (`set_param_auto`): no glide.
+- **Devices** (tracks and the master chain): evaluated at both ends of every control segment (at most 32
+  frames, split at breakpoints, so a corner is sample-exact). The param jumps to the value at the segment start
+  and, if smoothed, ramps linearly to the value the lane reaches at its end (`set_param_auto`; a `hold` step
+  stays a step at its breakpoint). Devices that interpolate per sample (the synth and drum gain) follow the
+  ramp sample by sample; others take coefficients from the segment start. No extra glide.
 - **Loopers:** once per block. The level ramps linearly to the lane's value at the block's end (mute still
   wins); speed, warble, saturation and filter take the value at the block's start and keep their own glides.
 - **LFO mode** (`engine_lane_lfo`, `lfo` non-zero): the lane stops reading its points (they are kept) and reads
@@ -324,6 +327,18 @@ before their lane and in any order. A disabled lane is kept but inert.
 - Stereo is two independent filter states.
 - Coefficients are updated per 32-sample sub-block, with the smoothed params evaluated at
   the sub-block start. Per-sample coefficient updates are fine later.
+
+**kind 8: EQ** (effect). Four bands (0 low shelf, 1 bell, 2 bell, 3 high shelf) using the filter's bell/shelf SVF mixes,
+run in one fused per-sample loop (L and R interleaved).
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| freq | band·3 | 20..20000 Hz | 100 / 500 / 2000 / 8000 | Smoothed in the log2 domain, clamped below Nyquist·0.99. |
+| gain | band·3+1 | -24..24 dB | 0 | Smoothed linearly. A band at exactly 0 dB (ramp at rest) is skipped and its state cleared. |
+| damping | band·3+2 | 0.05..2 | 0.7071 | Smoothed linearly. Q = 1/(2·damping). |
+| output | 12 | -24..24 dB | 0 | Smoothed (segment-start value); 0 dB is skipped. |
+
+- All bands at 0 dB and output 0 dB is a bit-exact passthrough.
 
 **kind 3: Reverb** (effect). A Freeverb-style stereo reverb, `dsp::reverb`: 8 damped combs into 4
 allpasses per channel (right channel offset for width), summed from a mono input.

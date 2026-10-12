@@ -282,6 +282,15 @@ impl Synth {
         self.voices.iter().filter(|v| v.state != State::Free).count()
     }
 
+    /// Whether rendering would do anything: a voice is sounding or a control is mid-glide.
+    pub fn is_active(&self) -> bool {
+        self.active_voices() > 0 || self.is_ramping()
+    }
+
+    pub fn is_ramping(&self) -> bool {
+        self.rolloff.is_moving() || self.env_amount.is_moving() || self.sustain.is_moving() || self.gain.is_moving()
+    }
+
     /// Add the mono output into `out`.
     pub fn render_add(&mut self, out: &mut [f32]) {
         for chunk in out.chunks_mut(SUB_BLOCK) {
@@ -309,7 +318,8 @@ impl Synth {
             (self.release_ms as f64 * self.ms_to_samples) as f32,
         );
 
-        let mut tmp = [0.0f32; SUB_BLOCK];
+        let mut acc = [0.0f32; SUB_BLOCK];
+        let mut mult = [0.0f32; SUB_BLOCK];
         for v in self.voices.iter_mut() {
             // A finished steal fade hands the slot to the pending note.
             if v.state == State::Stealing && v.steal_left == 0 {
@@ -325,26 +335,31 @@ impl Synth {
 
             let b = rolloff + amount * (1.0 - v.adsr.level());
             v.osc.set_rolloff_immediate(b);
-            tmp[..len].fill(0.0);
-            v.osc.render_add(&mut tmp[..len]);
 
+            // Per-sample multiplier env * velocity (* steal fade), then the oscillator adds
+            // `osc * mult` straight into the shared accumulator.
+            v.adsr.fill(&mut mult[..len]);
             let stealing = v.state == State::Stealing;
-            let mut g = g0;
-            for (i, o) in out.iter_mut().enumerate() {
-                g += dg;
-                let env = v.adsr.next();
-                let fade = if stealing {
-                    v.steal_left.saturating_sub(i as u32) as f32 / STEAL_FADE as f32
-                } else {
-                    1.0
-                };
-                *o += tmp[i] * env * v.velocity * fade * g;
+            if stealing {
+                for (i, m) in mult[..len].iter_mut().enumerate() {
+                    let fade = v.steal_left.saturating_sub(i as u32) as f32 / STEAL_FADE as f32;
+                    *m = *m * v.velocity * fade;
+                }
+            } else {
+                for m in mult[..len].iter_mut() {
+                    *m *= v.velocity;
+                }
             }
+            v.osc.render_mul_add(&mut acc[..len], &mult[..len]);
             if stealing {
                 v.steal_left = v.steal_left.saturating_sub(len as u32);
             } else if v.adsr.stage() == Stage::Idle {
                 v.state = State::Free;
             }
+        }
+        // The gain is common to all voices: apply it once, as a closed-form ramp.
+        for (i, (o, a)) in out.iter_mut().zip(acc[..len].iter()).enumerate() {
+            *o += a * (g0 + dg * (i + 1) as f32);
         }
     }
 }
