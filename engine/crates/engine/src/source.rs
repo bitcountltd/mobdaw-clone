@@ -101,6 +101,46 @@ impl Source {
         }
     }
 
+    /// Add `frames[start..start + l.len()] * gain` into `l` and `r` (equal lengths), for the part
+    /// of that range inside the readable frames; the rest is silence and adds nothing. Each sum
+    /// is `dst += src * gain`, the same f32 operations as `frame` followed by a multiply, so it
+    /// is bit-identical to the per-sample path. A mono source feeds both sides. A live source is
+    /// walked chunk by chunk. Allocation-free, and contiguous enough to auto-vectorise.
+    pub fn add_run(&self, start: i64, gain: f32, l: &mut [f32], r: &mut [f32]) {
+        debug_assert_eq!(l.len(), r.len());
+        let n = l.len() as i64;
+        let (lo, hi) = (start.max(0), (start + n).min(self.frames() as i64));
+        if lo >= hi {
+            return;
+        }
+        let (d0, d1) = ((lo - start) as usize, (hi - start) as usize);
+        let (l, r) = (&mut l[d0..d1], &mut r[d0..d1]);
+        let stereo = self.channels >= 2;
+        match &self.store {
+            Store::Flat { frames, data } => {
+                let (lo, hi) = (lo as usize, hi as usize);
+                let left = &data[lo..hi];
+                let right = if stereo { &data[frames + lo..frames + hi] } else { left };
+                mac(l, left, gain);
+                mac(r, right, gain);
+            }
+            Store::Live(live) => {
+                let (mut f, hi) = (lo as usize, hi as usize);
+                while f < hi {
+                    let o = f & (LIVE_CHUNK - 1);
+                    let take = (hi - f).min(LIVE_CHUNK - o);
+                    let c = &live.chunks[f >> LIVE_CHUNK.trailing_zeros()];
+                    let left = &c[o..o + take];
+                    let right = if stereo { &c[LIVE_CHUNK + o..LIVE_CHUNK + o + take] } else { left };
+                    let d = f - lo as usize;
+                    mac(&mut l[d..d + take], left, gain);
+                    mac(&mut r[d..d + take], right, gain);
+                    f += take;
+                }
+            }
+        }
+    }
+
     // ---- live sources ----------------------------------------------------------------------
 
     /// Frames of storage allocated so far (0 for a decoded source).
@@ -162,5 +202,13 @@ impl Source {
             l.closed = true;
             l.chunks.truncate(l.written.div_ceil(LIVE_CHUNK));
         }
+    }
+}
+
+/// `dst += src * gain`.
+#[inline]
+fn mac(dst: &mut [f32], src: &[f32], gain: f32) {
+    for (d, s) in dst.iter_mut().zip(src) {
+        *d += *s * gain;
     }
 }

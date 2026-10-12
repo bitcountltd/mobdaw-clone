@@ -296,8 +296,11 @@ not). `kind` 0 drives a device (`target` = its handle, `param` = its param id); 
 interpolation is exactly the curve the editor draws. Before the first point and after the last a lane holds
 that point's value; between two, the left one's curve decides (`hold` non-zero = a step). Points may arrive
 before their lane and in any order. A disabled lane is kept but inert.
-- **Devices** (tracks and the master chain): evaluated at the start of every control segment, and segments
-  are split at breakpoints, so a corner is sample-exact. The value is applied at once (`set_param_auto`): no glide.
+- **Devices** (tracks and the master chain): evaluated at both ends of every control segment (at most 32
+  frames, split at breakpoints, so a corner is sample-exact). The param jumps to the value at the segment start
+  and, if smoothed, ramps linearly to the value the lane reaches at its end (`set_param_auto`; a `hold` step
+  stays a step at its breakpoint). Devices that interpolate per sample (the synth and drum gain) follow the
+  ramp sample by sample; others take coefficients from the segment start. No extra glide.
 - **Loopers:** once per block. The level ramps linearly to the lane's value at the block's end (mute still
   wins); speed, warble, saturation and filter take the value at the block's start and keep their own glides.
 - **LFO mode** (`engine_lane_lfo`, `lfo` non-zero): the lane stops reading its points (they are kept) and reads

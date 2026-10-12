@@ -1,7 +1,7 @@
 //! Audio and MIDI clips, and how they turn into samples and note events.
 
 use crate::source::Source;
-use dsp::fade::{clip_edge_gain, fade_in_gain, DECLICK_SAMPLES};
+use dsp::fade::{clip_edge_gain, effective_fade_len, fade_in_gain, DECLICK_SAMPLES};
 use dsp::FadeShape;
 
 pub enum Clip {
@@ -46,7 +46,76 @@ impl AudioClip {
     ///
     /// Per sample the output is `source[offset + k] * (edge_gain(k) * clip_gain)`. Outside the
     /// fades `edge_gain` is exactly 1.0, so with clip gain 1.0 samples are copied bit-exactly.
+    ///
+    /// The block is split into spans of clip-local samples. The *body* (past the fade-in, before
+    /// the fade-out) is cut again into one run per loop pass, leaving out the pass's seam
+    /// crossfade or declicks; a run is `dst += src * gain` over contiguous slices
+    /// ([`Source::add_run`]). Fades and seams take the per-sample path ([`Self::sample_at`]).
+    /// The result is bit-identical to [`Self::render_add_reference`].
     pub fn render_add(&self, src: &Source, block_start: i64, l: &mut [f32], r: &mut [f32]) {
+        let block_end = block_start + l.len() as i64;
+        let t0 = block_start.max(self.start);
+        let t1 = block_end.min(self.start + self.length);
+        if t0 >= t1 {
+            return;
+        }
+        // Body: edge gain is exactly 1.0 for `kf >= fin` and `length - 1 - k >= fout`.
+        let fin = effective_fade_len(self.fade_in).ceil() as i64;
+        let fout = effective_fade_len(self.fade_out).ceil() as i64;
+        let body = fin.min(self.length)..(self.length - fout).max(fin.min(self.length));
+        let (k1, mut k) = (t1 - self.start, t0 - self.start);
+        while k < k1 {
+            let (end, plain) = self.span(k, k1, &body);
+            let (i, m) = ((self.start + k - block_start) as usize, (end - k) as usize);
+            match plain {
+                Some(frame) => src.add_run(frame, self.gain, &mut l[i..i + m], &mut r[i..i + m]),
+                None => {
+                    for j in 0..m {
+                        let (a, b) = self.sample_at(src, self.start + k + j as i64);
+                        l[i + j] += a;
+                        r[i + j] += b;
+                    }
+                }
+            }
+            k = end;
+        }
+    }
+
+    /// The span starting at clip-local sample `k`, ending before `limit` at the latest: its end
+    /// and, if every sample of it is a plain copy of consecutive source frames, the first frame.
+    fn span(&self, k: i64, limit: i64, body: &std::ops::Range<i64>) -> (i64, Option<i64>) {
+        if k < body.start {
+            return (body.start.min(limit), None);
+        }
+        if k >= body.end {
+            return (limit, None);
+        }
+        let limit = limit.min(body.end);
+        let Some(pl) = self.looping() else { return (limit, Some(self.source_offset + k)) };
+        let q = k + self.loop_phase;
+        let (pass, p) = (q.div_euclid(pl), q.rem_euclid(pl));
+        let pass_end = k + (pl - p);
+        let followed = pass_end < self.length;
+        // The plain part of a pass, in pass positions `[plo, phi)`: see `signal`.
+        let x = self.seam_max.min(pl / 4).min(self.source_offset);
+        let (plo, phi) = if x >= DECLICK_SAMPLES as i64 {
+            (0, if followed { pl - x } else { pl })
+        } else {
+            let n = (DECLICK_SAMPLES as i64).min(pl / 2);
+            (if pass >= 1 { n } else { 0 }, if followed { pl - n } else { pl })
+        };
+        if p < plo {
+            (limit.min(k + (plo - p)), None)
+        } else if p < phi {
+            (limit.min(k + (phi - p)), Some(self.source_offset + p))
+        } else {
+            (limit.min(pass_end), None)
+        }
+    }
+
+    /// The straightforward per-sample renderer that `render_add` must match bit for bit.
+    #[doc(hidden)]
+    pub fn render_add_reference(&self, src: &Source, block_start: i64, l: &mut [f32], r: &mut [f32]) {
         let block_end = block_start + l.len() as i64;
         let t0 = block_start.max(self.start);
         let t1 = block_end.min(self.start + self.length);
@@ -110,6 +179,19 @@ impl AudioClip {
     }
 }
 
+/// `f64::round` (halves away from zero) without libm: wasm has `f64.trunc` but no such rounding,
+/// so `round` is a library call. `x - trunc(x)` is exact, so the comparison is too (adding 0.5
+/// would not be: it rounds up 0.49999999999999994). NaN and infinities come out as `round` gives.
+#[inline]
+pub fn round_away(x: f64) -> f64 {
+    let t = x.trunc();
+    if (x - t).abs() >= 0.5 {
+        t + 1.0f64.copysign(x)
+    } else {
+        t
+    }
+}
+
 /// A MIDI clip with its own clock: notes live in ticks, `bpm` and `ppq` map them to samples.
 /// With `loop_ticks > 0` the notes in `[0, loop_ticks)` repeat every `loop_ticks` up to
 /// `length_ticks`, and notes at or after `loop_ticks` are ignored.
@@ -156,7 +238,7 @@ impl MidiClip {
     /// (engine.md section 2). The same expression is used for every event so results are
     /// deterministic on every client.
     pub fn tick_to_sample(&self, tick: f64, sample_rate: f64) -> i64 {
-        self.start + (tick * 60.0 * sample_rate / (self.bpm * self.ppq as f64)).round() as i64
+        self.start + round_away(tick * 60.0 * sample_rate / (self.bpm * self.ppq as f64)) as i64
     }
 
     pub fn end_sample(&self, sample_rate: f64) -> i64 {

@@ -186,6 +186,10 @@ fast random reads into multi-GB files. Downloads from S3 are streamed into OPFS.
 - The block size is 128 frames, which is the Web Audio render quantum.
 - Within a block, **control is evaluated at 32-frame sub-blocks** (1.5 kHz control rate at
   48 kHz), with per-sample linear ramps inside each sub-block.
+  - Instruments run in sub-blocks split at note events. Effects run over the whole 128-frame block, split
+    only at the breakpoints of lanes that drive them (and into 32-frame pieces when they have lanes). Track
+    gain/pan ramps linearly across the block.
+  - Automation lanes evaluate at both ends of a sub-block and ramp across it.
   - This gives sample-accurate automation breakpoints within 32 frames, at a fraction of the
     cost of per-sample evaluation.
   - Not yet true for automation lanes: they are applied as a step per segment (see [`dsp.md`](dsp.md) §11).
