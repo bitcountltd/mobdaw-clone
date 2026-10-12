@@ -195,6 +195,10 @@ pub struct FilterDevice {
     /// Bell and shelf gain in dB; linear ramp.
     gain_db: Ramp,
     svf: [Svf; 2],
+    /// Inputs the cached `coefs` were computed from: mode, cutoff Hz, damping, gain dB, sample rate. Coefficients
+    /// (a `tan`, a `powf`) are only recomputed when these change, i.e. not while all ramps are at rest.
+    key: Option<(u32, f32, f32, f32, f32)>,
+    coefs: dsp::svf::SvfCoefs,
 }
 
 impl FilterDevice {
@@ -206,6 +210,8 @@ impl FilterDevice {
             damping: Ramp::new(std::f64::consts::FRAC_1_SQRT_2),
             gain_db: Ramp::new(0.0),
             svf: [Svf::new(), Svf::new()],
+            key: None,
+            coefs: dsp::svf::SvfCoefs::from_g(0.0, 1.0),
         }
     }
 
@@ -238,10 +244,28 @@ impl FilterDevice {
         let cutoff = self.cutoff_log2.value().exp2().min(nyquist_limit) as f32;
         let damping = self.damping.value() as f32;
         let gain_db = self.gain_db.value() as f32;
+        let gain_at_rest = self.gain_db.value() == self.gain_db.target();
         self.cutoff_log2.advance(len);
         self.damping.advance(len);
         self.gain_db.advance(len);
 
+        // A bell or shelf at exactly 0 dB is the identity (A == 1 gives m0 = 1, m1 = m2 = 0): skip it, and clear the
+        // state so that when the gain moves away from 0 the filter starts clean instead of from stale memory.
+        if self.mode >= 5 && gain_db == 0.0 && gain_at_rest {
+            self.reset();
+            return;
+        }
+
+        let key = (self.mode, cutoff, damping, gain_db, sample_rate);
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.coefs = self.make_coefs(cutoff, damping, gain_db, sample_rate);
+        }
+        // One tan, shared by L and R; every mode is a mix of the same two SVF outputs.
+        Svf::process_block_stereo(&mut self.svf, l, r, &self.coefs);
+    }
+
+    fn make_coefs(&self, cutoff: f32, damping: f32, gain_db: f32, sample_rate: f32) -> dsp::svf::SvfCoefs {
         if self.mode >= 5 {
             // Bell and shelves (Cytomic's SVF mixes): out = m0*x + m1*bp + m2*lp, with A = 10^(dB/40).
             let a = 10f32.powf(gain_db / 40.0);
@@ -252,29 +276,15 @@ impl FilterDevice {
                 6 => (1.0 / a.sqrt(), damping, 1.0, k * (a - 1.0), a2 - 1.0), // low shelf
                 _ => (a.sqrt(), damping, a2, k * (1.0 - a) * a, 1.0 - a2), // high shelf
             };
-            for (svf, buf) in self.svf.iter_mut().zip([l, r]) {
-                svf.set_hz_warped(cutoff, damping, sample_rate, warp);
-                for x in buf.iter_mut() {
-                    let input = *x;
-                    svf.process(input);
-                    *x = m0 * input + m1 * svf.bp() + m2 * svf.lp();
-                }
-            }
-            return;
+            return dsp::svf::SvfCoefs::from_hz(cutoff, damping, sample_rate, warp).with_mix(m0, m1, m2);
         }
-
-        let pick: fn(&Svf) -> f32 = match self.mode {
-            0 => Svf::lp,
-            1 => Svf::hp,
-            2 => Svf::bp,
-            3 => Svf::notch,
-            _ => Svf::peak,
-        };
-        for (svf, buf) in self.svf.iter_mut().zip([l, r]) {
-            svf.set_hz(cutoff, damping, sample_rate);
-            for x in buf.iter_mut() {
-                *x = pick(svf.process(*x));
-            }
+        let c = dsp::svf::SvfCoefs::from_hz(cutoff, damping, sample_rate, 1.0);
+        match self.mode {
+            0 => c.lowpass(),
+            1 => c.highpass(),
+            2 => c.bandpass(),
+            3 => c.notch(),
+            _ => c.peak(),
         }
     }
 }
