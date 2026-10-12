@@ -161,6 +161,7 @@ impl Device {
             DeviceKind::Delay(d) => d.mix.is_moving() || d.feedback.is_moving() || d.drive.is_moving() || d.cutoff_log2.is_moving() || d.resonance.is_moving(),
             DeviceKind::Synth(s) => s.is_ramping(),
             DeviceKind::Lofi(d) => d.is_ramping(),
+            DeviceKind::Eq(e) => e.out_db.is_moving() || e.bands.iter().any(|b| b.freq_log2.is_moving() || b.gain_db.is_moving() || b.damping.is_moving()),
             DeviceKind::Unknown => false,
         }
     }
@@ -192,6 +193,7 @@ impl Device {
             DeviceKind::Tremolo(_) => true,
             DeviceKind::Reverb(v) => v.zero_run >= v.reverb.tail_samples(v.size_max),
             DeviceKind::Delay(d) => d.is_asleep(),
+            DeviceKind::Eq(e) => e.bands.iter().all(|b| b.st == [[0.0; 2]; 2]),
             DeviceKind::Synth(_) | DeviceKind::Lofi(_) => false,
         }
     }
