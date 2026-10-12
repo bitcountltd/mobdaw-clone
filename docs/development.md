@@ -26,6 +26,12 @@ The API and the `/collab` WebSocket share one port (8787); Vite proxies both in 
 - `npm test` (Rust `dsp` tests, then server tests) / `npm run typecheck`
 - `npm run build:wasm` builds `engine/` to `client/src/audio/wasm/engine.wasm` (gitignored);
   `npm run test:dsp` runs the Rust tests alone. Dev playground: `#/engine-test` (not linked).
+- **Benchmarks:** `npm run bench` builds `engine/crates/bench` (a wasm `cdylib` over `dsp` and `engine`, with
+  `+simd128`) and runs `engine/bench/run.mjs` under Node. It prints ns per stereo frame and % of one core at 48 kHz
+  for each device, the clip path, the resampler, the looper and some engine scenes, best of 9, setup excluded. Engine
+  scenes are rebuilt before every timed run so clips are playing. The "audit" column is the baseline from
+  [`dsp.md`](dsp.md) §1. Extra flags: `npm run bench -- --json`, `--runs N`, `--out base.json` (save) and
+  `--compare base.json` (adds a `vs prev` column) for before/after diffs.
 - `npm run admin -- create-invite [--days N] [--months N]`, `list-invites`, `create-user <username> [--admin] [--months N]`, `gift <username> <months>`,
   `passwd <username>`, `make-admin <username>`,
   `set-plan <username> active|ended` (end or restore a subscription; see below), `purge-expired` (delete the cloud data of accounts past their
