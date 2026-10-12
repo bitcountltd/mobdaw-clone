@@ -20,6 +20,22 @@ export const COMPRESSOR = 4
 export const TREMOLO = 5
 export const DELAY = 6
 export const LOFI_DRUM = 7
+export const EQ = 8
+
+const EQ_BANDS = [
+  { name: 'low', hz: 100 },
+  { name: 'bell 1', hz: 500 },
+  { name: 'bell 2', hz: 2000 },
+  { name: 'high', hz: 8000 },
+]
+const eqParams = (): ParamDef[] => [
+  ...EQ_BANDS.flatMap((b, i): ParamDef[] => [
+    { id: i * 3, name: `${b.name} freq`, min: 20, max: 20000, def: b.hz, scale: 'log', unit: 'hz' },
+    { id: i * 3 + 1, name: `${b.name} gain`, min: -24, max: 24, def: 0, scale: 'lin', unit: 'db' },
+    { id: i * 3 + 2, name: `${b.name} damping`, min: 0.05, max: 2, def: 0.7071, scale: 'lin' },
+  ]),
+  { id: 12, name: 'output', min: -24, max: 24, def: 0, scale: 'lin', unit: 'db' },
+]
 
 export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
@@ -31,6 +47,7 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 3, name: 'gain', min: -24, max: 24, def: 0, scale: 'lin', unit: 'db' },
     ],
   },
+  [EQ]: { type: EQ, name: 'EQ', instrument: false, params: eqParams() },
   [REVERB]: {
     type: REVERB, name: 'reverb', instrument: false,
     params: [

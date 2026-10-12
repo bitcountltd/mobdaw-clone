@@ -328,6 +328,18 @@ before their lane and in any order. A disabled lane is kept but inert.
 - Coefficients are updated per 32-sample sub-block, with the smoothed params evaluated at
   the sub-block start. Per-sample coefficient updates are fine later.
 
+**kind 8: EQ** (effect). Four bands (0 low shelf, 1 bell, 2 bell, 3 high shelf) using the filter's bell/shelf SVF mixes,
+run in one fused per-sample loop (L and R interleaved).
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| freq | band·3 | 20..20000 Hz | 100 / 500 / 2000 / 8000 | Smoothed in the log2 domain, clamped below Nyquist·0.99. |
+| gain | band·3+1 | -24..24 dB | 0 | Smoothed linearly. A band at exactly 0 dB (ramp at rest) is skipped and its state cleared. |
+| damping | band·3+2 | 0.05..2 | 0.7071 | Smoothed linearly. Q = 1/(2·damping). |
+| output | 12 | -24..24 dB | 0 | Smoothed (segment-start value); 0 dB is skipped. |
+
+- All bands at 0 dB and output 0 dB is a bit-exact passthrough.
+
 **kind 3: Reverb** (effect). A Freeverb-style stereo reverb, `dsp::reverb`: 8 damped combs into 4
 allpasses per channel (right channel offset for width), summed from a mono input.
 

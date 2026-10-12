@@ -9,6 +9,7 @@ pub const KIND_COMPRESSOR: u32 = 4;
 pub const KIND_TREMOLO: u32 = 5;
 pub const KIND_DELAY: u32 = 6;
 pub const KIND_LOFI_DRUM: u32 = 7;
+pub const KIND_EQ: u32 = 8;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -34,6 +35,7 @@ pub enum DeviceKind {
     Tremolo(Box<TremoloDevice>),
     Delay(Box<DelayDevice>),
     Lofi(Box<LofiDrum>),
+    Eq(Box<EqDevice>),
 }
 
 impl Device {
@@ -46,6 +48,7 @@ impl Device {
             KIND_TREMOLO => DeviceKind::Tremolo(Box::new(TremoloDevice::new(sample_rate))),
             KIND_DELAY => DeviceKind::Delay(Box::new(DelayDevice::new(sample_rate))),
             KIND_LOFI_DRUM => DeviceKind::Lofi(Box::new(LofiDrum::new(sample_rate))),
+            KIND_EQ => DeviceKind::Eq(Box::new(EqDevice::new(sample_rate))),
             _ => DeviceKind::Unknown,
         };
         Self { track, order, bypass, kind_id, kind, key_lo: 0, key_hi: 127 }
@@ -110,6 +113,7 @@ impl Device {
             DeviceKind::Tremolo(t) => t.set_param(param, value),
             DeviceKind::Delay(d) => d.set_param(param, value),
             DeviceKind::Lofi(d) => d.set_param(param, value),
+            DeviceKind::Eq(e) => e.set_param(param, value),
             DeviceKind::Unknown => {}
         }
     }
@@ -136,6 +140,7 @@ impl Device {
             DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, s),
             DeviceKind::Delay(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Lofi(d) => d.set_param_smooth(param, value, s),
+            DeviceKind::Eq(e) => e.set_param_smooth(param, value, s),
             DeviceKind::Unknown => {}
         }
     }
@@ -151,6 +156,7 @@ impl Device {
             DeviceKind::Tremolo(_) => matches!(param, 0 | 1 | 3),
             DeviceKind::Delay(_) => matches!(param, 0 | 2 | 4 | 6 | 7),
             DeviceKind::Lofi(_) => matches!(param, dsp::lofidrum::P_CUTOFF | dsp::lofidrum::P_RESONANCE | dsp::lofidrum::P_GAIN),
+            DeviceKind::Eq(_) => param <= 12,
             DeviceKind::Unknown => false,
         }
     }
@@ -166,6 +172,7 @@ impl Device {
             DeviceKind::Tremolo(t) => t.reset(),
             DeviceKind::Delay(d) => d.reset(),
             DeviceKind::Lofi(d) => d.reset(),
+            DeviceKind::Eq(e) => e.reset(),
             DeviceKind::Unknown => {}
         }
     }
@@ -187,6 +194,7 @@ impl Device {
             DeviceKind::Compressor(c) => c.process(l, r, sample_rate),
             DeviceKind::Tremolo(t) => t.process(l, r, sample_rate),
             DeviceKind::Delay(d) => d.process(l, r),
+            DeviceKind::Eq(e) => e.process(l, r, sample_rate),
             DeviceKind::Synth(s) => {
                 for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
                     let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
@@ -318,6 +326,151 @@ impl FilterDevice {
             2 => c.bandpass(),
             3 => c.notch(),
             _ => c.peak(),
+        }
+    }
+}
+
+/// Kind 8: four-band EQ (low shelf, bell, bell, high shelf). Params: `band*3 + {0 freq Hz, 1 gain dB, 2 damping}`
+/// for bands 0..3, and 12 output gain (dB). Same smoothing and SVF mixes as `FilterDevice`'s bell and shelves, but
+/// all active bands run in one fused per-sample loop with L and R interleaved.
+pub struct EqDevice {
+    smooth_samples: f64,
+    bands: [EqBand; 4],
+    out_db: Ramp,
+}
+
+struct EqBand {
+    freq_log2: Ramp,
+    gain_db: Ramp,
+    damping: Ramp,
+    /// Integrator states `[ic1, ic2]` per channel.
+    st: [[f32; 2]; 2],
+    key: Option<(f32, f32, f32, f32)>,
+    coefs: dsp::svf::SvfCoefs,
+}
+
+const EQ_DEFAULT_HZ: [f64; 4] = [100.0, 500.0, 2000.0, 8000.0];
+
+impl EqDevice {
+    pub fn new(sample_rate: f32) -> Self {
+        let band = |i: usize| EqBand {
+            freq_log2: Ramp::new(EQ_DEFAULT_HZ[i].log2()),
+            gain_db: Ramp::new(0.0),
+            damping: Ramp::new(std::f64::consts::FRAC_1_SQRT_2),
+            st: [[0.0; 2]; 2],
+            key: None,
+            coefs: dsp::svf::SvfCoefs::from_g(0.0, 1.0),
+        };
+        Self { smooth_samples: sample_rate as f64 * SMOOTH_MS * 1e-3, bands: [band(0), band(1), band(2), band(3)], out_db: Ramp::new(0.0) }
+    }
+
+    pub fn set_param(&mut self, param: u32, value: f32) {
+        self.set_param_smooth(param, value, self.smooth_samples);
+    }
+
+    pub fn set_param_smooth(&mut self, param: u32, value: f32, s: f64) {
+        if !value.is_finite() {
+            return;
+        }
+        if param == 12 {
+            self.out_db.set_target(value.clamp(-24.0, 24.0) as f64, s);
+            return;
+        }
+        let Some(b) = self.bands.get_mut((param / 3) as usize) else { return };
+        match param % 3 {
+            0 => b.freq_log2.set_target((value.clamp(20.0, 20000.0) as f64).log2(), s),
+            1 => b.gain_db.set_target(value.clamp(-24.0, 24.0) as f64, s),
+            _ => b.damping.set_target(value.clamp(0.05, 2.0) as f64, s),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        for b in &mut self.bands {
+            b.st = [[0.0; 2]; 2];
+        }
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+        let len = l.len();
+        let nyquist_limit = 0.99 * 0.5 * sample_rate as f64;
+        let mut active = [0usize; 4];
+        let mut n = 0;
+        for (i, b) in self.bands.iter_mut().enumerate() {
+            let freq = b.freq_log2.value().exp2().min(nyquist_limit) as f32;
+            let damping = b.damping.value() as f32;
+            let gain_db = b.gain_db.value() as f32;
+            let at_rest = b.gain_db.value() == b.gain_db.target();
+            b.freq_log2.advance(len);
+            b.damping.advance(len);
+            b.gain_db.advance(len);
+            if gain_db == 0.0 && at_rest {
+                b.st = [[0.0; 2]; 2];
+                continue;
+            }
+            let key = (freq, damping, gain_db, sample_rate);
+            if b.key != Some(key) {
+                b.key = Some(key);
+                // Cytomic's SVF mixes, as in FilterDevice: out = m0*x + m1*bp + m2*lp, A = 10^(dB/40).
+                let a = 10f32.powf(gain_db / 40.0);
+                let a2 = a * a;
+                let k = 2.0 * damping;
+                let (warp, damping, m0, m1, m2) = match i {
+                    0 => (1.0 / a.sqrt(), damping, 1.0, k * (a - 1.0), a2 - 1.0),
+                    3 => (a.sqrt(), damping, a2, k * (1.0 - a) * a, 1.0 - a2),
+                    _ => (1.0, damping / a, 1.0, k / a * (a2 - 1.0), 0.0),
+                };
+                b.coefs = dsp::svf::SvfCoefs::from_hz(freq, damping, sample_rate, warp).with_mix(m0, m1, m2);
+            }
+            active[n] = i;
+            n += 1;
+        }
+        let out_db = self.out_db.value();
+        let out_rest = out_db == self.out_db.target();
+        self.out_db.advance(len);
+        let out_gain = if out_db == 0.0 && out_rest { None } else { Some(10f32.powf(out_db as f32 / 20.0)) };
+
+        if n > 0 {
+            let mut c = [self.bands[0].coefs; 4];
+            let mut s = [[[0.0f32; 2]; 2]; 4];
+            for (j, &i) in active[..n].iter().enumerate() {
+                c[j] = self.bands[i].coefs;
+                s[j] = self.bands[i].st;
+            }
+            for (x, y) in l.iter_mut().zip(r.iter_mut()) {
+                let (mut sl, mut sr) = (*x, *y);
+                for j in 0..n {
+                    let c = &c[j];
+                    let st = &mut s[j];
+                    let (xl, xr) = (sl, sr);
+                    let v3l = xl - st[0][1];
+                    let v3r = xr - st[1][1];
+                    let v1l = c.a1 * st[0][0] + c.a2 * v3l;
+                    let v1r = c.a1 * st[1][0] + c.a2 * v3r;
+                    let v2l = st[0][1] + c.a2 * st[0][0] + c.a3 * v3l;
+                    let v2r = st[1][1] + c.a2 * st[1][0] + c.a3 * v3r;
+                    st[0][0] = 2.0 * v1l - st[0][0];
+                    st[1][0] = 2.0 * v1r - st[1][0];
+                    st[0][1] = 2.0 * v2l - st[0][1];
+                    st[1][1] = 2.0 * v2r - st[1][1];
+                    sl = c.m0 * xl + c.m1 * v1l + c.m2 * v2l;
+                    sr = c.m0 * xr + c.m1 * v1r + c.m2 * v2r;
+                }
+                *x = sl;
+                *y = sr;
+            }
+            for (j, &i) in active[..n].iter().enumerate() {
+                let mut st = s[j];
+                for ch in st.iter_mut() {
+                    ch[0] = dsp::flush_denormal(ch[0]);
+                    ch[1] = dsp::flush_denormal(ch[1]);
+                }
+                self.bands[i].st = st;
+            }
+        }
+        if let Some(g) = out_gain {
+            for v in l.iter_mut().chain(r.iter_mut()) {
+                *v *= g;
+            }
         }
     }
 }
