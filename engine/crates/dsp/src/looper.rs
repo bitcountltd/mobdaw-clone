@@ -37,7 +37,8 @@
 //! is no seam to hide on the first pass after a trigger, so there the loop starts clean.)
 //!
 //! The resampler's filter state is a cache: after any jump (trigger, region edit, wrap) it is
-//! rebuilt by running the filter over [`warmup`] input samples preceding the read position.
+//! rebuilt by running the filter over [`Resampler::warmup`] input samples preceding the read
+//! position. The voice uses the clean (first-order hold, Chebyshev-I N7) resampler design.
 
 use crate::resampler::Resampler;
 use crate::warble::Warble;
@@ -63,7 +64,7 @@ pub struct LoopParams {
     pub sample_rate: f64,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LoopVoice {
     h1: Resampler,
     h2: Resampler,
@@ -83,10 +84,35 @@ pub struct LoopVoice {
     depth: f64,
 }
 
-/// Input samples fed to a fresh filter before the read position. The slowest filter pole decays
-/// as `exp(-0.0675 t)` in time units of `1/scale` input samples, so ~100 units leave < 1e-3.
-fn warmup(speed: f64) -> i64 {
-    (96.0 * speed.max(1.0)).ceil() as i64
+impl Default for LoopVoice {
+    fn default() -> Self {
+        Self {
+            h1: Resampler::clean(),
+            h2: Resampler::clean(),
+            h2_on: false,
+            active: false,
+            last_t: 0,
+            trigger: 0,
+            phase: 0.0,
+            log_speed: 0.0,
+            wrapped: false,
+            region: (0, 0),
+            warble: Warble::default(),
+            depth: 0.0,
+        }
+    }
+}
+
+/// `sin(pi u / 2)` for `u` in `[0, 1]`: an odd Taylor polynomial (error < 1e-9), so the equal-power
+/// crossfade needs no libm call per sample.
+#[inline(always)]
+fn quarter_sin(u: f64) -> f64 {
+    let y = u * FRAC_PI_2;
+    let y2 = y * y;
+    y * (1.0
+        + y2 * (-1.0 / 6.0
+            + y2 * (1.0 / 120.0
+                + y2 * (-1.0 / 5040.0 + y2 * (1.0 / 362_880.0 + y2 * (-1.0 / 39_916_800.0 + y2 * (1.0 / 6_227_020_800.0)))))))
 }
 
 impl LoopVoice {
@@ -103,6 +129,11 @@ impl LoopVoice {
     /// Add `l.len()` frames of loop output into `l` and `r`. `tape(i)` is the stereo signal being
     /// looped, at source sample `i`. `trigger` identifies the current gate (a new value restarts the
     /// loop); `t0` is the timeline sample of `l[0]`, used only to notice that time jumped.
+    ///
+    /// The slow events (retrigger, a live region edit, the wrap at the loop end and the resampler
+    /// restarts they cause) can only happen on the first sample of a block or when the phase
+    /// crosses the loop end; everything else is the per-sample run: glide the speed, advance the
+    /// phase, read one head (two inside the seam crossfade, with polynomial equal-power gains).
     pub fn render_add(
         &mut self,
         p: &LoopParams,
@@ -116,33 +147,45 @@ impl LoopVoice {
             self.active = false;
             return;
         }
+        let n = l.len().min(r.len());
+        if n == 0 {
+            return;
+        }
         // The tape may have been edited since the last block.
         self.h1.clear_cache();
         self.h2.clear_cache();
         let len = p.length as f64;
+        let start = p.start as f64;
         let target = p.speed.log2();
         let warble = if p.warble.is_finite() { p.warble.clamp(0.0, 1.0) } else { 0.0 };
         let inv_sr = 1.0 / p.sample_rate;
         let coef = 1.0 - (-1.0 / (SPEED_TAU_S * p.sample_rate)).exp();
-        for k in 0..l.len().min(r.len()) {
-            let t = t0 + k as i64;
-            let fresh = !self.active || self.last_t + 1 != t || self.trigger != trigger;
-            if fresh {
-                // (re)trigger: the loop starts at the region start, at the target speed
-                self.phase = 0.0;
-                self.log_speed = target;
-                self.wrapped = false;
-                self.h2_on = false;
-                self.region = (p.start, p.length);
-                let w = warmup(p.speed);
-                self.h1.restart(p.start - w);
-            } else {
+        let xf_per_speed = XF_MS * 1e-3 * p.sample_rate;
+        let xf_max = len * 0.5;
+
+        // Block start: a (re)trigger, or a live region edit; both need a resampler restart.
+        let fresh = !self.active || self.last_t + 1 != t0 || self.trigger != trigger;
+        let mut region_edit = false;
+        if fresh {
+            // (re)trigger: the loop starts at the region start, at the target speed
+            self.phase = 0.0;
+            self.log_speed = target;
+            self.wrapped = false;
+            self.h2_on = false;
+            self.region = (p.start, p.length);
+            self.h1.restart(p.start - self.h1.warmup(p.speed));
+        } else if self.region != (p.start, p.length) {
+            region_edit = true;
+        }
+
+        for k in 0..n {
+            // Speed: the log2 glide and the warble, then the depth glide (same time constant).
+            if k > 0 || !fresh {
                 self.log_speed += (target - self.log_speed) * coef;
                 if (target - self.log_speed).abs() < 1e-6 {
                     self.log_speed = target;
                 }
             }
-            // Depth glides (same time constant as the speed) so moving the knob never zippers.
             self.depth += (warble - self.depth) * coef;
             if self.depth < 1e-6 && warble == 0.0 {
                 self.depth = 0.0;
@@ -151,10 +194,11 @@ impl LoopVoice {
             let wob = if self.depth > 0.0 { self.depth * self.warble.octaves() } else { 0.0 };
             let speed = (self.log_speed + wob).exp2();
             let scale = (1.0 / speed).min(1.0) as f32;
-            let w = warmup(speed);
-            let mut jumped = fresh;
-            if !fresh {
-                if self.region != (p.start, p.length) {
+
+            // Phase and events.
+            let mut jumped = false;
+            if k > 0 || !fresh {
+                if region_edit && k == 0 {
                     // The region was edited live: keep the phase (folded into the new length) and
                     // re-read from the new position.
                     self.region = (p.start, p.length);
@@ -176,33 +220,31 @@ impl LoopVoice {
                     }
                 }
             }
-            let src = p.start as f64 + self.phase;
-            if jumped && !fresh {
-                self.h1.restart(src.floor() as i64 - w);
+            let src = start + self.phase;
+            if jumped {
+                self.h1.restart(src.floor() as i64 - self.h1.warmup(speed));
             }
-            let xf = (XF_MS * 1e-3 * p.sample_rate * speed).min(len * 0.5);
+            let xf = (xf_per_speed * speed).min(xf_max);
             let need2 = self.wrapped && self.phase < xf;
-            if need2 && !self.h2_on {
-                self.h2.restart((src + len).floor() as i64 - w);
-                self.h2_on = true;
-            }
-            if !need2 {
-                self.h2_on = false;
-            }
             let a = self.h1.advance(tape, src, scale);
-            let (ol, or) = if need2 {
+            if need2 {
+                if !self.h2_on {
+                    self.h2.restart((src + len).floor() as i64 - self.h2.warmup(speed));
+                    self.h2_on = true;
+                }
                 let b = self.h2.advance(tape, src + len, scale);
-                let x = self.phase / xf * FRAC_PI_2;
-                let (gin, gout) = (x.sin() as f32, x.cos() as f32);
-                (a.0 * gin + b.0 * gout, a.1 * gin + b.1 * gout)
+                let u = self.phase / xf;
+                let (gin, gout) = (quarter_sin(u) as f32, quarter_sin(1.0 - u) as f32);
+                l[k] += a.0 * gin + b.0 * gout;
+                r[k] += a.1 * gin + b.1 * gout;
             } else {
-                a
-            };
-            l[k] += ol;
-            r[k] += or;
-            self.last_t = t;
-            self.trigger = trigger;
-            self.active = true;
+                self.h2_on = false;
+                l[k] += a.0;
+                r[k] += a.1;
+            }
         }
+        self.last_t = t0 + n as i64 - 1;
+        self.trigger = trigger;
+        self.active = true;
     }
 }
