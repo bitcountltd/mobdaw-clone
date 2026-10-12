@@ -381,10 +381,12 @@ fn run_device(slot: &Slot, devices: &mut HandleMap<Device>, lanes: &HandleMap<La
         return;
     }
     let n = l.len();
-    if slot.lanes.is_empty() {
+    if slot.lanes.is_empty() && !d.is_ramping() {
         d.process(l, r, sr32);
         return;
     }
+    // Lanes or a knob glide: control segments of at most 32 frames, since devices read their
+    // ramps at the start of each run.
     let mut i = 0;
     while i < n {
         let end = lane_limit(slot, lanes, p, i, n, (i + SUB_BLOCK).min(n));
@@ -411,6 +413,10 @@ pub struct Engine {
     loopers: HandleMap<Looper>,
     /// The master bus's devices in ascending `order` (derived).
     master_chain: Vec<Slot>,
+    /// Whether silent tracks skip their idle instruments and sleeping effects (on unless a test turns it off).
+    sleep: bool,
+    /// Track-blocks skipped by sleep (for tests).
+    sleep_skips: u64,
     /// Scratch for [`fill_tape`], sized by `rebuild_routing`.
     tape_refs: Vec<(u32, u32)>,
     lanes: HandleMap<Lane>,
@@ -448,6 +454,8 @@ impl Engine {
             devices: HandleMap::with_capacity(MAX_DEVICES),
             loopers: HandleMap::with_capacity(MAX_LOOPERS),
             master_chain: Vec::with_capacity(MAX_DEVICES),
+            sleep: true,
+            sleep_skips: 0,
             tape_refs: Vec::new(),
             lanes: HandleMap::with_capacity(MAX_LANES),
             points: HandleMap::with_capacity(MAX_POINTS),
@@ -1070,6 +1078,17 @@ impl Engine {
     // ---- rendering ------------------------------------------------------------------------
 
     /// Render `frames` (<= 128) into the output buffer. Never allocates.
+    /// Turn the sleep optimisation (skipping silent tracks' idle devices) on or off. Rendered
+    /// audio is the same either way; this exists for tests.
+    pub fn set_sleep(&mut self, on: bool) {
+        self.sleep = on;
+    }
+
+    /// How many track-blocks sleep has skipped so far.
+    pub fn sleep_skips(&self) -> u64 {
+        self.sleep_skips
+    }
+
     pub fn process(&mut self, frames: usize) {
         let n = frames.min(BLOCK);
         let p = self.main.position;
@@ -1077,7 +1096,7 @@ impl Engine {
         let sr = self.sr;
         let sr32 = self.sample_rate;
         let smooth = self.smooth_samples;
-        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, lanes, input, monitor, monitor_gain, monitor_track, tape_refs, .. } = self;
+        let Engine { out, tracks, clips, sources, devices, loopers, previews, note_index, voice, master_chain, lanes, input, monitor, monitor_gain, monitor_track, tape_refs, sleep, sleep_skips, .. } = self;
         out.fill(0.0);
         let (out_l, out_r) = out.split_at_mut(BLOCK);
 
@@ -1331,11 +1350,30 @@ impl Engine {
                             for &li in &s.lanes {
                                 apply_lane(d, lanes.get_index(li as usize), at, end - i, playing);
                             }
+                            if *sleep && d.is_idle_instrument() {
+                                continue;
+                            }
                             d.process(&mut sl[i..end], &mut sr_buf[i..end], sr32);
                         }
                     }
                     i = end;
                 }
+            }
+
+            // Asleep: every effect is provably silent on zero input and the buffer is all zero, so
+            // the chain would output zeros and (up to -120 dB tails) change nothing. Skip it and
+            // the gain loop; the gain ramps still advance.
+            if *sleep
+                && t.chain.iter().filter(|s| !s.instrument).all(|s| s.lanes.is_empty() && devices.get_index(s.dev as usize).is_asleep())
+                && sl.iter().chain(sr_buf.iter()).all(|&x| x == 0.0)
+            {
+                for s in t.chain.iter().filter(|s| !s.instrument) {
+                    devices.get_index_mut(s.dev as usize).skip(n, sr32);
+                }
+                t.gain_l.advance(n);
+                t.gain_r.advance(n);
+                *sleep_skips += 1;
+                continue;
             }
 
             // Effects in `order`, each over the whole block (split only at its own lanes' breakpoints).

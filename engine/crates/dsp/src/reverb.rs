@@ -178,6 +178,15 @@ impl Reverb {
         Self { combs: [cl, cr], allpasses: [al, ar], predelay: vec![0.0; max_pre], pre_i: 0, pre_len: 0, sample_rate, max_chunk }
     }
 
+    /// Samples after which a tail of input at full scale has fallen below -120 dB, for the comb
+    /// feedback at `size` (conservative: slowest comb pass, plus the predelay and allpasses).
+    pub fn tail_samples(&self, size: f32) -> u64 {
+        let feedback = (0.70 + 0.28 * size.clamp(0.0, 1.0)) as f64;
+        let longest = self.combs.iter().flatten().map(|c| c.buf.len()).max().unwrap_or(1) as f64;
+        let passes = (1e-6f64.ln() / feedback.ln()).ceil() + 2.0;
+        (passes * longest) as u64 + self.predelay.len() as u64 + 4096
+    }
+
     /// Clear the tail.
     pub fn reset(&mut self) {
         for c in self.combs.iter_mut().flatten() {

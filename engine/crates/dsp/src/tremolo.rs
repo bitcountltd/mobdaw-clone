@@ -64,6 +64,13 @@ impl Tremolo {
         self.phase = 0;
     }
 
+    /// Advance the LFO past `n` samples of silence (what `process` would do to the phase).
+    pub fn skip(&mut self, n: usize, p: &TremParams, sample_rate: f32) {
+        let rate = p.rate_hz.clamp(RATE_MIN, RATE_MAX) as f64;
+        let step = (rate / sample_rate as f64 * 4_294_967_296.0).round() as u32;
+        self.phase = self.phase.wrapping_add(step.wrapping_mul(n as u32));
+    }
+
     /// Process `l`/`r` in place.
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], p: &TremParams, sample_rate: f32) {
         let rate = p.rate_hz.clamp(RATE_MIN, RATE_MAX) as f64;

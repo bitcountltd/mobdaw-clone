@@ -13,6 +13,10 @@ pub const KIND_EQ: u32 = 8;
 
 const SMOOTH_MS: f64 = 10.0;
 
+fn all_zero(l: &[f32], r: &[f32]) -> bool {
+    l.iter().chain(r.iter()).all(|&x| x == 0.0)
+}
+
 pub struct Device {
     pub track: u32,
     pub order: f64,
@@ -142,6 +146,63 @@ impl Device {
             DeviceKind::Lofi(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Eq(e) => e.set_param_smooth(param, value, s),
             DeviceKind::Unknown => {}
+        }
+    }
+
+    /// Whether any smoothed param of this effect is mid-glide. Devices read their ramps at the
+    /// start of a run, so the engine cuts a gliding effect's run into control segments of at most
+    /// 32 frames; at rest it runs the whole block.
+    pub fn is_ramping(&self) -> bool {
+        match &self.kind {
+            DeviceKind::Filter(f) => f.cutoff_log2.is_moving() || f.damping.is_moving() || f.gain_db.is_moving(),
+            DeviceKind::Reverb(v) => v.mix.is_moving() || v.size.is_moving() || v.damp.is_moving(),
+            DeviceKind::Compressor(c) => c.threshold.is_moving() || c.ratio.is_moving() || c.makeup.is_moving(),
+            DeviceKind::Tremolo(t) => t.rate_log2.is_moving() || t.depth.is_moving() || t.spread.is_moving(),
+            DeviceKind::Delay(d) => d.mix.is_moving() || d.feedback.is_moving() || d.drive.is_moving() || d.cutoff_log2.is_moving() || d.resonance.is_moving(),
+            DeviceKind::Synth(s) => s.is_ramping(),
+            DeviceKind::Lofi(d) => d.is_ramping(),
+            DeviceKind::Unknown => false,
+        }
+    }
+
+    /// An instrument with nothing sounding and nothing gliding: rendering it would add exact
+    /// zeros and change no state, so the engine skips it. Effects are never idle (see `is_asleep`).
+    pub fn is_idle_instrument(&self) -> bool {
+        match &self.kind {
+            DeviceKind::Synth(s) => !s.is_active(),
+            DeviceKind::Lofi(d) => !d.is_active() && !d.is_ramping(),
+            _ => false,
+        }
+    }
+
+    /// Whether this effect, fed zeros, would output zeros and leave its audible state as it is
+    /// (or within -120 dB of it), so the engine may skip it while its input is all zero. Never true
+    /// mid-glide (a skipped run would not advance the ramps).
+    pub fn is_asleep(&self) -> bool {
+        if self.bypass {
+            return true;
+        }
+        if self.is_ramping() {
+            return false;
+        }
+        match &self.kind {
+            DeviceKind::Unknown => true,
+            DeviceKind::Filter(f) => f.svf[0].is_zero() && f.svf[1].is_zero(),
+            DeviceKind::Compressor(c) => c.comp.reduction_db() == 0.0,
+            DeviceKind::Tremolo(_) => true,
+            DeviceKind::Reverb(v) => v.zero_run >= v.reverb.tail_samples(v.size_max),
+            DeviceKind::Delay(d) => d.is_asleep(),
+            DeviceKind::Synth(_) | DeviceKind::Lofi(_) => false,
+        }
+    }
+
+    /// Account for `n` skipped frames of silence on an asleep effect.
+    pub fn skip(&mut self, n: usize, sample_rate: f32) {
+        match &mut self.kind {
+            DeviceKind::Reverb(v) => v.zero_run += n as u64,
+            DeviceKind::Delay(d) => d.zero_run += n as u64,
+            DeviceKind::Tremolo(t) => t.skip(n, sample_rate),
+            _ => {}
         }
     }
 
@@ -485,6 +546,9 @@ pub struct ReverbDevice {
     damp: Ramp,
     predelay_ms: f32,
     reverb: Reverb,
+    /// Consecutive frames of all-zero input, and the largest size over that stretch (sleep).
+    zero_run: u64,
+    size_max: f32,
 }
 
 impl ReverbDevice {
@@ -496,6 +560,8 @@ impl ReverbDevice {
             damp: Ramp::new(0.5),
             predelay_ms: 0.0,
             reverb: Reverb::new(sample_rate),
+            zero_run: u64::MAX / 2,
+            size_max: 0.0,
         }
     }
 
@@ -518,6 +584,7 @@ impl ReverbDevice {
     }
 
     pub fn reset(&mut self) {
+        self.zero_run = u64::MAX / 2;
         self.reverb.reset();
     }
 
@@ -526,6 +593,10 @@ impl ReverbDevice {
         self.mix.advance(l.len());
         self.size.advance(l.len());
         self.damp.advance(l.len());
+        let quiet = all_zero(l, r);
+        let size_now = size.max(self.size.target() as f32);
+        self.size_max = if quiet { self.size_max.max(size_now) } else { size_now };
+        self.zero_run = if quiet { self.zero_run + l.len() as u64 } else { 0 };
         self.reverb.process(l, r, size, damp, self.predelay_ms, mix);
     }
 }
@@ -643,6 +714,16 @@ impl TremoloDevice {
         self.trem.reset();
     }
 
+    pub fn skip(&mut self, n: usize, sample_rate: f32) {
+        let p = TremParams {
+            rate_hz: self.rate_log2.value().exp2() as f32,
+            depth: self.depth.value() as f32,
+            shape: self.shape,
+            spread: self.spread.value() as f32,
+        };
+        self.trem.skip(n, &p, sample_rate);
+    }
+
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let p = TremParams {
             rate_hz: self.rate_log2.value().exp2() as f32,
@@ -671,6 +752,11 @@ pub struct DelayDevice {
     resonance: Ramp,
     p: DelayParams,
     delay: TapeDelay,
+    sample_rate: f32,
+    /// Consecutive frames of all-zero input, and the largest feedback and time over that stretch (sleep).
+    zero_run: u64,
+    fb_max: f32,
+    time_max_ms: f32,
 }
 
 impl DelayDevice {
@@ -685,7 +771,22 @@ impl DelayDevice {
             resonance: Ramp::new(p.resonance as f64),
             p,
             delay: TapeDelay::new(sample_rate),
+            sample_rate,
+            zero_run: u64::MAX / 2,
+            fb_max: 0.0,
+            time_max_ms: 0.0,
         }
+    }
+
+    /// Asleep once zero input has outlasted every echo down to -120 dB. Never with feedback of 1 or
+    /// more, and not with warble on (it would stop the warble's phase, changing the next echoes).
+    fn is_asleep(&self) -> bool {
+        if self.fb_max >= 1.0 || self.p.warble != 0.0 {
+            return false;
+        }
+        let passes = if self.fb_max <= 0.0 { 1.0 } else { (1e-6f64.ln() / (self.fb_max as f64).ln()).ceil() };
+        let ms = self.time_max_ms as f64 + 100.0;
+        self.zero_run as f64 >= ms * 1e-3 * self.sample_rate as f64 * (passes * 1.5 + 2.0)
     }
 
     pub fn set_param(&mut self, param: u32, value: f32) {
@@ -711,6 +812,7 @@ impl DelayDevice {
     }
 
     pub fn reset(&mut self) {
+        self.zero_run = u64::MAX / 2;
         self.delay.reset();
     }
 
@@ -721,6 +823,11 @@ impl DelayDevice {
         self.p.cutoff_hz = self.cutoff_log2.value().exp2() as f32;
         self.p.resonance = self.resonance.value() as f32;
         let n = l.len();
+        let quiet = all_zero(l, r);
+        let (fb_now, t_now) = (self.p.feedback.max(self.feedback.target() as f32), self.p.time_ms);
+        self.fb_max = if quiet { self.fb_max.max(fb_now) } else { fb_now };
+        self.time_max_ms = if quiet { self.time_max_ms.max(t_now) } else { t_now };
+        self.zero_run = if quiet { self.zero_run + n as u64 } else { 0 };
         self.mix.advance(n);
         self.feedback.advance(n);
         self.drive.advance(n);

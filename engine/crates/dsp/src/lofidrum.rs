@@ -195,6 +195,10 @@ impl LofiDrum {
         self.cur.live() || (self.old.live() && self.fade_left > 0)
     }
 
+    pub fn is_ramping(&self) -> bool {
+        self.cutoff_log2.is_moving() || self.resonance.is_moving() || self.gain.is_moving()
+    }
+
     /// Add the mono output into `out`.
     pub fn render_add(&mut self, out: &mut [f32]) {
         for chunk in out.chunks_mut(SUB_BLOCK) {

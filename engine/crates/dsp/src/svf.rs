@@ -153,6 +153,11 @@ impl Svf {
         self.ic2 = flush_denormal(self.ic2);
     }
 
+    /// Whether both integrators are exactly zero: zero input then gives zero output and leaves the state zero.
+    pub fn is_zero(&self) -> bool {
+        self.ic1 == 0.0 && self.ic2 == 0.0
+    }
+
     /// Clear the integrator states.
     pub fn reset(&mut self) {
         self.x = 0.0;
