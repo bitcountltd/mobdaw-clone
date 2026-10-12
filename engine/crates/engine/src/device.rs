@@ -114,17 +114,44 @@ impl Device {
         }
     }
 
-    /// An automated value: applied at once, with none of the glide a knob move gets.
-    pub fn set_param_auto(&mut self, param: u32, value: f32) {
+    /// An automated value over one control segment of `len` samples: the param jumps to `from`
+    /// (none of the glide a knob move gets) and, if it is a smoothed one, ramps linearly to `to`
+    /// across the segment. Devices read their ramps at the segment start for coefficients and
+    /// advance them per segment, so a ramp shows per sample where a device interpolates (the
+    /// synth's and drum's gain) and as the exact end value for the next segment. Params that jump
+    /// (mode, times, attack...) take `from` only.
+    pub fn set_param_auto(&mut self, param: u32, from: f32, to: f32, len: usize) {
+        self.set_param_smooth_dispatch(param, from, 0.0);
+        if from != to && self.is_smoothed(param) {
+            self.set_param_smooth_dispatch(param, to, len as f64);
+        }
+    }
+
+    fn set_param_smooth_dispatch(&mut self, param: u32, value: f32, s: f64) {
         match &mut self.kind {
-            DeviceKind::Filter(f) => f.set_param_smooth(param, value, 0.0),
-            DeviceKind::Synth(s) => s.set_param_smooth(param, value, 0.0),
-            DeviceKind::Reverb(v) => v.set_param_smooth(param, value, 0.0),
-            DeviceKind::Compressor(c) => c.set_param_smooth(param, value, 0.0),
-            DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, 0.0),
-            DeviceKind::Delay(d) => d.set_param_smooth(param, value, 0.0),
-            DeviceKind::Lofi(d) => d.set_param_smooth(param, value, 0.0),
+            DeviceKind::Filter(f) => f.set_param_smooth(param, value, s),
+            DeviceKind::Synth(d) => d.set_param_smooth(param, value, s),
+            DeviceKind::Reverb(v) => v.set_param_smooth(param, value, s),
+            DeviceKind::Compressor(c) => c.set_param_smooth(param, value, s),
+            DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, s),
+            DeviceKind::Delay(d) => d.set_param_smooth(param, value, s),
+            DeviceKind::Lofi(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Unknown => {}
+        }
+    }
+
+    /// Whether `param` of this device glides (a `Ramp`) rather than jumping. Keep in step with
+    /// each device's `set_param_smooth`.
+    fn is_smoothed(&self, param: u32) -> bool {
+        match &self.kind {
+            DeviceKind::Filter(_) => matches!(param, 1..=3),
+            DeviceKind::Synth(_) => matches!(param, dsp::synth::P_ROLLOFF | dsp::synth::P_ENV_TO_ROLLOFF | dsp::synth::P_SUSTAIN | dsp::synth::P_GAIN),
+            DeviceKind::Reverb(_) => matches!(param, 0..=2),
+            DeviceKind::Compressor(_) => matches!(param, 0 | 1 | 4),
+            DeviceKind::Tremolo(_) => matches!(param, 0 | 1 | 3),
+            DeviceKind::Delay(_) => matches!(param, 0 | 2 | 4 | 6 | 7),
+            DeviceKind::Lofi(_) => matches!(param, dsp::lofidrum::P_CUTOFF | dsp::lofidrum::P_RESONANCE | dsp::lofidrum::P_GAIN),
+            DeviceKind::Unknown => false,
         }
     }
 
@@ -143,7 +170,9 @@ impl Device {
         }
     }
 
-    /// Process one control segment (at most 32 samples) of the track's stereo buffer.
+    /// Process a stretch of the track's stereo buffer (instruments get at most 32 samples at a
+    /// time: they are segmented at notes; effects get whole blocks or the pieces between their
+    /// own lane breakpoints).
     ///
     /// * Bypassed effect: the buffer is left untouched (bit-exact passthrough).
     /// * Bypassed instrument: contributes silence.
@@ -159,21 +188,25 @@ impl Device {
             DeviceKind::Tremolo(t) => t.process(l, r, sample_rate),
             DeviceKind::Delay(d) => d.process(l, r),
             DeviceKind::Synth(s) => {
-                let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
-                let mono = &mut mono[..l.len()];
-                s.render_add(mono);
-                for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
-                    *l += *m;
-                    *r += *m;
+                for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
+                    let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
+                    let mono = &mut mono[..l.len()];
+                    s.render_add(mono);
+                    for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
+                        *l += *m;
+                        *r += *m;
+                    }
                 }
             }
             DeviceKind::Lofi(d) => {
-                let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
-                let mono = &mut mono[..l.len()];
-                d.render_add(mono);
-                for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
-                    *l += *m;
-                    *r += *m;
+                for (l, r) in l.chunks_mut(dsp::finnwave::SUB_BLOCK).zip(r.chunks_mut(dsp::finnwave::SUB_BLOCK)) {
+                    let mut mono = [0.0f32; dsp::finnwave::SUB_BLOCK];
+                    let mono = &mut mono[..l.len()];
+                    d.render_add(mono);
+                    for ((l, r), m) in l.iter_mut().zip(r.iter_mut()).zip(mono.iter()) {
+                        *l += *m;
+                        *r += *m;
+                    }
                 }
             }
             DeviceKind::Unknown => {}
