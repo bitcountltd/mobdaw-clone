@@ -1,6 +1,7 @@
 import type { Me } from '@mobdaw/shared'
 import { CLOUD } from '../cloud'
 import { h, mount } from '../dom'
+import { icon } from '../theme/icons'
 import { nav } from '../ui/nav'
 import { aboutColumn } from './about'
 import { demoSection } from './demos'
@@ -24,8 +25,9 @@ export function homePage(me: Me | null) {
     main.append(me ? cloudSection(me) : cloudPitch(), demoSection(me))
     const top = nav(me)
     const about = aboutColumn()
-    // On the home page the wordmark in the bar shows / hides the about column instead of reloading the page.
-    top.querySelector('.logo')!.replaceWith(h('a', { className: 'logo', href: '#', title: 'about mobdaw', onclick: (e: Event) => (e.preventDefault(), about.toggle()) }, 'mobdaw'))
+    // The big wordmark below is the brand here; the bar's spot for it shows / hides the about column instead.
+    top.querySelector('.logo')!.replaceWith(h('button', { className: 'nav-link', 'aria-controls': 'about', onclick: () => about.toggle() }, icon('help'), 'about'))
+    about.el.id = 'about'
     mount(top, h('div', { className: 'home with-about' }, about.el, main))
   } else {
     // static build: no account bar; the wordmark in the intro is the brand

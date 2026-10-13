@@ -113,3 +113,6 @@ input.tile-rename { width: 100%; min-height: 0; padding: 1px 4px; margin: -2px -
   .sec-head .import .btn span { display: none; }
   .sec-head .import .btn { padding: 6px 8px; }
 }
+.site-nav .nav-link { color: var(--dim); }
+.site-nav .nav-link:hover:not(:disabled) { color: var(--fg); }
+.card form { gap: 10px; }
