@@ -5,6 +5,7 @@ import { defineConfig } from 'vite'
 //   - daw.bitcount.com (static, deploy/aws): BASE_PATH=/
 // Dev always serves from the root unless BASE_PATH is set.
 const normalize = (p: string) => {
+  if (p === './' || p === '.') return './' // relative: the site works from any folder (e.g. a preview host)
   const trimmed = p.replace(/^\/+|\/+$/g, '')
   return trimmed ? `/${trimmed}/` : '/'
 }
