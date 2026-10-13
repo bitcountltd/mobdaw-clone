@@ -1,0 +1,149 @@
+/* The dock's clip tab: the tools in the dock bar, the piano roll (ui/noteEditor.ts), the drum grid (ui/drumGrid.ts)
+   and the audio clip panel. Grid spacing comes from custom properties the editors set: --beat, --bar, --sub (px),
+   --row (px per pitch), and --tc, the track colour. */
+.studio .ce-body { height: 100%; }
+.studio .ce-toolbar, .studio .ce-tools { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.studio .ce-tools[hidden] { display: none; }
+.studio .ce-field { display: inline-flex; gap: 6px; align-items: center; font-size: var(--fs-sm); }
+.studio .ce-tools input.numfield { height: 24px; padding: 0 4px; font-size: var(--fs-sm); }
+.studio .ce-tools input.numfield[hidden] { display: none; }
+.studio .ce-loop { display: inline-flex; gap: 4px; align-items: center; }
+.studio .ce-sep { flex: none; width: 1px; height: 18px; background: var(--line); }
+.studio .ce-grid { height: 24px; padding: 0 6px; font-size: var(--fs-sm); }
+.studio .dock .btn.sm { min-height: 24px; padding: 2px 10px; gap: 4px; font-size: var(--fs-sm); font-weight: 500; }
+.studio .dock .btn.sm svg { margin-left: -3px; }
+.studio .dock .seg > button { padding: 2px 8px; }
+.studio .dock .seg.sm > button { padding: 1px 6px; font-size: var(--fs-xs); }
+@media (max-width: 1180px) { .studio .ce-tools .ce-field > .dim:first-child { display: none; } }
+
+/* ---------- piano roll ---------- */
+.studio .pr {
+  --key-white: #bfb9ae; --key-white-hi: #d6d0c4; --key-black: #1d1e22; --key-line: rgba(20, 20, 24, .5);
+  --row-black: rgba(0, 0, 0, .22); --row-line: rgba(0, 0, 0, .28);
+  --gl-bar: rgba(235, 230, 220, .16); --gl-beat: rgba(235, 230, 220, .07); --gl-sub: rgba(235, 230, 220, .028);
+  position: relative; display: grid; grid-template-rows: minmax(0, 1fr) var(--vel-h); height: 100%; outline: none;
+}
+.studio .pr:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-soft); }
+.studio .pr-scroll { position: relative; overflow: auto; overscroll-behavior: contain; }
+.studio .pr-inner { display: flex; width: max-content; min-width: 100%; }
+
+/* the keyboard: white keys in warm paper, black keys as short dark bars; C's labelled */
+.studio .pr-keys { position: sticky; left: 0; z-index: 4; flex: none; width: var(--keys-w); background: var(--key-white); box-shadow: 1px 0 0 var(--line), 4px 0 8px rgba(0, 0, 0, .25); cursor: pointer; }
+.studio .pr-key { position: relative; height: var(--row); box-sizing: border-box; background: linear-gradient(to right, var(--key-white), var(--key-white-hi)); }
+.studio .pr-key.edge { box-shadow: inset 0 -1px 0 var(--key-line); }
+.studio .pr-key.black { background:
+  linear-gradient(to bottom, transparent calc(50% - .5px), var(--key-line) calc(50% - .5px), var(--key-line) calc(50% + .5px), transparent calc(50% + .5px)) right / 38% 100% no-repeat,
+  linear-gradient(to right, #2a2c31, var(--key-black) 58%, #0f1012 62%, transparent 62%),
+  linear-gradient(to right, var(--key-white), var(--key-white-hi)); border-radius: 0 2px 2px 0; }
+.studio .pr-key span { position: absolute; right: 4px; bottom: 0; font-size: 9px; line-height: var(--row); color: #57534c; font-variant-numeric: tabular-nums; pointer-events: none; }
+.studio .pr-keys.tight .pr-key span { font-size: 8px; line-height: 8px; }
+.studio .pr-key:hover { filter: brightness(1.06); }
+.studio .pr-key.down { background: var(--tc); }
+
+/* the grid: black-key rows a shade darker, row lines, then bar / beat / step lines on top */
+.studio .pr-grid { position: relative; flex: none; background: #1b1c20; cursor: crosshair; }
+.studio .pr-rows { position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(to bottom, var(--row-line) 1px, transparent 1px),
+    linear-gradient(to bottom,
+      rgba(235, 230, 220, .035) 0 var(--row), transparent var(--row) calc(var(--row) * 2),
+      var(--row-black) calc(var(--row) * 2) calc(var(--row) * 3), transparent calc(var(--row) * 3) calc(var(--row) * 4),
+      var(--row-black) calc(var(--row) * 4) calc(var(--row) * 5), transparent calc(var(--row) * 5) calc(var(--row) * 6),
+      var(--row-black) calc(var(--row) * 6) calc(var(--row) * 7), transparent calc(var(--row) * 7) calc(var(--row) * 9),
+      var(--row-black) calc(var(--row) * 9) calc(var(--row) * 10), transparent calc(var(--row) * 10) calc(var(--row) * 11),
+      var(--row-black) calc(var(--row) * 11) calc(var(--row) * 12));
+  background-size: 100% var(--row), 100% calc(var(--row) * 12); }
+.studio .pr-rows::after { content: ''; position: absolute; inset: 0;
+  background-image:
+    linear-gradient(to right, var(--gl-bar) 1px, transparent 1px),
+    linear-gradient(to right, var(--gl-beat) 1px, transparent 1px),
+    linear-gradient(to right, var(--gl-sub) 1px, transparent 1px),
+    linear-gradient(to bottom, transparent calc(var(--row) - 1px), rgba(235, 230, 220, .08) calc(var(--row) - 1px), rgba(235, 230, 220, .08) var(--row), transparent var(--row));
+  background-size: var(--bar) 100%, var(--beat) 100%, var(--sub) 100%, 100% calc(var(--row) * 12); }
+.studio .pr.no-beats .pr-rows::after { background-size: var(--bar) 100%, 0 0, 0 0, 100% calc(var(--row) * 12); }
+
+/* notes: rounded blocks in the track colour, stronger the harder they're played */
+.studio .pr .note {
+  position: absolute; z-index: 1; height: calc(var(--row) - 1px); box-sizing: border-box; padding-left: 4px; overflow: hidden;
+  border-radius: 3px; cursor: grab; white-space: nowrap;
+  font-size: 9px; line-height: calc(var(--row) - 1px); font-weight: 600; color: rgba(15, 15, 18, .72);
+  background: color-mix(in srgb, var(--tc) calc(38% + var(--v, .8) * 62%), #15161a);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), inset 0 0 0 1px rgba(0, 0, 0, .28), 0 1px 2px rgba(0, 0, 0, .35);
+}
+.studio .pr .note::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
+.studio .pr .note:hover::after { background: rgba(255, 255, 255, .18); }
+.studio .pr .note.sel { z-index: 2; background: color-mix(in srgb, color-mix(in srgb, var(--tc) calc(38% + var(--v, .8) * 62%), #15161a) 78%, var(--fg)); box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 1px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .4); }
+.studio .pr .note.ignored { opacity: .3; }
+.studio .pr-marquee { position: absolute; z-index: 3; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 2px; pointer-events: none; }
+.studio .pr-marquee[hidden], .studio .pr-playhead[hidden], .studio .pr-hint[hidden], .studio .ne-loop[hidden] { display: none; }
+.studio .pr-playhead { position: absolute; z-index: 3; top: 0; bottom: 0; left: 0; width: 1px; background: var(--accent); box-shadow: 0 0 6px rgba(240, 180, 76, .5); pointer-events: none; will-change: transform; }
+.studio .pr-hint { position: absolute; z-index: 5; left: calc(var(--keys-w) + 50% - var(--keys-w) / 2); top: 38%; transform: translate(-50%, -50%); padding: 6px 12px; border-radius: var(--r-md); background: rgba(23, 24, 27, .82); font-size: var(--fs-sm); color: var(--dim); pointer-events: none; }
+
+/* the pattern's end, and its handle */
+.studio .ne-loop { position: absolute; z-index: 2; top: 0; bottom: 0; background: rgba(10, 10, 12, .42); border-left: 1px solid var(--line-strong); pointer-events: none; }
+.studio .ne-grip { position: absolute; top: 0; bottom: 0; left: -4px; width: 7px; cursor: ew-resize; pointer-events: auto; }
+.studio .ne-grip:hover { background: linear-gradient(var(--accent), var(--accent)) no-repeat center / 2px 100%; }
+
+/* the velocity lane */
+.studio .pr-vel-lane { display: flex; min-height: 0; border-top: 1px solid var(--line-strong); background: var(--bg); }
+.studio .pr-vel-label { flex: none; display: flex; align-items: flex-end; width: var(--keys-w); box-sizing: border-box; padding: 0 0 5px 6px; font-size: var(--fs-xs); color: var(--dim); background: var(--panel); border-right: 1px solid var(--line); }
+.studio .pr-vel-scroll { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.studio .pr-vel { position: relative; height: 100%; cursor: ns-resize;
+  background-image: linear-gradient(to right, var(--gl-bar) 1px, transparent 1px), linear-gradient(to bottom, transparent calc(8px + 50% - 4px), rgba(235, 230, 220, .05) calc(8px + 50% - 4px), rgba(235, 230, 220, .05) calc(8px + 50% - 3px), transparent 0);
+  background-size: var(--bar) 100%, 100% 100%; }
+.studio .vbar { position: absolute; bottom: 0; width: 2px; height: calc(var(--vv, .8) * (100% - 8px)); background: color-mix(in srgb, var(--tc) 70%, transparent); pointer-events: none; }
+.studio .vbar::before { content: ''; position: absolute; top: -2px; left: -2px; width: 6px; height: 4px; border-radius: 1px; background: var(--tc); }
+.studio .vbar.sel, .studio .vbar.sel::before { background: var(--accent); }
+.studio .vbar.ignored { opacity: .3; }
+
+/* ---------- drum grid ---------- */
+.studio .dg { height: 100%; outline: none; }
+.studio .dg-scroll { height: 100%; overflow: auto; overscroll-behavior: contain; }
+.studio .dg-inner { display: flex; width: max-content; min-width: 100%; padding: 6px 0 12px; }
+.studio .dg-names { position: sticky; left: 0; z-index: 3; flex: none; width: var(--names-w); background: var(--panel); box-shadow: 1px 0 0 var(--line), 4px 0 8px rgba(0, 0, 0, .2); }
+.studio .dg-name { display: flex; align-items: center; gap: 7px; height: var(--row-h); padding: 0 10px 0 10px; font-size: var(--fs-sm); cursor: pointer; user-select: none; }
+.studio .dg-name:hover { background: var(--raise); }
+.studio .dg-led { flex: none; width: 8px; height: 8px; border-radius: 2px; background: color-mix(in srgb, var(--tc) 45%, var(--bg)); transition: background var(--t-fast) linear, box-shadow var(--t-fast) linear; }
+.studio .dg-name.down .dg-led { background: var(--tc); box-shadow: 0 0 8px var(--tc); }
+.studio .dg-name.off { color: var(--faint); }
+.studio .dg-drum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio .dg-key { margin-left: auto; font-size: var(--fs-xs); color: var(--dim); font-variant-numeric: tabular-nums; }
+.studio .dg-cells { --cell: #25272c; position: relative; flex: none; }
+.studio .dg-row { position: relative; height: var(--row-h); cursor: pointer;
+  background-image:
+    linear-gradient(to right, var(--grid-bar) 1px, transparent 1px),
+    linear-gradient(to right, var(--cell) calc(var(--step) - 3px), transparent calc(var(--step) - 3px)),
+    linear-gradient(to right, rgba(235, 230, 220, .03) var(--beat), transparent var(--beat));
+  background-size: var(--bar) 100%, var(--step) calc(100% - 6px), calc(var(--beat) * 2) 100%;
+  background-position: 0 0, 1px 3px, 0 0; background-repeat: repeat-x; }
+.studio .dg-row:hover { --cell: #2b2e33; }
+.studio .dg-cells.fine .dg-row { background-size: var(--bar) 100%, var(--step) calc(100% - 6px), calc(var(--beat) * 2) 100%; background-image: linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to right, var(--cell) calc(var(--step) - 1px), transparent calc(var(--step) - 1px)), linear-gradient(to right, rgba(235, 230, 220, .03) var(--beat), transparent var(--beat)); }
+.studio .dg-hit { position: absolute; top: 3px; bottom: 3px; overflow: hidden; border-radius: 3px; pointer-events: none;
+  background: color-mix(in srgb, var(--tc) calc(40% + var(--v, 1) * 60%), #1d1e22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 1px 2px rgba(0, 0, 0, .35); }
+.studio .dg-hit::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: calc((1 - var(--v, 1)) * 100%); background: rgba(12, 12, 14, .32); }
+.studio .dg-hit.rep { opacity: .38; }
+.studio .dg-rep { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(10, 10, 12, .38); border-left: 1px solid var(--line-strong); pointer-events: none; }
+.studio .dg-cells .pr-playhead { z-index: 2; }
+.studio .dg-add { display: inline-flex; margin: 8px 10px; height: 24px; padding: 0 10px; font-size: var(--fs-sm); color: var(--dim); border: 1px dashed var(--line-strong); }
+.studio .dg-add:hover:not(:disabled) { color: var(--fg); border-color: var(--dim); background: none; }
+.studio .dg-empty { padding: 20px 16px; font-size: var(--fs-sm); color: var(--dim); }
+
+/* ---------- audio clip ---------- */
+.studio .audio-clip { display: grid; grid-template-rows: minmax(60px, 1fr) auto; gap: 12px; height: 100%; box-sizing: border-box; padding: 12px 14px; }
+.studio .ac-wave { position: relative; min-height: 0; overflow: hidden; color: var(--tc); border: 1px solid var(--line); border-radius: var(--r-md);
+  background: linear-gradient(color-mix(in srgb, var(--tc) 10%, var(--bg)), color-mix(in srgb, var(--tc) 16%, var(--bg))); }
+.studio .ac-canvas, .studio .ac-fades { position: absolute; inset: 0; width: 100%; height: 100%; }
+.studio .ac-fades { pointer-events: none; }
+.studio .ac-env { fill: none; stroke: var(--fg); stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: .85; }
+.studio .ac-shade { fill: rgba(12, 12, 14, .5); }
+.studio .ac-handle { position: absolute; top: 3px; width: 10px; height: 10px; margin-left: -5px; border-radius: 2px; background: var(--fg); box-shadow: 0 1px 3px rgba(0, 0, 0, .5); cursor: ew-resize; transform: rotate(45deg); }
+.studio .ac-handle.in { margin-left: 0; }
+.studio .ac-handle.out { margin-left: -10px; }
+.studio .ac-pass { position: absolute; right: 8px; bottom: 6px; font-size: var(--fs-xs); }
+.studio .ac-controls { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: flex-end; }
+.studio .ac-group { display: flex; flex-direction: column; gap: 6px; }
+.studio .ac-label { font-size: var(--fs-xs); color: var(--dim); }
+.studio .ac-row { display: flex; gap: 14px; align-items: center; min-height: 52px; }
+.studio .ac-info { display: flex; flex-direction: column; gap: 2px; margin-left: auto; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; text-align: right; }
+.studio .audio-clip .knob { --knob-c: var(--tc); }
