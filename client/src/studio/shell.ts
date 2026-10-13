@@ -8,6 +8,7 @@ import { mountDock } from './dock/dock'
 import { mountBrowser } from './browser/browser'
 import { mountHelp } from './help'
 import { mountKeys } from './keys'
+import { mountMixer } from './mixer/mixer'
 import { mountQwerty } from './qwerty'
 import { mountStatusbar } from './statusbar'
 import { Studio } from './studio'
@@ -33,6 +34,7 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
   const browser = h('aside', { className: 'studio-browser' }, browserMount)
 
   const arrange = mountArrange(st)
+  const mixer = mountMixer(st) // shown in the arrangement's place while ui.view is 'mix'
   const dock = mountDock(st)
   const keys = mountKeys(st)
 
@@ -41,17 +43,18 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
 
   const el = h('div', { className: 'studio' },
     top.el,
-    h('div', { className: 'studio-main' }, browser, h('div', { className: 'studio-centre' }, arrange.el, chat.el)),
+    h('div', { className: 'studio-main' }, browser, h('div', { className: 'studio-centre' }, arrange.el, mixer.el, chat.el)),
     dock.el,
     statusBar)
 
   function layout() {
+    arrange.el.hidden = st.ui.view === 'mix'
     browser.hidden = !st.ui.browserOpen
     el.classList.toggle('browser-open', st.ui.browserOpen)
   }
   const offs = [
     st.on('ui', (p) => {
-      if (!('browserOpen' in p)) return
+      if (!('browserOpen' in p) && !('view' in p)) return
       layout()
       window.dispatchEvent(new Event('resize')) // the arrangement's width changed
     }),
@@ -74,6 +77,7 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
       status.destroy()
       arrange.destroy()
       dock.destroy()
+      mixer.destroy()
       chat.destroy()
       st.destroy()
     },

@@ -1,0 +1,69 @@
+/* The mixer view (studio/mixer): channel strips on a dark desk, each capped and labelled in its track colour (--tc). */
+.studio .mixer { position: relative; flex: 1; min-width: 0; min-height: 0; background: var(--bg); }
+.studio .mixer[hidden] { display: none; }
+.studio .mx-scroll { display: flex; gap: 16px; height: 100%; box-sizing: border-box; padding: 12px 14px 12px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
+.studio .mx-strips { display: flex; gap: 4px; min-height: 0; }
+.studio .mx-empty { align-self: center; margin: 0 auto; font-size: var(--fs-sm); color: var(--dim); }
+.studio .mx-empty[hidden] { display: none; }
+
+.studio .mx-strip {
+  position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 8px; flex: none; width: 88px; min-height: 0;
+  box-sizing: border-box; padding: 0 6px 6px; overflow: hidden;
+  background: linear-gradient(#25272c, #202226); border: 1px solid #33373d; border-radius: var(--r-md);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+}
+.studio .mx-strip.focus { border-color: var(--line-strong); background: linear-gradient(#2a2c32, #232529); }
+.studio .mx-strip.drop-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.studio .mx-strip.click { width: 62px; }
+.studio .mx-cap { flex: none; height: 4px; margin: 0 -6px; background: var(--tc); }
+.studio .mx-strip.muted .mx-cap { background: color-mix(in srgb, var(--tc) 35%, var(--bg)); }
+.studio .mx-top { display: flex; justify-content: space-between; align-items: center; height: 14px; margin-top: -2px; }
+.studio .mx-kind { display: inline-flex; gap: 4px; align-items: center; font-size: var(--fs-xs); color: var(--dim); font-variant-numeric: tabular-nums; }
+.studio .mx-kind svg { color: var(--tc); }
+
+/* inserts: a short list of the chain, like the slots on a console */
+.studio .mx-section { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.studio .mx-label { font-size: var(--fs-xs); color: var(--dim); }
+.studio .mx-inserts { display: flex; flex-direction: column; gap: 2px; height: calc(5 * 18px + 4 * 2px); }
+.studio .mx-insert { justify-content: flex-start; gap: 5px; height: 18px; padding: 0 5px; overflow: hidden; border-radius: 2px; font-size: var(--fs-xs); color: var(--fg); background: rgba(0, 0, 0, .25); }
+.studio .mx-insert span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio .mx-insert i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 4px rgba(240, 180, 76, .6); }
+.studio .mx-insert.inst i { background: var(--tc); box-shadow: none; }
+.studio .mx-insert.off { color: var(--faint); }
+.studio .mx-insert.off i { background: var(--faint); box-shadow: none; }
+.studio .mx-insert.add, .studio .mx-insert.more { color: var(--dim); background: none; border: 1px dashed var(--line); }
+.studio .mx-insert.add:hover, .studio .mx-insert.more:hover { color: var(--fg); border-color: var(--line-strong); }
+.studio .mx-insert:hover:not(.add):not(.more) { background: var(--line); }
+
+/* pan, fader + meter, buttons */
+.studio .mx-pan { display: flex; flex-direction: column; align-items: center; gap: 0; flex: none; }
+.studio .mx-pan-out { font-size: var(--fs-xs); line-height: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.studio .mx-fader { position: relative; display: flex; justify-content: center; gap: 4px; flex: 1; min-height: 60px; }
+.studio .mx-fader .fader.v { height: 100%; }
+.studio .mx-fader .meter-el.v { height: calc(100% - 20px); margin-top: 11px; }
+.studio .mx-strip .fader { --fader-c: var(--tc); }
+.studio .mx-strip.click .fader.v { width: 30px; }
+.studio .mx-btns { display: flex; justify-content: center; gap: 3px; flex: none; }
+.studio .mx-btn { width: 22px; height: 20px; padding: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--dim); border: 1px solid var(--line); border-radius: var(--r-sm); background: rgba(0, 0, 0, .2); }
+.studio .mx-btn.icon-btn svg { width: 12px; height: 12px; }
+.studio .mx-btn.on { border-color: transparent; }
+.studio .mx-btn[data-kind=solo].on { background: var(--accent); }
+.studio .mx-strip.click .mx-btn { width: 20px; }
+/* the scribble strip: the track's name on a label in its colour */
+.studio .mx-name { flex: none; display: block; height: 24px; padding: 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 3px;
+  font-size: var(--fs-sm); font-weight: 600; line-height: 24px; text-align: center; color: #18140c;
+  background: linear-gradient(color-mix(in srgb, var(--tc) 92%, white), var(--tc)); box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .2); }
+.studio .mx-name:hover:not(:disabled) { background: color-mix(in srgb, var(--tc) 80%, white); }
+
+/* the master: wider, the chain, a tall meter with a dB scale and the peak readout */
+.studio .mx-strip.master { --tc: var(--fg); width: 148px; margin-left: auto; border-color: var(--line-strong); }
+.studio .mx-strip.master .mx-cap { background: linear-gradient(90deg, var(--accent), var(--rec)); }
+.studio .mx-strip.master .mx-section { margin-top: 2px; }
+.studio .mx-strip.master .mx-inserts { height: auto; min-height: calc(5 * 18px + 4 * 2px); }
+.studio .mx-strip.master .mx-name { color: var(--on-accent); background: linear-gradient(color-mix(in srgb, var(--accent) 88%, white), var(--accent)); }
+.studio .mx-meter-big { position: relative; display: flex; justify-content: center; gap: 6px; flex: 1; min-height: 60px; padding: 4px 0; }
+.studio .mx-meter-big .meter-el.v { width: 22px; height: 100%; }
+.studio .mx-scale { position: relative; width: 22px; height: 100%; }
+.studio .mx-scale span { position: absolute; right: 0; bottom: calc(var(--p) * (100% - 6px)); transform: translateY(50%); font-size: 9px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.studio .mx-peaks { display: flex; justify-content: space-around; gap: 4px; height: 22px; padding: 0 4px; font-size: var(--fs-sm); color: var(--fg); font-variant-numeric: tabular-nums; border: 1px solid var(--line); border-radius: var(--r-sm); background: #141517; }
+.studio .mx-peaks.hot { color: var(--rec); border-color: var(--rec); }
