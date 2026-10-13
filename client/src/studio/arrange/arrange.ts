@@ -1,20 +1,25 @@
 // The arrangement: one scroller holding the ruler (sticky on top), the track rows (headers sticky on the left) and the
 // automation. It owns zoom anchoring (ctrl + wheel keeps the time under the pointer; the top bar's buttons keep the middle),
-// following the playhead, and drops outside any lane.
+// following the playhead, zoom to fit, the musical grid under the lanes (grid.ts) and drops outside any lane.
+import { clipLength, getClips, getLoop, getPads, getTracks, isForever, patternTicks, samplesPerBar } from '@mobdaw/shared'
 import { h } from '../../dom'
 import type { Studio } from '../studio'
 import { HEADER, audioFiles, mountLanes } from './lanes'
+import { mountLaneGrid } from './grid'
 import { mountRuler } from './ruler'
 import { mountTrackHeaders } from './tracks'
 import './arrange.css'
 
-const ZOOM_MIN = 10, ZOOM_MAX = 800
+export const ZOOM_MIN = 10, ZOOM_MAX = 800
+/** Ask the arrangement to zoom so the whole song fits the visible lanes (the top bar, the status bar and Z send it). */
+export const ZOOM_FIT = 'mobdaw:zoom-fit'
 
 export function mountArrange(st: Studio) {
   const content = h('div', { className: 'content' })
   const scroll = h('div', { className: 'scroll' }, content)
   const el = h('section', { className: 'arrange' }, scroll)
-  const ruler = mountRuler(st)
+  const ruler = mountRuler(st, scroll)
+  const grid = mountLaneGrid(st, el)
   const headers = mountTrackHeaders(st)
   const lanes = mountLanes(st, { scroll }, headers)
   content.append(ruler.el, lanes.el)
@@ -55,6 +60,26 @@ export function mountArrange(st: Studio) {
     else if (st.ui.follow && st.playing && px > right - 20) scroll.scrollLeft = px - HEADER - 40
   }
 
+  /** Where the song ends (samples): the last clip, region or loop end; looping-forever clips count one pattern. At least 4 bars. */
+  function songEnd() {
+    const scapes = new Set(getTracks(st.doc).filter((t) => t.kind === 'soundscape').map((t) => t.id))
+    const ends = getClips(st.doc).filter((c) => !scapes.has(c.trackId)).map((c) => {
+      if (!isForever(c)) return c.start + clipLength(c, st.rate)
+      return c.start + (c.kind === 'midi' ? (patternTicks(c) / c.ppq) * (60 / c.bpm) * st.rate : clipLength(c, st.rate))
+    })
+    const loop = getLoop(st.doc)
+    return Math.max(4 * samplesPerBar(st.tempo(), st.rate), ...ends, ...getPads(st.doc).map((p) => p.start + p.length), loop?.end ?? 0)
+  }
+  function zoomFit() {
+    const w = scroll.clientWidth - HEADER - 24
+    if (w <= 0) return
+    const pps = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, w / (songEnd() / st.rate)))
+    anchor = scroll.getBoundingClientRect().left + HEADER // (keeps time 0 at the left edge, then scroll to it)
+    st.setUi({ pps })
+    scroll.scrollLeft = 0
+  }
+  addEventListener(ZOOM_FIT, zoomFit)
+
   /** The scroll area spans the whole timeline (the ruler and the lanes inside it are as wide). */
   const size = () => (content.style.width = `${HEADER + st.x(st.extent())}px`)
   const offs = [
@@ -71,6 +96,8 @@ export function mountArrange(st: Studio) {
     el,
     destroy() {
       offs.forEach((f) => f())
+      removeEventListener(ZOOM_FIT, zoomFit)
+      grid.destroy()
       lanes.destroy()
       headers.destroy()
       ruler.destroy()

@@ -1,0 +1,48 @@
+/* The musical grid (studio/arrange/grid.ts, ruler.ts): lane grid lines and loop band, the bars-and-beats ruler, the loop
+   brace and the playhead's head. */
+.studio .arrange {
+  --grid-sub: rgba(235, 230, 220, .022);
+  --loop-band: rgba(240, 180, 76, .055);
+  --loop-band-off: rgba(235, 230, 220, .018);
+  --rl-bar: rgba(235, 230, 220, .30);
+  --rl-beat: rgba(235, 230, 220, .17);
+  --rl-sub: rgba(235, 230, 220, .09);
+}
+/* every lane body (track lanes, automation) paints the grid under its clips; the master row and source lanes don't */
+.studio .arrange .lane-row > .lane-body:not(.master-body):not(.src-body) { background-image: var(--lane-grid, none); }
+
+/* --- ruler: a loop strip on top, bar numbers and ticks below */
+.studio .arrange .ruler.bb { height: 30px; cursor: default; user-select: none; -webkit-user-select: none; }
+.studio .ruler.bb .ruler-body { cursor: text; }
+.studio .ruler.bb .rl-canvas { position: absolute; top: 0; height: 100%; pointer-events: none; }
+.studio .ruler.bb .rl-strip { position: absolute; left: 0; right: 0; top: 0; height: 11px; cursor: crosshair; }
+.studio .ruler.bb .rl-strip:hover { background: rgba(235, 230, 220, .03); }
+.studio .ruler.bb.dragging, .studio .ruler.bb.dragging * { cursor: grabbing; }
+
+/* the loop region: a band through the ruler and a brace in the strip with two ends */
+.studio .rl-loop { position: absolute; top: 0; bottom: 0; background: var(--loop-band-off); z-index: 1; pointer-events: none; }
+.studio .rl-loop[hidden] { display: none; }
+.studio .rl-loop.on { background: rgba(240, 180, 76, .09); }
+.studio .rl-brace {
+  position: absolute; left: 0; right: 0; top: 2px; height: 7px; pointer-events: auto; cursor: grab;
+  border: 1.5px solid var(--faint); border-bottom: 0; border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--faint) 35%, transparent);
+}
+.studio .rl-loop.on .rl-brace { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.studio .rl-brace:hover { background: color-mix(in srgb, var(--faint) 60%, transparent); }
+.studio .rl-loop.on .rl-brace:hover { background: color-mix(in srgb, var(--accent) 75%, transparent); }
+/* the ends: grab zones a little wider than they look, with a short tick running down into the numbers */
+.studio .rl-handle { position: absolute; top: 0; height: 100%; width: 9px; pointer-events: auto; cursor: ew-resize; z-index: 1; }
+.studio .rl-handle.l { left: -4px; }
+.studio .rl-handle.r { right: -4px; }
+.studio .rl-handle::after { content: ''; position: absolute; left: 4px; top: 2px; bottom: 0; width: 1.5px; background: var(--faint); }
+.studio .rl-loop.on .rl-handle::after { background: var(--accent); }
+.studio .rl-handle:hover::after { width: 2.5px; left: 3.5px; }
+
+/* the playhead: an accent line with a small triangle head in the ruler */
+.studio .arrange .playhead { background: var(--accent); }
+.studio .ruler.bb .overlay { z-index: 2; }
+.studio .ruler.bb .playhead::before {
+  content: ''; position: absolute; top: 0; left: -5px; width: 11px; height: 8px; background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}

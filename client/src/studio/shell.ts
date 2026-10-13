@@ -5,7 +5,10 @@ import type { Session } from '../project/session'
 import { chatPanel } from '../ui/chat'
 import { mountArrange } from './arrange/arrange'
 import { mountDock } from './dock/dock'
+import { mountBrowser } from './browser/browser'
+import { mountHelp } from './help'
 import { mountKeys } from './keys'
+import { mountQwerty } from './qwerty'
 import { Studio } from './studio'
 import { mountTopbar, type Cloud } from './topbar'
 import './studio.css'
@@ -21,9 +24,11 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
   const top = mountTopbar(st, { projectName, renameProject, cloud, chat: s.local ? undefined : chat })
   unread = top.setUnread
 
-  // The browser of sounds, instruments, effects and project audio (browser/browser.ts, built separately): this panel
-  // is its mount point. Replace the placeholder with `mountBrowser(st).el`.
-  const browserMount = h('div', { className: 'browser-mount' }, h('h2', { className: 'browser-title' }, 'browser'))
+  // The browser of sounds, instruments, effects and project audio (browser/browser.ts), in the left panel.
+  const qwerty = mountQwerty(st) // (before the browser, which shows its state)
+  const help = mountHelp(st)
+  const browserView = mountBrowser(st)
+  const browserMount = h('div', { className: 'browser-mount' }, browserView.el)
   const browser = h('aside', { className: 'studio-browser' }, browserMount)
 
   const arrange = mountArrange(st)
@@ -64,6 +69,9 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
     destroy() {
       offs.forEach((f) => f())
       keys.destroy()
+      qwerty.destroy()
+      help.destroy()
+      browserView.destroy()
       top.destroy()
       arrange.destroy()
       dock.destroy()

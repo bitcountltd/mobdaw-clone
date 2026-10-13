@@ -6,7 +6,7 @@
 // Timeline positions stay in samples. The tempo only drives the ruler, the snap grid, new MIDI clips and the click.
 // Changing the tempo (`setProjectTempo`) moves everything so it stays on the same bar and beat.
 import * as Y from 'yjs'
-import { DEFAULT_MIDI_BPM, clipsMap, getClips, getPads, getPoints, getSampleRate, getTracks, metaMap, padsMap, pointsMap, tracksMap, type Track } from './schema.ts'
+import { DEFAULT_MIDI_BPM, addNote, clipsMap, getClips, getNotes, getPads, getPoints, getSampleRate, getTracks, metaMap, notesMap, padsMap, pointsMap, tracksMap, type Track } from './schema.ts'
 
 export type Tempo = { bpm: number; beatsPerBar: number }
 export type LoopRegion = { start: number; end: number; on: boolean }
@@ -114,7 +114,87 @@ export function setProjectTempo(doc: Y.Doc, bpm: number) {
   })
 }
 export function setBeatsPerBar(doc: Y.Doc, n: number) {
-  metaMap(doc).set('beatsPerBar', Math.min(12, Math.max(1, Math.round(n))))
+  doc.transact(() => {
+    metaMap(doc).set('beatsPerBar', Math.min(12, Math.max(1, Math.round(n))))
+    fitClickTrack(doc)
+  })
+}
+
+/**
+ * Make the click track (role 'click') follow the project: its clips take the project bpm, and its one-bar pattern is
+ * rewritten for the meter (an accent on the downbeat, a tick on every beat). Only touches a pattern that looks like a
+ * click (the notes the click track was made with); a hand-edited one keeps its notes and just gets the new bar length.
+ */
+export function fitClickTrack(doc: Y.Doc) {
+  const click = getTracks(doc).find((t) => t.role === 'click')
+  if (!click) return
+  const { bpm, beatsPerBar } = getTempo(doc)
+  doc.transact(() => {
+    for (const c of getClips(doc)) {
+      if (c.trackId !== click.id || c.kind !== 'midi') continue
+      const m = clipsMap(doc).get(c.id)!
+      if (c.bpm !== bpm) m.set('bpm', bpm)
+      const bar = beatsPerBar * c.ppq
+      if (c.loopTicks === bar) continue
+      const notes = getNotes(doc).filter((x) => x.clipId === c.id)
+      const pitches = [...new Set(notes.map((x) => x.pitch))]
+      const plain = notes.every((x) => x.tick % c.ppq === 0) && pitches.length <= 2
+      m.set('loopTicks', bar)
+      if (c.lengthTicks < bar) m.set('lengthTicks', bar)
+      if (!plain || !notes.length) continue
+      const tick = notes.find((x) => x.tick > 0)?.pitch ?? notes[0].pitch
+      const accent = pitches.find((p) => p !== tick)
+      const dur = notes[0].durTicks
+      for (const x of notes) notesMap(doc).delete(x.id)
+      for (let b = 0; b < beatsPerBar; b++) addNote(doc, { clipId: c.id, tick: b * c.ppq, durTicks: dur, pitch: tick, velocity: 1 })
+      if (accent != null) addNote(doc, { clipId: c.id, tick: 0, durTicks: dur, pitch: accent, velocity: 1 })
+    }
+  })
+}
+
+// --- loop region helpers (pure)
+
+/** The bar containing `pos` (from 0) and its start, in samples. */
+export function barAt(pos: number, t: Tempo, rate: number) {
+  const bar = samplesPerBar(t, rate)
+  const i = Math.max(0, Math.floor(pos / bar + 1e-9))
+  return { index: i, start: Math.round(i * bar) }
+}
+
+/** A loop over the `bars`-bar phrase around `pos` (phrases start at bars 1, 5, 9… for 4 bars). */
+export function loopAround(pos: number, t: Tempo, rate: number, bars = 4): LoopRegion {
+  const bar = samplesPerBar(t, rate)
+  const i = Math.floor(Math.max(0, pos) / bar / bars + 1e-9) * bars
+  return { start: Math.round(i * bar), end: Math.round((i + bars) * bar), on: true }
+}
+
+/**
+ * What the loop toggle (L) does: switch an existing region on or off; with none, make one over `range` (the selection,
+ * stretched out to whole grid steps of `step` samples when given) or else the 4 bars around `pos`, switched on.
+ */
+export function toggledLoop(cur: LoopRegion | null, pos: number, t: Tempo, rate: number, range?: { start: number; end: number } | null, step = 0): LoopRegion {
+  if (cur) return { ...cur, on: !cur.on }
+  if (range && range.end > range.start) {
+    const s = step > 0 ? Math.floor(range.start / step + 1e-9) * step : range.start
+    const e = step > 0 ? Math.ceil(range.end / step - 1e-9) * step : range.end
+    return { start: Math.round(s), end: Math.round(e), on: true }
+  }
+  return loopAround(pos, t, rate)
+}
+
+/** A region dragged between two points `a` and `b` (either order), at least `min` samples long. */
+export function loopBetween(a: number, b: number, min: number, on = true): LoopRegion {
+  const start = Math.max(0, Math.min(a, b))
+  return { start: Math.round(start), end: Math.round(Math.max(Math.max(a, b), start + min)), on }
+}
+
+/** Tap tempo: the bpm from tap times (ms, oldest first), or null with fewer than 2 taps. Uses the recent taps only. */
+export function tapBpm(times: number[]): number | null {
+  const recent = times.slice(-6)
+  if (recent.length < 2) return null
+  const gap = (recent[recent.length - 1] - recent[0]) / (recent.length - 1)
+  if (!(gap > 0)) return null
+  return Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round((60000 / gap) * 10) / 10))
 }
 
 /** Track colours: muted cassette-label hues that read on the dark console. Index stored on `Track.color`. */
