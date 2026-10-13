@@ -9,7 +9,9 @@ import {
 } from '@mobdaw/shared'
 import * as Y from 'yjs'
 
-type ClipData = Omit<Clip, 'id' | 'trackId'>
+/** Omit over each member of a union (a plain Omit keeps only the shared fields). */
+type DOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+type ClipData = DOmit<Clip, 'id' | 'trackId'>
 export type ClipboardItem = { clip: ClipData; trackId: string; notes: Omit<Note, 'id' | 'clipId'>[] }
 export type ClipboardData = {
   items: ClipboardItem[]
@@ -38,9 +40,10 @@ export function copyClips(doc: Y.Doc, ids: string[]): ClipboardData | null {
 
 /** Add one clip (and its notes) from clipboard data at `start` on `trackId`; returns its id. */
 function placeItem(doc: Y.Doc, it: ClipboardItem, trackId: string, start: number): string {
+  const { kind: _k, ...rest } = it.clip
   const id = it.clip.kind === 'audio'
-    ? addAudioClip(doc, { ...it.clip, trackId, start } as Parameters<typeof addAudioClip>[1])
-    : addMidiClip(doc, { ...it.clip, trackId, start } as Parameters<typeof addMidiClip>[1])
+    ? addAudioClip(doc, { ...(rest as DOmit<ClipData & { kind: 'audio' }, 'kind'>), trackId, start })
+    : addMidiClip(doc, { ...(rest as DOmit<ClipData & { kind: 'midi' }, 'kind'>), trackId, start })
   for (const n of it.notes) addNote(doc, { ...n, clipId: id })
   return id
 }
@@ -69,7 +72,7 @@ export function pasteClips(doc: Y.Doc, data: ClipboardData, o: PasteOpts): strin
   const ids: string[] = []
   doc.transact(() => {
     for (const it of data.items) {
-      if (it.clip.kind === 'audio' && !samples[(it.clip as { sourceHash: string }).sourceHash]) continue // that audio isn't in this project
+      if (it.clip.kind === 'audio' && !samples[it.clip.sourceHash]) continue // that audio isn't in this project
       const kind = data.tracks.find((t) => t.id === it.trackId)?.kind
       let target: string | undefined
       if (anchor != null) {

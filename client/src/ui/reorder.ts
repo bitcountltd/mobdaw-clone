@@ -12,15 +12,24 @@ export type ReorderDeps = {
   end(): void
 }
 
-/** `card` and its siblings are marked with `data-device`. */
-export function dragToReorder(handle: HTMLElement, card: HTMLElement, deps: ReorderDeps) {
+export type ReorderOpts = {
+  /** The data attribute that marks the card and its siblings and names them (default 'device', i.e. `data-device`). */
+  attr?: string
+  /** 'x' (default): cards in wrapping rows; 'y': a vertical list (the card moves only up and down). */
+  axis?: 'x' | 'y'
+}
+
+/** `card` and its siblings are marked with `data-device` (or `data-<attr>`). */
+export function dragToReorder(handle: HTMLElement, card: HTMLElement, deps: ReorderDeps, opts: ReorderOpts = {}) {
+  const attr = opts.attr ?? 'device'
+  const vertical = opts.axis === 'y'
   handle.style.cursor = 'grab'
   let from: { x: number; y: number; id: number } | null = null
   let dragging = false
   let before: HTMLElement | null = null
   let marked: HTMLElement | null = null
 
-  const siblings = () => [...(card.parentElement?.children ?? [])].filter((c): c is HTMLElement => c !== card && c instanceof HTMLElement && !!c.dataset.device)
+  const siblings = () => [...(card.parentElement?.children ?? [])].filter((c): c is HTMLElement => c !== card && c instanceof HTMLElement && !!c.dataset[attr])
   const mark = (el: HTMLElement | null, cls: string) => {
     marked?.classList.remove('drop-before', 'drop-after')
     marked = el
@@ -36,12 +45,13 @@ export function dragToReorder(handle: HTMLElement, card: HTMLElement, deps: Reor
       const r = s.getBoundingClientRect()
       const dx = x < r.left ? r.left - x : x > r.right ? x - r.right : 0
       const dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0
-      const d = dx * dx + dy * dy * 4 // rows wrap, so being on the right row matters most
+      const d = vertical ? dy * dy + dx * dx * 0.01 : dx * dx + dy * dy * 4 // rows wrap, so being on the right row matters most
       if (d < bestD) [best, bestD] = [i, d]
     })
     if (best < 0) return null
     const r = sibs[best].getBoundingClientRect()
-    return x < r.left + r.width / 2 ? sibs[best] : (sibs[best + 1] ?? null)
+    const first = vertical ? y < r.top + r.height / 2 : x < r.left + r.width / 2
+    return first ? sibs[best] : (sibs[best + 1] ?? null)
   }
 
   function finish(drop: boolean) {
@@ -56,7 +66,7 @@ export function dragToReorder(handle: HTMLElement, card: HTMLElement, deps: Reor
     if (!was) return
     // dropping where it already is changes nothing
     const noop = before === card.nextElementSibling
-    if (drop && !noop) deps.drop(before?.dataset.device ?? null)
+    if (drop && !noop) deps.drop(before?.dataset[attr] ?? null)
     before = null
     deps.end()
   }
@@ -78,7 +88,7 @@ export function dragToReorder(handle: HTMLElement, card: HTMLElement, deps: Reor
       addEventListener('keydown', onKey)
       deps.start()
     }
-    card.style.transform = `translate(${dx}px, ${dy}px)`
+    card.style.transform = vertical ? `translateY(${dy}px)` : `translate(${dx}px, ${dy}px)`
     before = target(e.clientX, e.clientY)
     const sibs = siblings()
     if (before) mark(before, 'drop-before')

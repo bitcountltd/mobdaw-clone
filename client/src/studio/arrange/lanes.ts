@@ -8,6 +8,7 @@ import {
   type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget, type SampleMeta, type Track,
 } from '@mobdaw/shared'
 import { drawWave, peaksFor, storedPeaks } from '../../audio/peaks'
+import { DRUM_KITS, addDrumKit } from '../../content/presets'
 import type { PreviewMode } from '../../audio/bridge'
 import { h } from '../../dom'
 import { playable } from '../../samples'
@@ -15,17 +16,28 @@ import { discardTake, hasStaged, isMine, myTakes, uploadAll, uploadTake } from '
 import { autoRow } from '../../ui/automation'
 import { clamp, dragPointer, grabAt, passBoundaries, snapTracker, trimBlock, type Grab } from '../../ui/blocks'
 import { LOOP_COLORS, looperCard } from '../../ui/loopers'
-import { closedBy, deleteMenu, popover } from '../../ui/popover'
+import { closedBy, deleteMenu, popover, type MenuItem } from '../../ui/popover'
+import { icon } from '../../theme/icons'
 import { transportControls, type TransportControls } from '../../ui/transport'
+import { clipboard, copyClips, moveGroup, pasteClips } from '../clipboard'
+import { canDrop, applyDrop, hasPayload, readDragPayload, type DropPayload } from '../drops'
+import { IS_MAC } from '../keys'
 import type { Studio } from '../studio'
+import { registerArrangeKeys } from './edit'
+import { heightsFor } from './heights'
 import { MIN_SEC, loopClip, passClip, setLoopOff, setLoopOn, sourceFrames, trimClip } from './clipOps'
 import { drawTicks } from './ruler'
 import type { mountTrackHeaders } from './tracks'
 
-export const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in arrange.css
+export const HEADER = 206 // the track header (200) plus the gutter to its left; keep in step with --head / --gutter in arrange.css
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
 const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
-const LANE_H = 72
+const CLIP_HEAD = 14 // a clip's name strip; the waveform or notes fill the rest of its height (keep in step with arrange.css)
+const CLIP_INSET = 1 // a clip's gap to the top and bottom of its lane
+const SRC_H = 72 // a soundscape's source lane (its own row, with a 14 px ruler on top)
+const FADE_SHAPES = ['equal power', 'linear', 's-curve'] as const
+/** A fade's gain at 0..1 through it, by shape (0 equal-power, 1 linear, 2 s-curve). */
+const fadeGain = (t: number, shape: number) => (shape === 1 ? t : shape === 2 ? (1 - Math.cos(Math.PI * t)) / 2 : Math.sin((t * Math.PI) / 2))
 
 const accepts = (trackKind: string, clipKind: string) => trackKind === clipKind
 export const audioFiles = (list: FileList | null | undefined) =>
@@ -50,7 +62,13 @@ type Src = {
   playhead: HTMLElement // the preview's own playhead, in source time
   end: number // where the source audio ends (samples)
 }
-type Wave = { cv: HTMLCanvasElement; seams: HTMLElement; first: HTMLElement; label: HTMLElement; sig: string; pk?: Float32Array; v0: number; v1: number }
+type Wave = {
+  cv: HTMLCanvasElement; seams: HTMLElement; first: HTMLElement; label: HTMLElement; notches: HTMLElement
+  fade: SVGSVGElement; fin: HTMLElement; fout: HTMLElement
+  sig: string; pk?: Float32Array; v0: number; v1: number
+}
+/** Every clip: its name strip and the body under it. */
+type Parts = { head: HTMLElement; name: HTMLElement; body: HTMLElement }
 
 export type LanesFrame = {
   /** The arrangement's scroller (both axes): the lanes' horizontal scroll and the visible window for waveforms. */
@@ -82,25 +100,48 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     bgPicker.value = ''
     if (bgTarget && files.length) void st.dropFiles(files, bgTarget.trackId, bgTarget.at)
   }
-  const addLink = h('button', { className: 'add-track', title: 'new track', onclick: () => {
-    popover(addLink, [
-      ['audio', () => st.addTrack('audio')],
-      ['midi', () => { doc.transact(() => { addDevice(doc, st.addTrack('midi'), FINNWAVE) }) }],
-      ['soundscape', () => st.addTrack('soundscape')],
-    ])
-  } }, '+')
+  // New tracks: audio, an instrument (finnwave), drums (the first kit) or a soundscape. The new track is focused.
+  const newTrack = (kind: 'audio' | 'instrument' | 'drums' | 'soundscape') => {
+    st.undo.stopCapturing()
+    let id = ''
+    doc.transact(() => {
+      if (kind === 'instrument') addDevice(doc, (id = st.addTrack('midi', 'instrument')), FINNWAVE)
+      else if (kind === 'drums') addDrumKit(doc, (id = st.addTrack('midi', 'drums')), DRUM_KITS[0])
+      else id = st.addTrack(kind)
+    })
+    st.focus(id)
+    return id
+  }
+  const TRACK_KINDS = [
+    { kind: 'audio', label: 'audio', icon: 'wave', title: 'an audio track, for recordings and samples' },
+    { kind: 'instrument', label: 'instrument', icon: 'piano', title: 'a MIDI track with a synth' },
+    { kind: 'drums', label: 'drums', icon: 'drum', title: `a MIDI track with a drum kit (${DRUM_KITS[0].name.toLowerCase()})` },
+    { kind: 'soundscape', label: 'soundscape', icon: 'loop', title: 'loopers over a source recording' },
+  ] as const
+  const addLink = h('button', { type: 'button', className: 'add-track', title: 'add a track', onclick: () => {
+    popover(addLink, TRACK_KINDS.map((k) => ({ label: k.label, icon: k.icon, title: k.title, run: () => void newTrack(k.kind) })))
+  } }, icon('plus', 14), 'add track')
   const overlay = h('div', { className: 'overlay' })
   const playhead = h('div', { className: 'playhead' })
   const snapLine = h('div', { className: 'snap-line', hidden: true }) // where a dragged clip just snapped to
+  const marquee = h('div', { className: 'marquee', hidden: true })
   overlay.append(playhead, snapLine)
-  const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio files here, or use + track.')
+  // The empty arrangement: what to do first.
+  const hint = h('div', { className: 'arr-empty' },
+    h('p', { className: 'arr-empty-title' }, readOnly ? 'Nothing here yet' : 'Drop audio files here, or add a track'),
+    readOnly ? null : h('div', { className: 'arr-empty-btns' }, ...TRACK_KINDS.map((k) =>
+      h('button', { type: 'button', className: 'btn', title: k.title, onclick: () => void newTrack(k.kind) }, icon(k.icon), k.label))),
+    readOnly ? null : h('p', { className: 'arr-empty-sub dim' }, 'Sounds, instruments and effects from the browser can be dragged in too.'))
   const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
-  // The master row: its header focuses the master bus (the dock shows its effects); the body names them.
+  // The master row: its header focuses the master bus (the dock shows its effects); the body shows its chain as chips.
   const masterHead = headers.master()
-  const masterBody = h('div', { className: 'lane-body master-body dim' })
-  masterBody.onclick = () => masterHead.click()
+  const masterBody = h('div', { className: 'lane-body master-body' })
+  masterBody.onclick = () => st.setUi({ focusTrack: MASTER_TRACK, dock: { ...st.ui.dock, open: true, tab: 'devices' } })
   const master = h('div', { className: 'lane master' }, h('div', { className: 'lane-row master-row' }, masterHead, masterBody))
-  const el = h('div', { className: 'arr-lanes' }, master, laneBox, masterAuto.el, hint, readOnly ? null : addLink, bgPicker, overlay)
+  const tail = h('div', { className: 'arr-tail' }, readOnly ? null : addLink)
+  const el = h('div', { className: 'arr-lanes' }, master, laneBox, masterAuto.el, hint, tail, bgPicker, overlay, marquee)
+  const heights = heightsFor(st)
+  const parts = new Map<string, Parts>()
 
   const x = (smp: number) => st.x(smp)
   const rate = () => st.rate
@@ -122,7 +163,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     cv.style.left = `${v0}px`
     cv.style.width = `${v1 - v0}px`
     cv.width = Math.max(1, Math.round((v1 - v0) * dpr))
-    cv.height = Math.round(LANE_H * dpr)
+    cv.height = Math.round(Math.max(1, region.clientHeight) * dpr)
     const fpp = rate() / st.ui.pps // frames per css px
     drawWave(cv, pb.recorder.peaks, v0 * fpp, (v1 - v0) * fpp)
   }
@@ -248,27 +289,27 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     let l = lanes.get(t.id)
     if (l) return l
     const body = h('div', { className: 'lane-body', 'data-track': t.id })
-    body.onpointerdown = (e) => {
-      if (e.target !== body) return
-      st.setUi({ selection: [], pad: null })
-    }
+    // empty space: a drag draws a selection box (shift adds to the selection); a click selects nothing and focuses the track
+    body.addEventListener('pointerdown', (e) => {
+      if (e.target !== body || e.button !== 0 || st.ui.looperArm) return
+      marqueeDown(e, t.id)
+    })
     const atX = (e: MouseEvent) => st.snap(st.fromX(e.clientX - body.getBoundingClientRect().left), e)
     body.ondblclick = (e) => { // empty space on a MIDI lane: a new clip, opened in the dock
       if (readOnly || e.target !== body || t.kind !== 'midi') return
       st.newMidiClip(t.id, atX(e))
     }
-    body.ondragover = (e) => e.preventDefault()
-    body.ondrop = (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      if (readOnly) return
-      const audio = tracksMap(doc).get(t.id)?.get('kind') === 'audio'
-      void st.dropFiles(audioFiles(e.dataTransfer?.files), audio ? t.id : null, st.fromX(e.clientX - body.getBoundingClientRect().left))
-    }
-    // background menu: audio lanes take uploads; MIDI lanes and soundscapes make a new region
-    if (t.kind === 'audio') bgMenu(body, (e) => [['upload', () => pickInto(t.id, st.fromX(e.clientX - body.getBoundingClientRect().left))]])
-    else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => st.newMidiClip(t.id, atX(e))], ['new drum grid', () => st.newMidiClip(t.id, atX(e), true)]])
-    else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => st.newPad(t.id, atX(e))]])
+    // background menu: audio lanes take uploads; MIDI lanes and soundscapes make a new region; any lane can paste
+    const paste = (e: MouseEvent): MenuItem[] => clipboard.get() ? ['sep', { label: 'paste here', icon: 'duplicate', hint: IS_MAC ? '⌘V' : 'ctrl+V', run: () => {
+      st.undo.stopCapturing()
+      const ids = pasteClips(doc, clipboard.get()!, { at: atX(e), trackId: t.id })
+      st.undo.stopCapturing()
+      if (ids.length) st.select(ids)
+    } }] : []
+    const trackItems = (e: MouseEvent): MenuItem[] => ['sep', { label: 'track…', icon: 'more', run: () => headers.menu(t.id, [e.clientX, e.clientY]) }]
+    if (t.kind === 'audio') bgMenu(body, (e) => [{ label: 'upload audio', icon: 'upload', run: () => pickInto(t.id, st.fromX(e.clientX - body.getBoundingClientRect().left)) }, ...paste(e), ...trackItems(e)])
+    else if (t.kind === 'midi') bgMenu(body, (e) => [{ label: 'new piano roll', icon: 'piano', run: () => st.newMidiClip(t.id, atX(e)) }, { label: 'new drum grid', icon: 'drum', run: () => st.newMidiClip(t.id, atX(e), true) }, ...paste(e), ...trackItems(e)])
+    else if (t.kind === 'soundscape') bgMenu(body, (e) => [{ label: 'new region', icon: 'plus', run: () => st.newPad(t.id, atX(e)) }, ...trackItems(e)])
     // soundscape tracks: the main lane is blank like an empty track (regions turn the loopers on); the source audio gets its own lane
     const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
     // the loopers row: speed and region per slot
@@ -284,12 +325,14 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const loopTc = transportControls({ title: 'play / stop the loops', small: true, onToggle: () => togglePreview(t.id, 'loops') })
     const loopRow = h('div', { className: 'fx-row', hidden: true }, h('div', { className: 'fx-head' }, loopMore, loopTc.el), loops)
     const row = h('div', { className: 'lane-row' }, headers.headFor(t), body)
+    acceptDrops(row, t.id, body)
     const auto = makeAutoSection(t.id)
     l = {
       el: h('div', { className: 'lane' }, row, src?.row ?? null, loopRow, auto.el), row, body,
       loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), pads: new Map(), auto, loopTc, src,
     }
     lanes.set(t.id, l)
+    headers.attach(t, l.el)
     return l
   }
 
@@ -365,25 +408,124 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     Math.max(0, ...getClips(doc).filter((c) => c.trackId === trackId).map((c) => c.start + clipLength(c, rate())))
 
   /**
-   * Left or right click on a lane's empty background opens a menu of `entries(event)` at the cursor.
-   * (Upload for lanes that hold audio, "new region" for MIDI lanes and soundscapes.)
+   * Right-click on a lane's empty background opens a menu of `entries(event)` at the cursor (upload for lanes that hold
+   * audio, new clips for MIDI lanes, a region for soundscapes, paste). A left press is the selection box.
    */
-  function bgMenu(body: HTMLElement, entries: (e: MouseEvent) => [string, () => void][]) {
-    let down: { x: number; y: number; armed: boolean; closed: boolean } | null = null
-    // (the popover's own capture listener runs first, so `closedBy` says whether this press closed a menu)
-    body.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, armed: !!st.ui.looperArm, closed: closedBy(e) }), true)
-    const open = (e: MouseEvent) => {
+  function bgMenu(body: HTMLElement, entries: (e: MouseEvent) => MenuItem[]) {
+    body.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
       if (!readOnly && e.target === body) popover(body, entries(e), [e.clientX, e.clientY])
-    }
-    let later = 0 // a left click waits out a double-click (which makes a clip) before it opens the menu
-    body.addEventListener('contextmenu', (e) => { e.preventDefault(); open(e) })
-    body.addEventListener('click', (e) => { // not after a drag (e.g. drawing a region)
-      clearTimeout(later)
-      if (e.detail > 1) return
-      if (down && (down.armed || down.closed || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4)) return
-      later = window.setTimeout(() => body.isConnected && open(e), 250)
     })
   }
+
+  // --- selection box: drag on empty lane space; clips it touches are selected (shift: added to the selection)
+  function marqueeDown(e: PointerEvent, trackId: string | null) {
+    e.preventDefault()
+    const base = e.shiftKey ? [...st.ui.selection] : []
+    const box0 = el.getBoundingClientRect()
+    const x0 = e.clientX - box0.left, y0 = e.clientY - box0.top
+    let drew = false
+    dragPointer(e, {
+      onDrag: (m) => {
+        const r = el.getBoundingClientRect()
+        const x1 = m.clientX - r.left, y1 = m.clientY - r.top
+        if (!drew && Math.hypot(x1 - x0, y1 - y0) < 4) return
+        drew = true
+        const left = Math.min(x0, x1), top = Math.min(y0, y1), w = Math.abs(x1 - x0), hh = Math.abs(y1 - y0)
+        Object.assign(marquee.style, { left: `${left}px`, top: `${top}px`, width: `${w}px`, height: `${hh}px` })
+        marquee.hidden = false
+        const sel = new Set(base)
+        const cl = r.left + left, ct = r.top + top, cr = cl + w, cb = ct + hh
+        for (const [id, ce] of clipEls) {
+          if (!ce.isConnected || ce.closest('.src-body')) continue // source clips have their own time
+          const b = ce.getBoundingClientRect()
+          if (b.right > cl && b.left < cr && b.bottom > ct && b.top < cb) sel.add(id)
+        }
+        const next = [...sel]
+        if (next.length !== st.ui.selection.length || next.some((id, i) => st.ui.selection[i] !== id)) st.setUi({ selection: next })
+      },
+      onEnd: () => {
+        marquee.hidden = true
+        if (drew) return
+        st.setUi({ selection: e.shiftKey ? st.ui.selection : [], pad: null, ...(trackId ? { focusTrack: trackId } : {}) })
+      },
+    })
+  }
+
+  // --- drops: browser payloads (instruments, kits, effects, project audio) and audio files, on a lane or below them
+  /** The payload being dragged, read when its drag starts (dragover can only see its type). */
+  let dragging: DropPayload | null = null
+  const onDragStart = (e: DragEvent) => { dragging = hasPayload(e) ? readDragPayload(e) : null }
+  const onDragEnd = () => { dragging = null; clearDrop() }
+  addEventListener('dragstart', onDragStart)
+  addEventListener('dragend', onDragEnd)
+  addEventListener('drop', onDragEnd)
+  let dropLane: HTMLElement | null = null
+  let dropTimer = 0
+  function clearDrop() {
+    dropLane?.classList.remove('drop-ok', 'drop-no')
+    dropLane = null
+  }
+  /** Mark `lane` as the drop target (ok or refused) until the drag moves on. */
+  function markDrop(lane: HTMLElement | null, ok: boolean) {
+    if (dropLane !== lane) clearDrop()
+    dropLane = lane
+    lane?.classList.toggle('drop-ok', ok)
+    lane?.classList.toggle('drop-no', !ok)
+    clearTimeout(dropTimer)
+    dropTimer = window.setTimeout(clearDrop, 150) // (dragover repeats while the pointer stays)
+  }
+  const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files')
+  /** Drops on a track's row (header and body): `body` gives the timeline position when the pointer is over it. */
+  function acceptDrops(row: HTMLElement, trackId: string, body: HTMLElement) {
+    const kind = () => tracksMap(doc).get(trackId)?.get('kind')
+    const at = (e: DragEvent) => {
+      const r = body.getBoundingClientRect()
+      return e.clientX >= r.left ? st.fromX(e.clientX - r.left) : Math.round(st.position())
+    }
+    row.addEventListener('dragover', (e) => {
+      const files = hasFiles(e), payload = hasPayload(e)
+      if (!files && !payload) return
+      e.stopPropagation()
+      const ok = !readOnly && !st.locks.has(trackId) && (payload ? !dragging || canDrop(st, dragging, trackId) : kind() === 'audio')
+      markDrop(row.closest('.lane') as HTMLElement, ok)
+      if (!ok) { if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; return }
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    })
+    row.addEventListener('drop', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      clearDrop()
+      if (readOnly) return
+      const p = hasPayload(e) ? readDragPayload(e) : null
+      if (p) {
+        if (canDrop(st, p, trackId)) applyDrop(st, p, { trackId, at: at(e) })
+        return
+      }
+      void st.dropFiles(audioFiles(e.dataTransfer?.files), kind() === 'audio' ? trackId : null, st.snap(at(e), e))
+    })
+  }
+  // below the tracks (and the empty arrangement): a new track for whatever is dropped
+  el.addEventListener('dragover', (e) => {
+    if (!hasPayload(e) && !hasFiles(e)) return
+    if (readOnly) return
+    e.preventDefault()
+    markDrop(tail, true)
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  })
+  el.addEventListener('drop', (e) => {
+    e.preventDefault()
+    e.stopPropagation() // (the scroller would import the files again)
+    clearDrop()
+    if (readOnly) return
+    const at = st.snap(st.fromX(e.clientX - el.getBoundingClientRect().left - HEADER), e)
+    const p = hasPayload(e) ? readDragPayload(e) : null
+    if (p) applyDrop(st, p, { trackId: null, at })
+    else void st.dropFiles(audioFiles(e.dataTransfer?.files), null, at)
+  })
+  // the empty space below the tracks is a selection box too, across every lane
+  tail.addEventListener('pointerdown', (e) => { if (e.target === tail && e.button === 0) marqueeDown(e, null) })
 
   /** Pick audio files and import them into `trackId` starting at sample `at` of that lane's time scale. */
   function pickInto(trackId: string, at: number) {
@@ -618,17 +760,28 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     // the master row
     const fx = devices.filter((d) => d.trackId === MASTER_TRACK)
     masterHead.classList.toggle('focus', st.ui.focusTrack === MASTER_TRACK)
-    const masterText = fx.length ? fx.map((d) => d.name ?? DEVICES[d.type]?.name ?? '').join(' · ') : 'no effects on the mix'
-    if (masterBody.textContent !== masterText) masterBody.textContent = masterText
+    const chips = fx.map((d) => `${d.bypass ? '~' : ''}${d.name ?? DEVICES[d.type]?.name ?? ''}`)
+    const chipSig = chips.join('|') || '-'
+    if (masterBody.dataset.sig !== chipSig) {
+      masterBody.dataset.sig = chipSig
+      masterBody.replaceChildren(...(fx.length
+        ? fx.map((d) => h('span', { className: `chip master-chip${d.bypass ? ' off' : ''}`, title: d.bypass ? 'bypassed' : 'click to show the master effects' }, icon('effect', 12), d.name ?? DEVICES[d.type]?.name ?? ''))
+        : [h('span', { className: 'dim' }, readOnly ? 'no effects on the mix' : 'no effects on the mix · click to add some, or drop one here')]))
+    }
 
     // lanes
     hint.hidden = tracks.length > 0
+    el.classList.toggle('empty', tracks.length === 0)
+    tail.hidden = tracks.length === 0
     const ids = new Set(tracks.map((t) => t.id))
     for (const [id, l] of lanes) if (!ids.has(id)) { l.el.remove(); lanes.delete(id) }
     tracks.forEach((t, i) => {
       const l = laneFor(t)
       if (laneBox.children[i] !== l.el) laneBox.insertBefore(l.el, laneBox.children[i] ?? null)
       l.body.style.width = `${x(total)}px`
+      const rowH = heights.get(t.id)
+      if (l.row.style.height !== `${rowH}px`) l.row.style.height = `${rowH}px`
+      l.el.classList.toggle('short', rowH < 56)
       l.el.dataset.kind = t.kind
       l.el.style.setProperty('--tc', trackColor(t, i))
       l.el.classList.toggle('focus', st.ui.focusTrack === t.id)
@@ -654,7 +807,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const outline = new Map<string, string>()
     for (const r of st.remote) for (const id of r.selection ?? []) outline.set(id, r.user.color)
     const cids = new Set(clips.map((c) => c.id))
-    for (const [id, e] of clipEls) if (!cids.has(id)) { e.remove(); clipEls.delete(id); waves.delete(id) }
+    for (const [id, e] of clipEls) if (!cids.has(id)) { e.remove(); clipEls.delete(id); waves.delete(id); parts.delete(id) }
     for (const c of clips) {
       const lane = lanes.get(c.trackId)
       if (!lane) continue
@@ -662,6 +815,8 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
       if (!e) e = makeClip(c)
       const host = lane.src ? lane.src.body : lane.body // source clips are drawn in the source lane's own scale
       const cpps = lane.src ? lane.src.pps : st.ui.pps
+      const bodyH = Math.max(4, (lane.src ? SRC_H - 14 : heights.get(c.trackId)) - 2 * CLIP_INSET - CLIP_HEAD)
+      const pt = parts.get(c.id)!
       if (e.parentElement !== host) host.append(e)
       e.style.left = `${(c.start / rt) * cpps}px`
       // a `forever` clip is drawn out to the end of the scroll area, which its finite part alone decides
@@ -682,12 +837,13 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         e.classList.toggle('incoming', status === 'incoming')
         e.classList.toggle('missing', status === 'missing')
         const w = waves.get(c.id)!
-        if (w.label.textContent !== label) w.label.textContent = label
+        if (w.label.textContent !== label) (w.label.textContent = label), (pt.head.title = label)
         drawSeams(c, w, width, cpps)
+        drawFades(c, w, width, bodyH, cpps, !lane.src && !readOnly && !st.locks.has(c.trackId))
         const pk = !st.pb || !canPlay ? undefined : status ? storedPeaks(meta, rt) : peaksFor(s.projectId, c.sourceHash, rt)
-        if (pk) drawVisibleWave(c, w, pk, width, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps: cpps, scroller: scroll, off: HEADER })
+        if (pk) drawVisibleWave(c, w, pk, width, bodyH, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps: cpps, scroller: scroll, off: HEADER })
         else w.cv.style.display = 'none'
-      } else drawMidiClip(e, c, notes.filter((n) => n.clipId === c.id), forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks)
+      } else drawMidiClip(pt, c, notes.filter((n) => n.clipId === c.id), forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks)
       e.classList.toggle('midi', c.kind === 'midi')
       e.classList.toggle('editing', c.id === editing)
       e.classList.toggle('sel', selection.includes(c.id))
@@ -705,16 +861,44 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     // The playhead lines run through the lanes and the master automation, not the empty space below them.
     const last = masterAuto.el.offsetHeight ? masterAuto.el : laneBox
     overlay.style.height = `${last.offsetTop + last.offsetHeight}px`
+    // the lanes fill the scroller's height, so the space below the last track takes drops and selection boxes
+    const fill = `${Math.max(0, scroll.clientHeight - el.offsetTop)}px`
+    if (el.style.minHeight !== fill) el.style.minHeight = fill
     drawPlayhead()
     if (refreshPreviews()) ensurePreviewTick()
   }
 
   function makeClip(c: Clip) {
-    const e = h('div', { className: 'clip' })
+    const name = h('span', { className: 'clip-name' })
+    const head = h('div', { className: 'clip-head' }, name)
+    const body = h('div', { className: 'clip-body' })
+    const e = h('div', { className: 'clip' }, head, body)
+    parts.set(c.id, { head, name, body })
     if (c.kind === 'audio') {
-      const w: Wave = { cv: h('canvas', { className: 'wave' }), seams: h('i', { className: 'seams' }), first: h('i', { className: 'seam-first' }), label: h('span', { className: 'label' }), sig: '', v0: 0, v1: 0 }
+      const fade = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      fade.classList.add('fades')
+      fade.innerHTML = '<path class="fade-area in"/><path class="fade-area out"/><path class="fade-line in"/><path class="fade-line out"/>'
+      const handle = (which: 'in' | 'out') => {
+        const hd = h('i', { className: `fade-h ${which}`, title: `fade ${which}: drag to set its length (double-click: change the curve)` })
+        hd.addEventListener('pointerdown', (ev) => fadeDown(ev, c.id, which))
+        hd.addEventListener('dblclick', (ev) => {
+          ev.stopPropagation()
+          const cur = clipsMap(doc).get(c.id)
+          if (!cur || readOnly) return
+          const shape = ((Number(cur.get('fadeShape')) || 0) + 1) % 3
+          updateClip(doc, c.id, { fadeShape: shape as 0 | 1 | 2 })
+          st.status(`fade curve: ${FADE_SHAPES[shape]}`)
+        })
+        return hd
+      }
+      const w: Wave = {
+        cv: h('canvas', { className: 'wave' }), seams: h('i', { className: 'seams' }), first: h('i', { className: 'seam-first' }), label: name,
+        notches: h('i', { className: 'notches' }), fade, fin: handle('in'), fout: handle('out'), sig: '', v0: 0, v1: 0,
+      }
       waves.set(c.id, w)
-      e.append(w.cv, w.seams, w.first, w.label)
+      body.append(w.cv, w.seams, w.first, fade)
+      head.append(w.notches)
+      e.append(w.fin, w.fout)
     }
     e.onpointerdown = (ev) => clipDown(ev, c.id)
     e.ondblclick = () => st.openClip(c.id)
@@ -739,7 +923,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
    * at device-pixel resolution, so a 16-minute clip costs the same as a 10-second one.
    */
   function drawVisibleWave(
-    c: Clip & { kind: 'audio' }, w: Wave, pk: Float32Array, width: number,
+    c: Clip & { kind: 'audio' }, w: Wave, pk: Float32Array, width: number, height: number,
     /** The lane's frame: its scale, its horizontal scroller, and how much of the scroller's left edge is covered. */
     f: { pps: number; scroller: HTMLElement; off: number },
   ) {
@@ -751,7 +935,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     if (need1 <= need0) { w.cv.style.display = 'none'; return }
     const pass = isLooping(c) ? c.loopLength! : 0
     const phase = pass ? c.loopPhase ?? 0 : 0
-    const sig = `${f.pps}|${c.sourceOffset}|${c.length}|${pass}|${phase}|${width}|${dpr}`
+    const sig = `${f.pps}|${c.sourceOffset}|${c.length}|${pass}|${phase}|${width}|${height}|${dpr}`
     if (w.sig === sig && w.pk === pk && w.v0 <= need0 && w.v1 >= need1) { w.cv.style.display = ''; return }
     const v0 = Math.max(0, Math.floor(need0 - viewW)), v1 = Math.min(width, Math.ceil(need1 + viewW))
     Object.assign(w, { sig, pk, v0, v1 })
@@ -759,7 +943,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     w.cv.style.left = `${v0}px`
     w.cv.style.width = `${v1 - v0}px`
     w.cv.width = Math.max(1, Math.round((v1 - v0) * dpr))
-    w.cv.height = Math.round(LANE_H * dpr)
+    w.cv.height = Math.round(height * dpr)
     const fpp = rt / f.pps // source frames per css px
     const passPx = pass / fpp
     if (!pass || passPx < 2) return drawWave(w.cv, pk, c.sourceOffset + v0 * fpp, (v1 - v0) * fpp)
@@ -792,31 +976,102 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const first = (((c.loopLength ?? 0) - (c.loopPhase ?? 0)) / rt) * cpps
     const on = isLooping(c) && passPx >= 3 && first < width
     w.seams.style.display = on ? '' : 'none'
+    w.notches.style.display = on ? '' : 'none'
     if (!on) return
     w.seams.style.left = `${first}px`
     w.seams.style.width = `${width - first}px`
     w.seams.style.backgroundSize = `${passPx}px 100%`
+    w.notches.style.left = `${first - 4}px` // each tile carries the notch at its left edge, 4px in
+    w.notches.style.width = `${width - first + 4}px`
+    w.notches.style.backgroundSize = `${passPx}px 100%`
     w.first.style.left = `${first - 1}px`
   }
+
+  /** An audio clip's fades: the faded-out corners shaded, each curve drawn by its shape, and a handle on each. */
+  function drawFades(c: Clip & { kind: 'audio' }, w: Wave, width: number, height: number, cpps: number, editable: boolean) {
+    const rt = rate()
+    const fi = Math.min(width, (c.fadeIn / rt) * cpps)
+    const fo = isForever(c) ? 0 : Math.min(width - fi, (c.fadeOut / rt) * cpps)
+    const sig = `${fi.toFixed(1)}|${fo.toFixed(1)}|${width.toFixed(1)}|${height}|${c.fadeShape}`
+    w.fin.hidden = !editable
+    w.fout.hidden = !editable || isForever(c)
+    w.fin.style.left = `${fi}px`
+    w.fout.style.left = `${width - fo}px`
+    w.fin.classList.toggle('set', fi > 0)
+    w.fout.classList.toggle('set', fo > 0)
+    if (w.fade.dataset.sig === sig) return
+    w.fade.dataset.sig = sig
+    w.fade.setAttribute('viewBox', `0 0 ${Math.max(1, width)} ${height}`)
+    w.fade.setAttribute('width', String(Math.max(1, width)))
+    w.fade.setAttribute('height', String(height))
+    const curve = (from: number, len: number, rising: boolean) => {
+      const n = Math.max(2, Math.min(48, Math.ceil(len / 3)))
+      const pts: string[] = []
+      for (let k = 0; k <= n; k++) {
+        const t = k / n
+        const g = fadeGain(rising ? t : 1 - t, c.fadeShape)
+        pts.push(`${(from + t * len).toFixed(1)} ${(height * (1 - g)).toFixed(1)}`)
+      }
+      return pts
+    }
+    const [aIn, aOut, lIn, lOut] = [...w.fade.children] as SVGPathElement[]
+    const pin = fi > 0.5 ? curve(0, fi, true) : null
+    const pout = fo > 0.5 ? curve(width - fo, fo, false) : null
+    aIn.setAttribute('d', pin ? `M0 0L${pin.join('L')}L${fi.toFixed(1)} 0Z` : '')
+    lIn.setAttribute('d', pin ? `M${pin.join('L')}` : '')
+    aOut.setAttribute('d', pout ? `M${(width - fo).toFixed(1)} 0L${pout.join('L')}L${width.toFixed(1)} 0Z` : '')
+    lOut.setAttribute('d', pout ? `M${pout.join('L')}` : '')
+  }
+
+  /** Drag a fade handle: the fade's length follows the pointer (the two fades never overlap). One undo step. */
+  function fadeDown(ev: PointerEvent, id: string, which: 'in' | 'out') {
+    if (ev.button !== 0) return
+    ev.stopPropagation()
+    ev.preventDefault()
+    const c = clipOf(id)
+    if (!c || c.kind !== 'audio' || readOnly || st.locks.has(c.trackId)) return
+    const cpps = lanes.get(c.trackId)?.src?.pps ?? st.ui.pps
+    const rt = rate()
+    const f0 = which === 'in' ? c.fadeIn : c.fadeOut
+    st.select([id])
+    undo.stopCapturing()
+    dragPointer(ev, {
+      onDrag: (m) => {
+        const d = Math.round(((m.clientX - ev.clientX) / cpps) * rt) * (which === 'in' ? 1 : -1)
+        const other = which === 'in' ? c.fadeOut : c.fadeIn
+        const v = clamp(f0 + d, 0, Math.max(0, c.length - other))
+        updateClip(doc, id, which === 'in' ? { fadeIn: v } : { fadeOut: v })
+        st.status(`fade ${which} ${(v / rt * 1000).toFixed(0)} ms`)
+      },
+      onEnd: () => undo.stopCapturing(),
+    })
+  }
+  const clipOf = (id: string) => clipsMap(doc).get(id)?.toJSON() as Clip | undefined
 
   /**
    * A MIDI clip's preview: its label plus tiny note marks, rebuilt only when the notes change. A looping clip draws its
    * first pass in full and the repeats faded. (The editors live in the dock.)
    */
-  function drawMidiClip(e: HTMLElement, c: Clip & { kind: 'midi' }, notes: Note[], extent: number) {
+  function drawMidiClip(pt: Parts, c: Clip & { kind: 'midi' }, notes: Note[], extent: number) {
     const lp = isLooping(c) ? c.loopTicks! : 0
-    const sig = `${extent}|${lp}|${c.view ?? ''}|${notes.map((n) => `${n.tick},${n.durTicks},${n.pitch}`).join(';')}`
-    if (e.dataset.sig === sig) return
-    e.dataset.sig = sig
+    const sig = `${extent}|${lp}|${c.view ?? ''}|${notes.map((n) => `${n.tick},${n.durTicks},${n.pitch},${n.velocity}`).join(';')}`
+    const label = c.view === 'drums' ? 'drums' : 'midi'
+    if (pt.name.textContent !== label) pt.name.textContent = label
+    if (pt.body.dataset.sig === sig) return
+    pt.body.dataset.sig = sig
     const shown = lp ? notes.filter((n) => n.tick < lp) : notes
     const lo = Math.min(...shown.map((n) => n.pitch)), hi = Math.max(...shown.map((n) => n.pitch))
     const passes = lp ? Math.ceil(extent / lp) : 1
     const marks: HTMLElement[] = []
+    const notches: HTMLElement[] = []
     for (let k = 0; k < passes; k++) {
       if (k) { // where the pattern starts over
         const edge = h('i', { className: 'loop-edge' })
         edge.style.left = `${((k * lp) / extent) * 100}%`
         marks.push(edge)
+        const notch = h('i', { className: 'notch' })
+        notch.style.left = `${((k * lp) / extent) * 100}%`
+        notches.push(notch)
         if (k === 1) { // the pass handle lights up here when hovered
           const first = h('i', { className: 'seam-first' })
           first.style.left = `calc(${(lp / extent) * 100}% - 1px)`
@@ -829,11 +1084,13 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         const m = h('i', { className: k ? 'mark rep' : 'mark' })
         m.style.left = `${(tick / extent) * 100}%`
         m.style.width = `${(Math.min(n.durTicks, lp || Infinity) / extent) * 100}%` // (min-width in the CSS: a % minimum is huge on a forever clip)
-        m.style.top = `${hi === lo ? 50 : 20 + ((hi - n.pitch) / (hi - lo)) * 60}%`
+        m.style.top = `${hi === lo ? 50 : 12 + ((hi - n.pitch) / (hi - lo)) * 72}%`
+        m.style.setProperty('--v', String(Math.min(1, Math.max(0.2, n.velocity > 1 ? n.velocity / 127 : n.velocity))))
         marks.push(m)
       }
     }
-    e.replaceChildren(c.view === 'drums' ? 'drums' : 'midi', ...marks)
+    pt.body.replaceChildren(...marks)
+    pt.head.replaceChildren(pt.name, ...notches)
   }
 
   /**
@@ -879,16 +1136,34 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     // a click (no drag) on a clip shows it in the dock's editor, when that is what the dock shows
     const clicked = () => { if (st.ui.dock.open && st.ui.dock.tab === 'clip' && st.ui.editing !== id) st.openClip(id) }
     st.setUi({ pad: null, note: null })
-    st.select([id])
+    // shift- or ⌘-click (ctrl elsewhere) adds the clip to the selection, or takes it out
+    if (ev.shiftKey || (IS_MAC ? ev.metaKey : ev.ctrlKey)) {
+      const sel = st.ui.selection
+      st.select(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id])
+      return
+    }
+    // grabbing a clip of a selection moves all of it (the clips of locked tracks and source lanes stay)
+    const sel0 = st.ui.selection
+    const group = mode === 'move' && sel0.length > 1 && sel0.includes(id)
+      ? sel0.filter((x) => { const c = clipOf(x); return !!c && !lanes.get(c.trackId)?.src && !st.locks.has(c.trackId) })
+      : null
+    if (!group) st.select([id])
     if (readOnly || lane0?.src || st.locks.has(clip.trackId)) return clicked() // source audio stays anchored: only the loop windows move
     undo.stopCapturing()
     ev.preventDefault()
+    // alt-drag leaves a copy behind (then alt doesn't mean "no snap"; ctrl / ⌘ still does)
+    const copy = mode === 'move' && ev.altKey
+    let copied = false
+    const mods = (m: PointerEvent) => ({ altKey: copy ? false : m.altKey, ctrlKey: m.ctrlKey || m.metaKey })
+    const moving = new Set(group ?? [id])
+    const from = new Map([...moving].map((x) => { const c = clipOf(x)!; return [x, { start: c.start, trackId: c.trackId }] as const }))
+    const index = new Map(getTracks(doc).map((t, i) => [t.id, i]))
     const grab = ev.clientX - box.left // where in the clip it was picked up
     let curTrack = clip.trackId
     const srcFrames = sourceFrames(doc, clip, rt)
     const notes0 = clip.kind === 'midi' ? getNotes(doc).filter((n) => n.clipId === id) : []
     // snap targets: the timeline start, the playhead and the edges of every other clip and pad (source lanes keep their own time)
-    const clips = getClips(doc).filter((c) => c.id !== id && !lanes.get(c.trackId)?.src)
+    const clips = getClips(doc).filter((c) => !moving.has(c.id) && !lanes.get(c.trackId)?.src)
     const length = clipLength(clip, rt)
     // a `forever` clip's real extent is off screen: the loop handle at its drawn end sets the extent from there
     const drawn = isForever(clip) ? (box.width / cpps) * rt : length
@@ -908,7 +1183,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
       if (at != null) snapLine.style.left = `${HEADER + x(at)}px`
     }
     const snapTo = (m: PointerEvent, at: number, d: number) => { // soft-snap the handle at sample `at` (moved `d`), with the snap line
-      const snap = m.altKey ? null : snapAt(at + d, 0, (SNAP_PX / pps) * rt)
+      const snap = m.altKey || m.ctrlKey || m.metaKey ? null : snapAt(at + d, 0, (SNAP_PX / pps) * rt)
       showSnap(snap ? snap.at : null)
       return snap ? snap.at - at : d
     }
@@ -924,28 +1199,37 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
           let d = Math.round(((m.clientX - ev.clientX) / cpps) * rt)
           // an audio clip's edge snaps to the same targets, repeat seams included, so it can be trimmed to land on them
           const edge = mode === 'l' ? clip.start + d : clip.start + length + d
-          const snap = clip.kind !== 'audio' || m.altKey ? null : snapAt(edge, 0, (SNAP_PX / pps) * rt)
+          const snap = clip.kind !== 'audio' || m.altKey || m.ctrlKey || m.metaKey ? null : snapAt(edge, 0, (SNAP_PX / pps) * rt)
           if (snap) d += snap.at - edge
           showSnap(snap ? snap.at : null)
           return trimClip(doc, rt, clip, mode, d, srcFrames, notes0)
         }
         // Absolute position under the pointer, in the target lane's own scale (source lanes differ).
         const hit = targetAt(m.clientY, clip.kind)
-        if (hit) curTrack = hit
+        if (hit && !(group && lanes.get(hit)?.src)) curTrack = hit // (a group stays on the main timeline)
         const host = hostOf(curTrack)
         let start = Math.max(0, Math.round(((m.clientX - grab - host.el.getBoundingClientRect().left) / host.pps) * rt))
-        const free = m.altKey || !!lanes.get(curTrack)?.src
+        const md = mods(m)
+        const free = md.altKey || md.ctrlKey || !!lanes.get(curTrack)?.src
         // an edge within reach wins; otherwise the start lands on the grid
         const snap = free ? null : snapAt(start, length, (SNAP_PX / host.pps) * rt)
         if (snap) start = snap.start
-        else if (!free) start = st.snap(start, m)
+        else if (!free) start = st.snap(start, md)
         showSnap(snap ? snap.at : null)
-        updateClip(doc, id, { start, ...(curTrack !== clip.trackId ? { trackId: curTrack } : {}) })
+        if (copy && !copied) { // the copies stay where the clips were; the clips themselves move on
+          copied = true
+          const data = copyClips(doc, [...moving])
+          if (data) pasteClips(doc, data, { at: data.origin })
+        }
+        if (group) moveGroup(doc, from, start - clip.start, (index.get(curTrack) ?? 0) - (index.get(clip.trackId) ?? 0))
+        else updateClip(doc, id, { start, ...(curTrack !== clip.trackId ? { trackId: curTrack } : {}) })
       },
       onEnd: (moved) => {
         showSnap(null)
         undo.stopCapturing()
-        if (!moved) clicked()
+        if (moved) return
+        if (group) st.select([id]) // a click on one clip of a selection selects just that one
+        clicked()
       },
     })
   }
@@ -1030,15 +1314,22 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
   const offs = [
     st.on('doc', draw),
     st.on('ui', (p) => { if (LANE_UI.some((k) => k in p)) draw() }),
+    heights.on(schedule),
     st.on('tick', (p) => drawPlayhead(p)),
     st.on('transport', () => { drawPlayhead(); ensurePreviewTick() }),
   ]
+  const offKeys = registerArrangeKeys(st)
+  acceptDrops(master.firstElementChild as HTMLElement, MASTER_TRACK, masterBody) // effects onto the master
   draw()
 
   return {
     el,
     destroy() {
       destroyed = true
+      offKeys()
+      removeEventListener('dragstart', onDragStart)
+      removeEventListener('dragend', onDragEnd)
+      removeEventListener('drop', onDragEnd)
       cancelAnimationFrame(raf)
       cancelAnimationFrame(previewRaf)
       scroll.removeEventListener('scroll', schedule)
