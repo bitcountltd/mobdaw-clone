@@ -48,7 +48,7 @@ const fadeGain = (t: number, shape: number) => (shape === 1 ? t : shape === 2 ? 
 
 const accepts = (trackKind: string, clipKind: string) => trackKind === clipKind
 export const audioFiles = (list: FileList | null | undefined) =>
-  [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
+  [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac|midi?)$/i.test(f.name)) // (and MIDI files: dropFiles makes clips of them)
 
 /** A scope's automation: one collapsible section holding a lane per automated param (hidden when there are none). */
 type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
@@ -538,7 +538,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
       const files = hasFiles(e), payload = hasPayload(e)
       if (!files && !payload) return
       e.stopPropagation()
-      const ok = !readOnly && !st.locks.has(trackId) && (payload ? !dragging || canDrop(st, dragging, trackId) : kind() === 'audio')
+      const ok = !readOnly && !st.locks.has(trackId) && (payload ? !dragging || canDrop(st, dragging, trackId) : kind() === 'audio' || kind() === 'midi')
       markDrop(row.closest('.lane') as HTMLElement, ok)
       if (!ok) { if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; return }
       e.preventDefault()
@@ -554,7 +554,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         if (canDrop(st, p, trackId)) applyDrop(st, p, { trackId, at: at(e) })
         return
       }
-      void st.dropFiles([...(e.dataTransfer?.files ?? [])], kind() === 'audio' ? trackId : null, st.snap(at(e), e))
+      void st.dropFiles([...(e.dataTransfer?.files ?? [])], kind() === 'audio' || kind() === 'midi' ? trackId : null, st.snap(at(e), e)) // (MIDI files onto a MIDI lane, audio onto an audio one)
     })
   }
   // below the tracks (and the empty arrangement): a new track for whatever is dropped
@@ -1400,6 +1400,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         st.select([])
       } },
       { label: 'rename', icon: 'edit', hint: 'double-click the name', run: () => renameClip(clipId) },
+      ...(clip.kind === 'midi' ? [{ label: 'export MIDI…', icon: 'export', title: 'download this clip as a .mid file', run: () => st.exportMidi(clipId) } satisfies MenuItem] : []),
       'sep',
     ]
     if (!onSource) {

@@ -12,6 +12,8 @@ import { onPeaks } from '../audio/peaks'
 import { openPlayback, type Playback } from '../audio/playback'
 import type { Session } from '../project/session'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
+import { EXPORT_MIDI_EVENT, clipToSong, importSmf, isMidiFile, parseSmf, projectToSong, writeSmf } from '../content/midifile'
+import { safeName, saveBlob } from '../download'
 import { recoverTakes, sweepUnusedTakes, type TakeCtx } from '../takes'
 import { automateMenu } from '../ui/automation'
 import { numberedName } from './arrange/kinds'
@@ -145,6 +147,7 @@ export class Studio {
     s.awareness.on('change', this.schedule)
     metaMap(this.doc).observe(this.rateChanged)
     this.offPeaks = onPeaks(this.schedule)
+    addEventListener(EXPORT_MIDI_EVENT, this.onExportMidi) // (the export dialog's "export MIDI")
     // After the first sync: migrate old projects (editors only: a viewer's writes never reach the server),
     // then start the engine at the project's sample rate.
     void s.synced.then(() => {
@@ -340,11 +343,16 @@ export class Studio {
   async dropFiles(files: File[], trackId: string | null, at: number) {
     const { doc } = this
     if (trackId && this.locks.has(trackId)) return this.status(`${this.locks.get(trackId)} is recording on that track`)
+    // MIDI files become clips (onto `trackId` when it is a MIDI track); audio goes on audio (or soundscape) tracks only
+    for (const f of files.filter(isMidiFile)) await this.importMidi(f, trackId, at)
+    files = files.filter((f) => !isMidiFile(f))
+    if (trackId && tracksMap(doc).get(trackId)?.get('kind') === 'midi') trackId = null
+    if (!files.length) return
     // (callers may pass everything dropped: what isn't audio is named in the status, not silently ignored)
     const isAudio = (f: File) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name)
     const skipped = files.filter((f) => !isAudio(f))
     files = files.filter(isAudio)
-    const skipMsg = skipped.length === 1 ? `${skipped[0].name} isn't an audio file.` : skipped.length ? `${skipped.length} files aren't audio files.` : ''
+    const skipMsg = skipped.length === 1 ? `${skipped[0].name} isn't an audio or MIDI file.` : skipped.length ? `${skipped.length} files aren't audio or MIDI files.` : ''
     if (!files.length) return void (skipMsg && this.status(skipMsg))
     for (const f of files) {
       this.status(`uploading ${f.name}…`)
@@ -364,6 +372,31 @@ export class Studio {
       }
     }
   }
+  /** Import a Standard MIDI File (content/midifile.ts) at `at`: into `trackId` when it is a MIDI track, else as new tracks. One undo step. */
+  async importMidi(f: File, trackId: string | null, at: number) {
+    if (this.readOnly) return
+    try {
+      const smf = parseSmf(await f.arrayBuffer())
+      this.undo.stopCapturing()
+      const r = importSmf(this.doc, smf, { at, trackId, base: f.name.replace(/\.[^.]+$/, '') })
+      this.undo.stopCapturing()
+      if (!r.clips.length) return this.status(`${f.name} has no notes.`)
+      const into = r.into && (tracksMap(this.doc).get(r.into)?.get('name') as string)
+      this.status(into ? `Imported ${f.name} into ${into}.` : `Imported ${r.tracks.length} track${r.tracks.length === 1 ? '' : 's'} from ${f.name}.`)
+      this.select(r.clips.length === 1 ? r.clips : [], false)
+      this.focus(r.into ?? r.tracks[0] ?? null)
+    } catch (err) {
+      this.status(`${f.name}: ${(err as Error).message}`)
+    }
+  }
+  /** Download one MIDI clip, or (no id) every MIDI track of the project, as a .mid file named `name` (default: the clip's name). */
+  exportMidi(clipId?: string | null, name?: string) {
+    const song = clipId ? clipToSong(this.doc, clipId) : projectToSong(this.doc, name ?? 'untitled')
+    if (!song) return
+    if (!song.tracks.some((t) => t.notes.length)) return this.status('There are no MIDI notes to export.')
+    saveBlob(new Blob([writeSmf(song) as Uint8Array<ArrayBuffer>], { type: 'audio/midi' }), `${safeName(name ?? song.name ?? 'untitled')}.mid`)
+  }
+  private onExportMidi = (e: Event) => this.exportMidi(null, (e as CustomEvent<{ name?: string }>).detail?.name)
 
   // --- automation
   /** Left / right click on a param's name offers Automate (or, once it has a lane, show / disable / delete it). */
@@ -469,6 +502,7 @@ export class Studio {
     this.s.awareness.off('change', this.schedule)
     metaMap(this.doc).unobserve(this.rateChanged)
     this.offPeaks()
+    removeEventListener(EXPORT_MIDI_EVENT, this.onExportMidi)
     this.pb?.destroy()
     this.subs.clear()
   }

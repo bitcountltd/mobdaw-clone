@@ -42,7 +42,7 @@ const CAT_ORDER: InstrumentCategory[] = ['keys', 'bass', 'lead', 'pad', 'pluck',
 const FOLD_KEY = 'mobdaw.browser.folded'
 
 const audioFiles = (list: FileList | null | undefined) =>
-  [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac|aif|aiff)$/i.test(f.name))
+  [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac|aif|aiff|midi?)$/i.test(f.name)) // (MIDI files too: dropFiles makes clips of them)
 const fmtDur = (s: number) => (s < 60 ? `${s.toFixed(s < 10 ? 1 : 0)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`)
 
 /** A tiny waveform from a sample's stored peaks (0..255 per bucket). */
@@ -102,13 +102,13 @@ export function mountBrowser(st: Studio) {
   const list = h('div', { className: 'browser-list', role: 'tree', 'aria-label': 'sounds and effects' })
 
   // --- footer: import audio, connect MIDI
-  const picker = h('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true })
+  const picker = h('input', { type: 'file', accept: 'audio/*,.mid,.midi,audio/midi', multiple: true, hidden: true })
   picker.onchange = () => {
     const files = audioFiles(picker.files)
     picker.value = ''
     if (files.length) void st.dropFiles(files, null, st.snap(st.position()))
   }
-  const importBtn = h('button', { className: 'browser-act', type: 'button', disabled: st.readOnly, onclick: () => picker.click() }, icon('upload', 14), 'Import audio…')
+  const importBtn = h('button', { className: 'browser-act', type: 'button', disabled: st.readOnly, onclick: () => picker.click() }, icon('upload', 14), 'Import audio or MIDI…')
   const midiBtn = h('button', { className: 'browser-act', type: 'button', title: 'let MIDI keyboards play the selected instrument track', onclick: () => void connectMidi(st) }, icon('piano', 14), 'Connect MIDI keyboard')
   const foot = h('div', { className: 'browser-foot' }, importBtn, midiBtn, picker)
 

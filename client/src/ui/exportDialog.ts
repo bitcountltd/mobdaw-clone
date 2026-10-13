@@ -1,4 +1,5 @@
 import { saveBlob, safeName } from '../download'
+import { EXPORT_MIDI_EVENT } from '../content/midifile'
 import { encodeWavPlanar, type WavDepth } from '../audio/wav'
 import { RenderAborted, type Rendered, type RenderOptions } from '../audio/render'
 import { h } from '../dom'
@@ -38,6 +39,11 @@ export function exportDialog(opts: {
   const progress = h('div', { className: 'export-progress', hidden: true }, bar, pct)
   const go = h('button', { className: 'btn primary', onclick: () => void start() }, icon('export'), 'export')
   const cancel = h('button', { className: 'btn', onclick: () => m.close() }, 'cancel')
+  // MIDI: the studio writes the notes of every MIDI track (not the click) to a .mid file (content/midifile.ts)
+  const midi = h('button', { className: 'btn export-midi', style: 'margin-right: auto', title: 'download the notes of every MIDI track (not the click track) as a .mid file', onclick: () => {
+    dispatchEvent(new CustomEvent(EXPORT_MIDI_EVENT, { detail: { name: safeName(file.value.trim().replace(/\.(wav|midi?)$/i, ''), 'untitled') } }))
+    m.close()
+  } }, 'export MIDI')
   const field = (label: string, ...el: HTMLElement[]) => h('label', { className: 'field' }, h('span', {}, label), ...el)
   const m = modal({
     title: 'Export audio',
@@ -49,12 +55,12 @@ export function exportDialog(opts: {
       field('Tail after the end', tail.el),
       progress, msg,
     ],
-    foot: [cancel, go],
+    foot: [midi, cancel, go],
     onClose: () => abort?.abort(),
   })
   let abort: AbortController | null = null
   const lock = (on: boolean) => {
-    for (const el of [file, tail.el, go, ...format.el.querySelectorAll('button'), range.el.querySelector('button')!]) (el as HTMLButtonElement).disabled = on
+    for (const el of [file, tail.el, go, midi, ...format.el.querySelectorAll('button'), range.el.querySelector('button')!]) (el as HTMLButtonElement).disabled = on
     if (loop) range.el.querySelectorAll('button')[1].disabled = on
   }
 

@@ -8,7 +8,7 @@ wrongbad.com/mobdaw, prepared for a static demo at **daw.bitcount.com**.
 | | |
 |---|---|
 | Code | branch `redesign`, 45 commits on top of `ec26a29` (the source behind wrongbad.com/mobdaw, verified against the live bundle) |
-| Tests | client vitest 268/268, engine `cargo test` all pass, `tsc --noEmit` clean |
+| Tests | client vitest 279/279, engine `cargo test` all pass, `tsc --noEmit` clean |
 | Prebuilt site | `client/dist/` (built with `BASE_PATH=/` for daw.bitcount.com, includes the wasm engine) |
 | Preview | a private claude.ai artifact (relative build); the microphone is blocked inside the artifact frame |
 | AWS | **not provisioned yet.** Every `*.amazonaws.com` endpoint was blocked by this session's network policy (cloud sandbox and the VM on your Mac). See [RESOURCES.md](RESOURCES.md). |
@@ -52,11 +52,11 @@ Local check with the production headers and CSP: `node deploy/aws/serve-local.mj
 - Arrange/mix switch is `X` (Logic's key), not Tab, so Tab keeps working for keyboard navigation.
 - Recording with an instrument track selected records MIDI; with an audio track selected it records audio.
 
-## Not merged: MIDI file import/export
+## MIDI files
 
-A finished feature (import `.mid` by drop or browser, export a clip or the whole project as `.mid`, 11 tests) is in
-`patches/midi-file-import-export.patch`, **not committed**: the subagent that wrote it was refused permission to `git add`,
-and I didn't commit it on its behalf. Review and apply with `git apply patches/midi-file-import-export.patch`.
+Import `.mid` files by dropping them (on empty space for new tracks, on an instrument lane for one clip) or with the browser's
+"Import audio or MIDI…". Export a clip (clip menu) or the whole project (export dialog) as `.mid`. Only the first tempo
+is used, and only notes come through (no controllers or pitch bend).
 
 ## Known gaps
 
