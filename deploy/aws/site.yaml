@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  mobdaw static demo site (daw.bitcount.com): private S3 bucket behind CloudFront (OAC),
+  ACM certificate (DNS-validated in Route 53) and A/AAAA alias records.
+  Deploy in us-east-1 (CloudFront only accepts ACM certificates from us-east-1).
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: daw.bitcount.com
+    Description: Fully qualified host name the site is served at.
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: Route 53 hosted zone that contains DomainName (e.g. the bitcount.com zone).
+
+Rules:
+  UsEast1Only:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
+        AssertDescription: Deploy this stack in us-east-1 (ACM certificates for CloudFront must live there).
+
+Resources:
+  # --- storage -------------------------------------------------------------------------------
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Name left to CloudFormation (globally unique); deploy.sh reads it from the outputs.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      # Versioning stays off (the default): `aws s3 sync --delete` really deletes old builds.
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOACRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${SiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt SiteBucket.Arn
+              - !Sub '${SiteBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # --- TLS ---------------------------------------------------------------------------------
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      # CloudFormation writes the validation CNAME into the zone and waits for ISSUED.
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  # --- CDN ---------------------------------------------------------------------------------
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-oac'
+        Description: !Sub 'S3 origin access for ${DomainName}'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # index.html and the other root files: the origin sends `Cache-Control: no-cache` (set by
+  # deploy.sh), and this policy honours it (MinTTL 0) while still compressing.
+  RootCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub '${AWS::StackName}-root'
+        Comment: Short TTL for index.html and root files; honours origin Cache-Control.
+        MinTTL: 0
+        DefaultTTL: 60
+        MaxTTL: 300
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          CookiesConfig:
+            CookieBehavior: none
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  # Same values are served by deploy/aws/serve-local.mjs (it parses this file), so a local
+  # test exercises the production headers. Keep each header value on one line.
+  SecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub '${AWS::StackName}-security'
+        Comment: Security headers for the mobdaw static demo
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 63072000
+            IncludeSubdomains: true
+            Preload: false
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+            Override: true
+        CustomHeadersConfig:
+          Items:
+            - Header: Permissions-Policy
+              Value: "microphone=(self), midi=(self), clipboard-write=(self), camera=(), geolocation=(), payment=(), usb=()"
+              Override: true
+            - Header: Cross-Origin-Opener-Policy
+              Value: "same-origin"
+              Override: true
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'mobdaw demo (${DomainName})'
+        Aliases:
+          - !Ref DomainName
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        DefaultRootObject: index.html
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: s3-site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: s3-site
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: !Ref RootCachePolicy
+          ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+        CacheBehaviors:
+          # Content-hashed build output: cache for a year (managed CachingOptimized).
+          - PathPattern: /assets/*
+            TargetOriginId: s3-site
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+        # No CustomErrorResponses: the app uses hash routing (no deep links), and rewriting
+        # 403/404 to index.html would turn a missing /assets/*.wasm or chunk into a 200 text/html
+        # response, hiding the real error. A missing key is a plain 403 (OAC, no s3:ListBucket).
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  # --- DNS ---------------------------------------------------------------------------------
+  # Z2FDTNDATAQYW2 is the fixed hosted zone id of every CloudFront distribution.
+  RecordA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  RecordAAAA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: AAAA
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+Outputs:
+  BucketName:
+    Description: S3 bucket holding the built client (upload target).
+    Value: !Ref SiteBucket
+  DistributionId:
+    Description: CloudFront distribution id (for invalidations).
+    Value: !Ref Distribution
+  DistributionDomain:
+    Description: CloudFront domain name (*.cloudfront.net).
+    Value: !GetAtt Distribution.DomainName
+  URL:
+    Description: Public site URL.
+    Value: !Sub 'https://${DomainName}/'
