@@ -3,6 +3,7 @@
 import type { EngineHost } from './engine-host'
 import { LIVE_HEADROOM_S } from './bridge'
 import { latencySamples, toPcm16 } from './wav'
+import { store } from '../safeStorage'
 
 export type InputInfo = { deviceId: string; label: string; channels: number }
 export type Captured = { pcm: Int16Array[]; frames: number; channels: number; startPos: number; latency: number }
@@ -13,13 +14,13 @@ const CLIP_HOLD_MS = 2000
 
 const offsetKey = (deviceId: string) => `mobdaw.inputOffsetMs.${deviceId}`
 /** Manual input delay in ms for a device (added to the automatic compensation), kept per device in this browser. */
-export const getInputOffset = (deviceId: string) => Number(localStorage.getItem(offsetKey(deviceId))) || 0
-export const setInputOffset = (deviceId: string, ms: number) => localStorage.setItem(offsetKey(deviceId), String(ms))
+export const getInputOffset = (deviceId: string) => Number(store.get(offsetKey(deviceId))) || 0
+export const setInputOffset = (deviceId: string, ms: number) => store.set(offsetKey(deviceId), String(ms))
 
 const inputKey = 'mobdaw.inputDevice'
 /** The microphone chosen in the project settings (a device id), kept in this browser; empty = the system default. */
-export const getPreferredInput = () => localStorage.getItem(inputKey) ?? ''
-export const setPreferredInput = (deviceId: string) => (deviceId ? localStorage.setItem(inputKey, deviceId) : localStorage.removeItem(inputKey))
+export const getPreferredInput = () => store.get(inputKey) ?? ''
+export const setPreferredInput = (deviceId: string) => (deviceId ? store.set(inputKey, deviceId) : store.remove(inputKey))
 
 type Take = {
   pcm: Int16Array[]; frames: number; startPos: number | null; onChunk?: (pcm: Int16Array, seq: number) => void

@@ -1,4 +1,5 @@
 import { h } from '../dom'
+import { store } from '../safeStorage'
 
 const KEY = 'mobdaw.about'
 
@@ -30,12 +31,12 @@ export function aboutColumn(): { el: HTMLElement; toggle(): void } {
 
     h('h3', {}, 'how it feels'),
     h('p', {}, 'the interface puts things where they belong: a track\'s effects live on the track, global effects sit at the top of the mix, and everything you can do to a clip is under your cursor on the clip. no hunting through menus, no modes to remember.'))
-  el.hidden = localStorage.getItem(KEY) !== 'open'
+  el.hidden = store.get(KEY) !== 'open'
   return {
     el,
     toggle() {
       el.hidden = !el.hidden
-      localStorage.setItem(KEY, el.hidden ? 'closed' : 'open')
+      store.set(KEY, el.hidden ? 'closed' : 'open')
     },
   }
 }

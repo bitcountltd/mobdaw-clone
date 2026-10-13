@@ -2,6 +2,7 @@
 // in audio/pedal.ts) and notes from any keyboard (`onNote`, played live by the studio). Thin on purpose.
 // Chromium and Firefox have Web MIDI; Safari does not.
 import { ACTIONS, type Action } from './audio/pedal'
+import { store } from './safeStorage'
 
 /** What one foot switch sends when pressed: a note-on (velocity > 0) or a controller change (value > 0). */
 export type Trigger = { kind: 'note' | 'cc'; channel: number; number: number }
@@ -49,13 +50,13 @@ export function debouncer(window = DEBOUNCE_MS) {
 const inputKey = 'mobdaw.midiInput'
 const bindKey = 'mobdaw.pedalBindings'
 /** The MIDI input chosen in the project settings (an input id); empty = none. */
-export const getMidiInput = () => localStorage.getItem(inputKey) ?? ''
-export const setMidiInput = (id: string) => (id ? localStorage.setItem(inputKey, id) : localStorage.removeItem(inputKey))
+export const getMidiInput = () => store.get(inputKey) ?? ''
+export const setMidiInput = (id: string) => (id ? store.set(inputKey, id) : store.remove(inputKey))
 
 export type Bindings = Partial<Record<Action, Trigger>>
 export function getBindings(): Bindings {
   try {
-    const raw = JSON.parse(localStorage.getItem(bindKey) ?? '{}') as Bindings
+    const raw = JSON.parse(store.get(bindKey) ?? '{}') as Bindings
     return Object.fromEntries(ACTIONS.flatMap((a) => (raw[a] && typeof raw[a]!.number === 'number' ? [[a, raw[a]]] : [])))
   } catch {
     return {}
@@ -67,13 +68,13 @@ export function setBinding(action: Action, t: Trigger | null) {
   for (const a of ACTIONS) if (t && b[a] && sameTrigger(b[a]!, t)) delete b[a]
   if (t) b[action] = t
   else delete b[action]
-  localStorage.setItem(bindKey, JSON.stringify(b))
+  store.set(bindKey, JSON.stringify(b))
 }
 export const actionFor = (b: Bindings, t: Trigger): Action | null => ACTIONS.find((a) => b[a] && sameTrigger(b[a]!, t)) ?? null
 
 // --- access
 export const midiSupported = () => typeof navigator !== 'undefined' && typeof navigator.requestMIDIAccess === 'function'
-const debug = () => !!localStorage.getItem('mobdaw.midiDebug')
+const debug = () => !!store.get('mobdaw.midiDebug')
 
 export type MidiInputInfo = { id: string; name: string }
 type Hit = { input: string; trigger: Trigger; at: number }

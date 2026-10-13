@@ -188,15 +188,23 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   let taps: number[] = []
   const tapBtn = h('button', { className: 'tb-tap', type: 'button', disabled: readOnly, onclick: (e: MouseEvent) => tap(e.timeStamp) }, 'tap')
   tooltip(tapBtn, 'tap the tempo', 'T')
+  // a run of taps is one undo step: it ends after 2s without a tap
+  let tapCh: ReturnType<Studio['beginTempoChange']> | null = null, tapIdle = 0
+  function endTapRun() { clearTimeout(tapIdle); tapCh?.end(); tapCh = null }
   function tap(now: number) {
     if (readOnly) return
-    if (taps.length && now - taps[taps.length - 1] > 2000) taps = []
+    if (taps.length && now - taps[taps.length - 1] > 2000) (taps = [], endTapRun())
+    clearTimeout(tapIdle)
+    tapIdle = window.setTimeout(endTapRun, 2000)
     taps.push(now)
     tapBtn.classList.add('hit')
     setTimeout(() => tapBtn.classList.remove('hit'), 90)
     const v = taps.length >= 3 ? tapBpm(taps) : null
     if (v != null) {
-      setProjectTempo(doc, Math.round(v))
+      // taps can be further apart than the undo manager's capture window, so keep the run's steps in one undo item
+      if (tapCh) undo.lastChange = Date.now()
+      tapCh ??= st.beginTempoChange()
+      tapCh.set(Math.round(v))
       st.status(`tempo ${Math.round(v)} bpm (tapped)`)
     } else st.status(taps.length === 1 ? 'tap tempo: keep tapping…' : 'tap tempo: once more…')
   }

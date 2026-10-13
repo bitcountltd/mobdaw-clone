@@ -3,6 +3,7 @@ import type {
   LibrarySample, LoginRequest, LoginResponse, Me, ProjectDetail, ProjectPreview, ProjectSummary, RegisterRequest, UploadAnalysis, UploadInfo, UploadUrlRequest,
   UploadUrlResponse, UrlResponse, UserInfo,
 } from '@mobdaw/shared'
+import { store } from './safeStorage'
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string) {
@@ -11,7 +12,7 @@ export class ApiError extends Error {
 }
 
 const TOKEN_KEY = 'mobdaw_token'
-export const getToken = () => localStorage.getItem(TOKEN_KEY) ?? ''
+export const getToken = () => store.get(TOKEN_KEY) ?? ''
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(import.meta.env.BASE_URL + 'api' + path, {
@@ -21,7 +22,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    if (res.status === 401) localStorage.removeItem(TOKEN_KEY)
+    if (res.status === 401) store.remove(TOKEN_KEY)
     throw new ApiError(res.status, data.error ?? 'error')
   }
   return data as T
@@ -35,16 +36,16 @@ export const api = {
   me: () => get<Me>('/me'),
   async login(b: LoginRequest) {
     const r = await post<LoginResponse>('/auth/login', b)
-    localStorage.setItem(TOKEN_KEY, r.token)
+    store.set(TOKEN_KEY, r.token)
     return r.me
   },
   async register(b: RegisterRequest) {
     const r = await post<LoginResponse>('/auth/register', b)
-    localStorage.setItem(TOKEN_KEY, r.token)
+    store.set(TOKEN_KEY, r.token)
     return r.me
   },
   async logout() {
-    localStorage.removeItem(TOKEN_KEY)
+    store.remove(TOKEN_KEY)
     await post('/auth/logout').catch(() => {})
   },
   users: () => get<UserInfo[]>('/users'),
@@ -73,6 +74,6 @@ export const api = {
   uploadFileUrl: (hash: string) => get<UrlResponse>(`/uploads/${hash}/url`),
   async deleteAccount(password: string) {
     await post('/me/delete', { password })
-    localStorage.removeItem(TOKEN_KEY)
+    store.remove(TOKEN_KEY)
   },
 }
