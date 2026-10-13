@@ -217,8 +217,11 @@ export class Studio {
     this.emit('tick', this.position())
   }
   rewind() { this.seek(0) }
-  toggleRecord() {
+  /** Set by the top bar: runs before a recording starts from stopped (the count-in); resolving false cancels it. */
+  beforeRecord: (() => Promise<boolean>) | null = null
+  async toggleRecord() {
     if (this.midi.active) return this.stop()
+    if (this.beforeRecord && !this.rec.take && !this.playing && !(await this.beforeRecord())) return
     return !this.rec.take && this.midi.wants() ? this.midi.start() : this.rec.toggle()
   }
 
