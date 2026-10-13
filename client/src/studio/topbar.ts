@@ -116,7 +116,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   }
   let countInOn = false
   try { countInOn = localStorage.getItem('mobdaw.countIn') === '1' } catch { /* (not remembered) */ }
-  const countBtn = toggle('1 bar', { className: 'tb-count', on: countInOn, onChange: (on) => {
+  const countBtn = toggle('count-in', { className: 'tb-count', on: countInOn, onChange: (on) => {
     countInOn = on
     try { localStorage.setItem('mobdaw.countIn', on ? '1' : '0') } catch { /* (not remembered) */ }
   } })
@@ -152,7 +152,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   }
 
   const bpm = numberField({
-    value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, width: '3ch', title: 'tempo: drag to change, click to type',
+    value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, title: 'tempo: drag to change, click to type',
     onInput: (v) => setBpmSoon(v), onChange: (v) => setBpmSoon(v),
   })
   bpm.el.classList.add('tb-bpm')
@@ -269,7 +269,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     const row = (label: string, ...kids: (Node | null)[]) => h('div', { className: 'mp-row' }, h('span', { className: 'mp-label' }, label), ...kids)
     const act = (ic: Parameters<typeof icon>[0], label: string, run: () => void, hint?: string, disabled = false) =>
       h('button', { className: 'mp-act', type: 'button', disabled, onclick: () => { close(); run() } }, icon(ic), h('span', {}, label), hint ? h('span', { className: 'kbd-hint' }, hint) : null)
-    const tempo = numberField({ value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, width: '4ch', onChange: (v) => !readOnly && setProjectTempo(doc, v) })
+    const tempo = numberField({ value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, onChange: (v) => !readOnly && setProjectTempo(doc, v) })
     const meter = segmented(['2', '3', '4', '5', '6', '7'], String(st.tempo().beatsPerBar), (v) => !readOnly && setBeatsPerBar(doc, Number(v)))
     const grid = segmented(GRID_SIZES.map((g) => ({ value: String(g.value), label: g.label })), String(st.ui.grid), (v) => st.setUi({ grid: (v === 'bar' ? 'bar' : Number(v)) as GridSize }))
     const viewSeg = segmented<'arrange' | 'mix'>(['arrange', 'mix'], st.ui.view, (v) => st.setUi({ view: v }))
@@ -282,7 +282,8 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       act('undo', 'undo', () => undo.undo(), `${MOD}Z`, readOnly || !undo.undoStack.length),
       act('redo', 'redo', () => undo.redo(), MAC ? '⇧⌘Z' : 'ctrl+shift+Z', readOnly || !undo.redoStack.length),
       act('metronome', metro.get() ? 'metronome off' : 'metronome on', toggleClick, undefined, readOnly),
-      act('record', countInOn ? 'count-in off' : 'count-in: one bar', () => countBtn.el.click(), undefined, readOnly),
+      act('record', countInOn ? 'count-in off' : 'count-in: one bar of click before recording', () => countBtn.el.click(), undefined, readOnly),
+      act('power', st.pedal.on ? 'loop pedal off' : 'loop pedal on', () => void st.pedal.set(!st.pedal.on), '', readOnly || (!!st.pedal.why() && !st.pedal.on)),
       act('browser', st.ui.browserOpen ? 'hide the browser' : 'show the browser', () => st.setUi({ browserOpen: !st.ui.browserOpen }), 'B'),
       act('dock', st.ui.dock.open ? 'hide the dock' : 'show the dock', () => st.setUi({ dock: { ...st.ui.dock, open: !st.ui.dock.open } }), 'D'),
       act('zoom-in', 'zoom to fit', () => dispatchEvent(new Event(ZOOM_FIT)), 'Z'),

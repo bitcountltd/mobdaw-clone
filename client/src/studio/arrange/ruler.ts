@@ -120,7 +120,7 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     const step = stepSamples(st.ui.grid, t, st.rate)
     const here = at(e.clientX)
     popover(el, [
-      { label: 'loop selection', icon: 'loop', disabled: !sel, run: () => write(toggledLoop(null, 0, t, st.rate, sel, step)) },
+      { label: 'loop selection', disabled: !sel, run: () => write(toggledLoop(null, 0, t, st.rate, sel, step)) },
       { label: 'loop these 4 bars', run: () => write(loopAround(here, t, st.rate)) },
       'sep',
       { label: loop?.on ? 'loop off' : 'loop on', hint: 'L', disabled: !loop, run: () => loop && write({ ...loop, on: !loop.on }) },

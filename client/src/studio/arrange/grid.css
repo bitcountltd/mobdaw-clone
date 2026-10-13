@@ -2,8 +2,8 @@
    brace and the playhead's head. */
 .studio .arrange {
   --grid-sub: rgba(235, 230, 220, .022);
-  --loop-band: rgba(240, 180, 76, .055);
-  --loop-band-off: rgba(235, 230, 220, .018);
+  --loop-band: rgba(240, 180, 76, .075);
+  --loop-band-off: rgba(235, 230, 220, .02);
   --rl-bar: rgba(235, 230, 220, .30);
   --rl-beat: rgba(235, 230, 220, .17);
   --rl-sub: rgba(235, 230, 220, .09);

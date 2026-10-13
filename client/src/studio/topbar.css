@@ -6,7 +6,7 @@
   background: var(--panel); border-bottom: 1px solid var(--line);
 }
 .studio .tb-l, .studio .tb-r { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 6px; }
-.studio .tb-r { justify-content: flex-end; }
+.studio .tb-r { justify-content: flex-end; min-width: max-content; }
 .studio .tb-c { flex: none; display: flex; align-items: center; gap: 14px; }
 .studio .tb-grp { display: flex; gap: 1px; }
 .studio .tb .icon-btn { width: 30px; height: 30px; border-radius: var(--r-sm); }
@@ -65,7 +65,7 @@
 .studio .tb-sep { width: 1px; height: 18px; background: var(--line); }
 .studio .tb-tempo { display: flex; align-items: baseline; gap: 4px; }
 .studio .tb input.numfield.tb-bpm {
-  width: 3.4ch; height: 26px; padding: 0 2px; border: 0; border-radius: var(--r-sm); background: none; text-align: right;
+  width: 2.6em; height: 26px; padding: 0 3px; border: 0; border-radius: var(--r-sm); background: none; text-align: right;
   font: 600 var(--fs-h3) / 26px var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; cursor: ew-resize;
 }
 .studio .tb input.numfield.tb-bpm:hover { background: var(--raise); }
@@ -109,35 +109,44 @@
 .studio .tb .chat-btn.on { color: var(--on-accent); background: var(--accent); }
 .studio .tb .chat-n:empty { display: none; }
 .studio .tb .chat-n { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
-.studio .tb .tb-more { display: none; }
 
 /* --- popovers opened from the bar */
 .tb-pop { padding: 10px; }
 .tb-pop-label { margin: 0 0 8px; font-size: var(--fs-sm); color: var(--dim); }
-.tb-pop.more-panel { width: 300px; display: flex; flex-direction: column; gap: 2px; }
+.tb-pop.more-panel { width: 324px; max-width: calc(100vw - 16px); display: flex; flex-direction: column; gap: 2px; }
 .more-panel .mp-row { display: flex; align-items: center; gap: 8px; min-height: 32px; flex-wrap: wrap; }
-.more-panel .mp-label { width: 84px; font-size: var(--fs-sm); color: var(--dim); }
+.more-panel .mp-label { width: 88px; font-size: var(--fs-sm); color: var(--dim); }
 .more-panel .seg > button { padding: 3px 7px; }
 .more-panel .tb-tap { height: 22px; padding: 0 8px; border: 1px solid var(--line); background: none; color: var(--dim); font-size: var(--fs-xs); }
 .more-panel .sep { height: 1px; margin: 6px 0; background: var(--line); }
-.more-panel .mp-act { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); background: none; text-align: left; }
+.more-panel .mp-act { display: flex; justify-content: flex-start; align-items: center; gap: 10px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); background: none; text-align: left; }
 .more-panel .mp-act:hover:not(:disabled) { background: var(--line); }
 .more-panel .mp-act svg { color: var(--dim); }
 .more-panel .mp-act .kbd-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--dim); }
-.more-panel input.numfield { height: 26px; font-variant-numeric: tabular-nums; }
+.more-panel input.numfield { width: 3.4em; height: 26px; font-variant-numeric: tabular-nums; }
 
-/* --- narrower: fold away, least important first */
-@container (max-width: 1320px) {
-  .studio .tb-cpu, .studio .tb .pedal-st { display: none; }
+/* quiet toggles on the right: the panels and the view are layout, not signal, so "on" is a raised tile, not the accent */
+.studio .tb .tb-panels .toggle.on, .studio .tb .tb-panels .toggle.on:hover:not(:disabled) { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.studio .tb .seg.tb-view > button.on, .studio .tb .seg.tb-view > button.on:hover:not(:disabled) { background: var(--raise); color: var(--fg); }
+.studio .tb .seg.tb-view { background: none; }
+
+/* --- narrower: fold away, least important first (everything folded is in the more panel) */
+@container (max-width: 1640px) {
+  .studio .tb .tb-pedal, .studio .tb-cpu, .studio .tb .pedal-st { display: none; }
 }
-@container (max-width: 1180px) {
-  .studio .tb .tb-panels, .studio .tb .saved-text { display: none; }
-  .studio .tb .scope { width: 84px; }
+@container (max-width: 1500px) {
+  .studio .tb .tb-count, .studio .tb .saved-text { display: none; }
   .studio .tb-c { gap: 10px; }
 }
-@container (max-width: 900px) {
-  .studio .tb .tb-hist, .studio .tb .tb-view, .studio .tb .tb-meterbox, .studio .tb .tb-files, .studio .tb .tb-count { display: none; }
-  .studio .tb .tb-more { display: inline-grid; place-items: center; }
+@container (max-width: 1340px) {
+  .studio .tb .tb-panels { display: none; }
+  .studio .tb .scope { width: 84px; }
+}
+@container (max-width: 1160px) {
+  .studio .tb .tb-view, .studio .tb .tb-tap { display: none; }
+}
+@container (max-width: 960px) {
+  .studio .tb .tb-hist, .studio .tb .tb-meterbox, .studio .tb .tb-files { display: none; }
   .studio .studio-top.tb { gap: 10px; }
 }
 @container (max-width: 700px) {
