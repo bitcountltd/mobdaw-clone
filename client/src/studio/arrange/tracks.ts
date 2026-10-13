@@ -47,9 +47,9 @@ export function mountTrackHeaders(st: Studio) {
     const grip = h('span', { className: 'th-grip', title: 'drag to move the track' }, icon('grip', 14))
     const mute = btn('mute', 'mute (M)', 'm', () => updateTrack(doc, id, { muted: !cur(id)?.get('muted') }))
     const solo = btn('solo', 'solo (⇧S)', 's', () => updateTrack(doc, id, { soloed: !cur(id)?.get('soloed') }))
-    const arm = t.kind === 'audio' ? btn('arm', 'arm for recording', icon('arm', 14), () => void st.rec.arm(id)) : null
+    const arm = t.kind === 'audio' || (t.kind === 'midi' && t.role !== 'click') ? btn('arm', 'arm for recording', icon('arm', 14), () => void st.rec.arm(id)) : null
     if (arm) arm.dataset.tone = 'rec'
-    const monitor = arm ? btn('monitor', 'monitor the input through this track\'s effects (use headphones)', icon('speaker', 14), () => st.rec.setMonitoring(!st.rec.monitoring)) : null
+    const monitor = arm && t.kind === 'audio' ? btn('monitor', 'monitor the input through this track\'s effects (use headphones)', icon('speaker', 14), () => st.rec.setMonitoring(!st.rec.monitoring)) : null
     if (monitor) monitor.hidden = true
     const gain = fader({ value: t.gain, orientation: 'horizontal', color: trackColor(t, 0), title: 'gain (double-click: 0 dB)', disabled: readOnly,
       onInput: (g) => updateTrack(doc, id, { gain: g }) })

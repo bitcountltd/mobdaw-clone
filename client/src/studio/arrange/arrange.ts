@@ -1,6 +1,7 @@
 // The arrangement: one scroller holding the ruler (sticky on top), the track rows (headers sticky on the left) and the
 // automation. It owns zoom anchoring (ctrl + wheel keeps the time under the pointer; the top bar's buttons keep the middle),
 // following the playhead, zoom to fit, the musical grid under the lanes (grid.ts) and drops outside any lane.
+import { applyDrop, readDragPayload } from '../drops'
 import { clipLength, getClips, getLoop, getPads, getTracks, isForever, patternTicks, samplesPerBar } from '@mobdaw/shared'
 import { h } from '../../dom'
 import type { Studio } from '../studio'
@@ -29,7 +30,10 @@ export function mountArrange(st: Studio) {
   scroll.ondrop = (e) => {
     e.preventDefault()
     if (st.readOnly) return
-    void st.dropFiles(audioFiles(e.dataTransfer?.files), null, st.fromX(e.clientX - scroll.getBoundingClientRect().left - HEADER + scroll.scrollLeft))
+    const at = st.fromX(e.clientX - scroll.getBoundingClientRect().left - HEADER + scroll.scrollLeft)
+    const p = readDragPayload(e)
+    if (p) return void applyDrop(st, p, { at })
+    void st.dropFiles(audioFiles(e.dataTransfer?.files), null, at)
   }
 
   // --- zoom: whoever changes `pps` may leave an anchor (a screen x); otherwise the middle of the visible lanes stays put

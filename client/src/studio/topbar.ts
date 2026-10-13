@@ -23,6 +23,7 @@ import { projectMenu } from '../ui/projectMenu'
 import { fmt } from '../ui/transport'
 import { ZOOM_FIT, ZOOM_MAX, ZOOM_MIN } from './arrange/arrange'
 import { toggleLoop } from './arrange/ruler'
+import { registerKeys } from './keys'
 import { mountScope } from './scope'
 import type { Studio } from './studio'
 import './topbar.css'
@@ -39,13 +40,6 @@ export type TopbarOpts = {
 export const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 const MOD = MAC ? '⌘' : 'ctrl+'
 /** The shortcuts this module handles, for the ? overlay. */
-export const TOPBAR_SHORTCUTS: [keys: string, what: string][] = [
-  ['L', 'loop on / off (makes a 4-bar loop, or one over the selection, if there is none)'],
-  ['T', 'tap tempo (tap three or more times)'],
-  ['Z', 'zoom to fit the song'],
-  [`${MOD}+ / ${MOD}-`, 'zoom in / out'],
-  ['Tab', 'switch arrange / mix'],
-]
 
 const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()
 const FIGURE = ' ' // a digit-wide space, for the counter's fixed width
@@ -99,7 +93,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   tooltip(rewind, 'go to the start', 'home')
   const play = iconButton('play', 'play / pause', () => st.toggle(), 'tb-play')
   tooltip(play, 'play / pause', 'space')
-  const rec = toggle({ icon: 'record' }, { tone: 'rec', className: 'tb-rec', onChange: () => { rec.set(!!st.rec.take); void st.toggleRecord() } })
+  const rec = toggle({ icon: 'record' }, { tone: 'rec', className: 'tb-rec', onChange: () => { rec.set(!!st.rec.take || st.midi.active); void st.toggleRecord() } })
   tooltip(rec.el, 'record onto the armed track, or a new one · right-click: input offset', 'shift+space')
   rec.el.addEventListener('contextmenu', (e) => { e.preventDefault(); st.rec.offsetMenu(e) })
   const loopBtn = toggle({ icon: 'loop' }, { className: 'tb-loop', onChange: () => toggleLoop(st) })
@@ -357,9 +351,9 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     const playing = st.playing
     play.replaceChildren(icon(playing ? 'pause' : 'play'))
     play.classList.toggle('playing', playing)
-    rec.set(!!st.rec.take)
-    rec.el.classList.toggle('armed', !!st.ui.armedTrack && !st.rec.take)
-    el.classList.toggle('recording', !!st.rec.take)
+    rec.set(!!st.rec.take || st.midi.active)
+    rec.el.classList.toggle('armed', !!st.ui.armedTrack && !st.rec.take && !st.midi.active)
+    el.classList.toggle('recording', !!st.rec.take || st.midi.active)
     drawPedalText()
     drawCounter(st.position(), true)
   }
@@ -384,7 +378,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     metro.set(getTracks(doc).some((t) => t.role === 'click' && !t.muted)) // lit: a click track exists and is unmuted
     presence?.replaceChildren(...[s.user, ...st.remote.map((r) => r.user)].map((u) =>
       h('span', { className: 'dot', title: u.username, style: `background:${u.color}` }, initials(u.username))))
-    rec.set(!!st.rec.take)
+    rec.set(!!st.rec.take || st.midi.active)
     drawMeta()
   }
   function drawUi() {
@@ -427,27 +421,20 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
 
   // ---------------------------------------------------------------- keys: L, T, Z, Tab, ⌘+ / ⌘-
   const zoom = (f: number) => st.setUi({ pps: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, st.ui.pps * f)) })
-  const onKey = (e: KeyboardEvent) => {
-    if (e.defaultPrevented || typing(e)) return
-    const mod = e.metaKey || e.ctrlKey
-    const k = e.key.toLowerCase()
-    if (mod && !e.altKey && (e.key === '=' || e.key === '+')) return e.preventDefault(), zoom(1.5)
-    if (mod && !e.altKey && e.key === '-') return e.preventDefault(), zoom(1 / 1.5)
-    if (mod || e.altKey) return
-    if (e.key === 'Tab' && !e.shiftKey) {
+  const offKeys = registerKeys(st, [
+    { key: ['=', '+'], mods: { mod: true }, repeat: true, run: () => zoom(1.5), label: 'zoom in', group: 'View', readOnly: true },
+    { key: '-', mods: { mod: true }, repeat: true, run: () => zoom(1 / 1.5), label: 'zoom out', group: 'View', readOnly: true },
+    {
+      key: 'tab', label: 'arrange / mix', group: 'View', readOnly: true,
       // (keyboard users moving focus between controls keep Tab)
-      const a = document.activeElement as HTMLElement | null
-      if (a && a !== document.body && a.matches(':focus-visible')) return
-      e.preventDefault()
-      return st.setUi({ view: st.ui.view === 'arrange' ? 'mix' : 'arrange' })
-    }
-    if (e.shiftKey || e.repeat) return
-    if (k === 'l') { e.preventDefault(); toggleLoop(st) }
-    else if (k === 't') { e.preventDefault(); tap(e.timeStamp) }
-    else if (k === 'z') { e.preventDefault(); dispatchEvent(new Event(ZOOM_FIT)) }
-    else if (e.key === 'Home') { e.preventDefault(); st.rewind() }
-  }
-  addEventListener('keydown', onKey)
+      when: () => { const a = document.activeElement as HTMLElement | null; return !(a && a !== document.body && a.matches(':focus-visible')) },
+      run: () => st.setUi({ view: st.ui.view === 'arrange' ? 'mix' : 'arrange' }),
+    },
+    { key: 'l', run: () => toggleLoop(st), label: 'loop on / off', group: 'Transport' },
+    { key: 't', run: (e) => tap(e.timeStamp), label: 'tap tempo', group: 'Transport' },
+    { key: 'z', run: () => dispatchEvent(new Event(ZOOM_FIT)), label: 'zoom to fit', group: 'View', readOnly: true },
+    { key: 'home', run: () => st.rewind(), label: 'back to start', group: 'Transport', readOnly: true },
+  ])
 
   const meta = metaMap(doc)
   meta.observe(drawMeta)
@@ -476,7 +463,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       offs.forEach((f) => f())
       cancelCount?.()
       if (st.beforeRecord === countIn) st.beforeRecord = null
-      removeEventListener('keydown', onKey)
+      offKeys()
       meta.unobserve(drawMeta)
       undoEvents.forEach((ev) => undo.off(ev, drawUndo))
       doc.off('update', onUpdate)
