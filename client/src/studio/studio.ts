@@ -4,7 +4,7 @@
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, MASTER_TRACK, addAudioClip, addLane, addMidiClip, addPad, addPoint, addTrack, clipLength, clipsMap,
   deleteLane, devicesMap, getClips, getPads, getPoints, getSampleRate, getTempo, getTracks, laneOf, lanesMap, loopersMap, metaMap,
-  beginTempoChange, migrateToV2, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, setLaneEnabled, setLaneState, stashLaneRanges,
+  beginTempoChange, markersMap, migrateToV2, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, setLaneEnabled, setLaneState, stashLaneRanges,
   sweepOrphans, tracksMap, type AwarenessState, type GridSize, type ParamTarget, type Tempo, type TrackKind,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
@@ -86,7 +86,7 @@ function loadPps(projectId: string): number | null {
 }
 
 // (meta: tempo, meter and loop changes redraw the views too)
-const WATCHED = [metaMap, tracksMap, clipsMap, notesMap, devicesMap, loopersMap, padsMap, lanesMap, pointsMap, samplesMap]
+const WATCHED = [metaMap, tracksMap, clipsMap, notesMap, devicesMap, loopersMap, padsMap, lanesMap, pointsMap, samplesMap, markersMap]
 
 export class Studio {
   readonly s: Session

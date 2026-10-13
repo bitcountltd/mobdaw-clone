@@ -11,16 +11,17 @@
 /* every lane body (track lanes, automation) paints the grid under its clips; the master row and source lanes don't */
 .studio .arrange .lane-row > .lane-body:not(.master-body):not(.src-body) { background-image: var(--lane-grid, none); }
 
-/* --- ruler: a loop strip on top, bar numbers and ticks below */
-.studio .arrange .ruler.bb { height: 30px; cursor: default; user-select: none; -webkit-user-select: none; }
+/* --- ruler: the marker lane on top (ruler-markers.css, --marks tall), the loop strip, bar numbers and ticks below */
+.studio .arrange { --marks: 17px; }
+.studio .arrange .ruler.bb { height: calc(30px + var(--marks)); cursor: default; user-select: none; -webkit-user-select: none; }
 .studio .ruler.bb .ruler-body { cursor: text; }
 .studio .ruler.bb .rl-canvas { position: absolute; top: 0; height: 100%; pointer-events: none; }
-.studio .ruler.bb .rl-strip { position: absolute; left: 0; right: 0; top: 0; height: 11px; cursor: crosshair; }
+.studio .ruler.bb .rl-strip { position: absolute; left: 0; right: 0; top: var(--marks); height: 11px; cursor: crosshair; }
 .studio .ruler.bb .rl-strip:hover { background: rgba(235, 230, 220, .03); }
 .studio .ruler.bb.dragging, .studio .ruler.bb.dragging * { cursor: grabbing; }
 
 /* the loop region: a band through the ruler and a brace in the strip with two ends */
-.studio .rl-loop { position: absolute; top: 0; bottom: 0; background: var(--loop-band-off); z-index: 1; pointer-events: none; }
+.studio .rl-loop { position: absolute; top: var(--marks); bottom: 0; background: var(--loop-band-off); z-index: 1; pointer-events: none; }
 .studio .rl-loop[hidden] { display: none; }
 .studio .rl-loop.on { background: rgba(240, 180, 76, .09); }
 .studio .rl-brace {
@@ -44,6 +45,6 @@
 .studio .arrange .playhead { background: var(--accent); }
 .studio .ruler.bb .overlay { z-index: 2; }
 .studio .ruler.bb .playhead::before {
-  content: ''; position: absolute; top: 0; left: -5px; width: 11px; height: 8px; background: var(--accent);
+  content: ''; position: absolute; top: var(--marks); left: -5px; width: 11px; height: 8px; background: var(--accent);
   clip-path: polygon(0 0, 100% 0, 50% 100%);
 }

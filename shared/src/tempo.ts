@@ -6,6 +6,7 @@
 // Timeline positions stay in samples. The tempo only drives the ruler, the snap grid, new MIDI clips and the click.
 // Changing the tempo (`setProjectTempo`) moves everything so it stays on the same bar and beat.
 import * as Y from 'yjs'
+import { markersMap, getMarkers } from './markers.ts'
 import { DEFAULT_MIDI_BPM, addNote, clipsMap, getClips, getNotes, getPads, getPoints, getSampleRate, getTracks, metaMap, notesMap, padsMap, pointsMap, tracksMap, type Track } from './schema.ts'
 
 export type Tempo = { bpm: number; beatsPerBar: number }
@@ -86,8 +87,8 @@ export function setLoop(doc: Y.Doc, l: LoopRegion | null) {
 }
 
 /**
- * Set the project tempo. Everything on the timeline keeps its bar and beat: clip and pad starts, automation points and
- * the loop region are scaled by old/new; MIDI clips take the new bpm (their notes are in ticks, so they follow); audio
+ * Set the project tempo. Everything on the timeline keeps its bar and beat: clip and pad starts, automation points, song
+ * markers and the loop region are scaled by old/new; MIDI clips take the new bpm (their notes are in ticks, so they follow); audio
  * clips keep their length (audio is not stretched). One transaction, so one undo step.
  */
 export function setProjectTempo(doc: Y.Doc, bpm: number) {
@@ -107,6 +108,7 @@ export function beginTempoChange(doc: Y.Doc): { set(bpm: number): void; end(): v
   const clips = getClips(doc).map((c) => ({ id: c.id, start: c.start, midi: c.kind === 'midi' }))
   const pads = getPads(doc).map((p) => ({ id: p.id, start: p.start, length: p.length }))
   const points = getPoints(doc).map((p) => ({ id: p.id, pos: p.pos }))
+  const markers = getMarkers(doc).map((m) => ({ id: m.id, pos: m.pos }))
   const loop = getLoop(doc)
   let done = false
   return {
@@ -130,6 +132,7 @@ export function beginTempoChange(doc: Y.Doc): { set(bpm: number): void; end(): v
           m.set('length', Math.max(1, Math.round(p.length * k)))
         }
         for (const p of points) pointsMap(doc).get(p.id)?.set('pos', Math.round(p.pos * k))
+        for (const m of markers) markersMap(doc).get(m.id)?.set('pos', Math.round(m.pos * k))
         if (loop && getLoop(doc)) setLoop(doc, { ...getLoop(doc)!, start: loop.start * k, end: loop.end * k })
         metaMap(doc).set('bpm', next)
       })

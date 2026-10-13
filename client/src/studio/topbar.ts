@@ -24,6 +24,7 @@ import { fmt } from '../ui/transport'
 import { ZOOM_FIT, ZOOM_MAX, ZOOM_MIN } from './arrange/arrange'
 import { toggleLoop } from './arrange/ruler'
 import { registerKeys } from './keys'
+import { mountSectionLabel } from './markers'
 import { qwertyOf, QWERTY_KEYS } from './qwerty'
 import { mountScope } from './scope'
 import type { Studio } from './studio'
@@ -208,8 +209,10 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     })
     const close = popoverPanel(anchor, h('div', { className: 'tb-pop' }, h('div', { className: 'tb-pop-label' }, 'Beats per bar'), seg.el))
   }
+  const section = mountSectionLabel(st) // the song section the playhead is in (markers)
   const display = h('div', { className: 'tb-display' },
     counter,
+    section.el,
     h('span', { className: 'tb-sep' }),
     h('span', { className: 'tb-tempo' }, bpm.el, h('span', { className: 'tb-unit' }, 'bpm'), tapBtn),
     meterBtn)
@@ -542,6 +545,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       clearTimeout(saveTimer)
       cancelAnimationFrame(bpmRaf)
       scope.destroy()
+      section.destroy()
       s.provider?.off('status', onStatus)
       s.provider?.off('unsyncedChanges', onUnsynced)
       s.provider?.off('authenticationFailed', onAuthFail)

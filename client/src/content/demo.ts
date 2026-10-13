@@ -6,15 +6,17 @@
 //   bars 13-20  A'      the same with the melody on a soft flute through a tape echo; a tom fill into B
 //   bars 21-28  B       Dm9 | Bbmaj9 | Gm9 | A7b9, twice: busier comping, clap on the backbeat, a new melody; a snare roll
 //   bars 29-32  outro   A's chords once more, resolving to Fmaj9; the drums thin out and the master reverb opens up
-// The loop region (off) covers A and A', bars 5-20. The piano's voicings move by step from chord to chord.
+// The loop region (off) covers A and A', bars 5-20; a song marker starts each section. The piano's voicings move by step from chord to chord.
 import type * as Y from 'yjs'
-import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum, setLoop } from '@mobdaw/shared'
+import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum, addMarker, setLoop } from '@mobdaw/shared'
 import { MASTER_TRACK, automate, barPos, clip, initProject, rng, track, type ClipWriter, type Song } from './compose'
 import { GM, addDrumKit, addEffectPreset, addInstrument, drumKit, effectPreset, instrumentPreset } from './presets'
 
 export const DEMO_NAME = 'Window seat'
 export const DEMO_BPM = 88
 export const DEMO_BARS = 32
+/** The song's sections as markers: [bar (from 0), name]. */
+export const DEMO_SECTIONS: [bar: number, name: string][] = [[0, 'Intro'], [4, 'A'], [12, 'A′'], [20, 'B'], [28, 'Outro']]
 
 type Chord = { name: string; root: number; fifth: number; keys: number[] }
 const C: Record<string, Chord> = {
@@ -82,6 +84,8 @@ export function buildDemo(doc: Y.Doc) {
     writeDust(s, dust, r)
 
     setLoop(doc, { start: barPos(s, 4), end: barPos(s, 20), on: false })
+    // song markers for the sections (bars 1, 5, 13, 21, 29)
+    for (const [bar, name] of DEMO_SECTIONS) addMarker(doc, { pos: barPos(s, bar), name })
   })
 }
 

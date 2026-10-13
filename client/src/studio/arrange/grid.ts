@@ -3,8 +3,10 @@
 // `--lane-grid` (a stack of repeating gradients, one per line weight, plus the loop band) on the arrangement, and every
 // `.lane-body` paints it as its background, under the clips. The gradients are spaced in exact (fractional) pixels from
 // the same samples -> px mapping as the clips (`Studio.x`), so the lines sit under clip edges at every zoom.
-import { getLoop, gridSamples, metaMap, samplesPerBar, samplesPerBeat, visibleGridBeats, type GridSize, type LoopRegion, type Tempo } from '@mobdaw/shared'
+import { getLoop, getMarkers, gridSamples, metaMap, samplesPerBar, samplesPerBeat, visibleGridBeats, type GridSize, type LoopRegion, type Tempo } from '@mobdaw/shared'
 import type { Studio } from '../studio'
+import { songEnd } from '../markers'
+import { sectionBands } from './rulerMarkers'
 import './grid.css'
 
 /** Lines closer than this (px) are not drawn. */
@@ -70,8 +72,11 @@ export function rulerTicks(t: Tempo, pps: number, x0: number, x1: number, snap: 
 }
 const isWhole = (v: number) => Math.abs(v - Math.round(v)) < 1e-6
 
-/** The CSS background layers for the lanes (bar lines on top), in px from timeline 0. */
-export function laneGridCss(t: Tempo, rate: number, pps: number, snap: GridSize, loop: LoopRegion | null): string {
+/** A song section under the lanes: every other one (`alt`) a shade lighter, a coloured marker's tinted. */
+export type SectionBand = { start: number; end: number; alt: boolean; color: string | null }
+
+/** The CSS background layers for the lanes (bar lines on top, then the loop band, then the sections), in px from timeline 0. */
+export function laneGridCss(t: Tempo, rate: number, pps: number, snap: GridSize, loop: LoopRegion | null, sections: SectionBand[] = []): string {
   const lv = gridLevels(t, pps, snap)
   const beatPx = (60 / t.bpm) * pps
   const px = (n: number) => `${+n.toFixed(4)}px`
@@ -84,6 +89,16 @@ export function laneGridCss(t: Tempo, rate: number, pps: number, snap: GridSize,
     const a = (loop.start / rate) * pps, b = (loop.end / rate) * pps
     const c = loop.on ? 'var(--loop-band)' : 'var(--loop-band-off)'
     layers.push(`linear-gradient(to right, transparent ${px(a)}, ${c} ${px(a)} ${px(b)}, transparent ${px(b)})`)
+  }
+  // the sections: one gradient with hard stops; plain sections leave the lane as it is, every other one is lifted a hair
+  const shaded = sections.filter((s) => s.alt || s.color)
+  if (shaded.length) {
+    const stops = shaded.map((s) => {
+      const a = px((s.start / rate) * pps), b = px((s.end / rate) * pps)
+      const c = s.color ? `color-mix(in srgb, ${s.color} ${s.alt ? 6 : 4}%, transparent)` : 'var(--sect-band)'
+      return `transparent ${a}, ${c} ${a} ${b}, transparent ${b}`
+    })
+    layers.push(`linear-gradient(to right, ${stops.join(', ')})`)
   }
   return layers.join(', ')
 }
@@ -99,7 +114,7 @@ export { samplesPerBar }
 export function mountLaneGrid(st: Studio, host: HTMLElement) {
   let last = ''
   const draw = () => {
-    const css = laneGridCss(st.tempo(), st.rate, st.ui.pps, st.ui.grid, getLoop(st.doc))
+    const css = laneGridCss(st.tempo(), st.rate, st.ui.pps, st.ui.grid, getLoop(st.doc), sectionBands(getMarkers(st.doc), songEnd(st)))
     if (css !== last) host.style.setProperty('--lane-grid', (last = css))
   }
   const meta = metaMap(st.doc)

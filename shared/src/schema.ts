@@ -160,6 +160,7 @@ export const chatLog = (doc: Y.Doc) => doc.getArray<ChatMessage>('chat')
 /** Types to pass to `new Y.UndoManager(undoScope(doc), { trackedOrigins })`. */
 export const undoScope = (doc: Y.Doc) => [
   metaMap(doc), tracksMap(doc), clipsMap(doc), notesMap(doc), devicesMap(doc), loopersMap(doc), padsMap(doc), lanesMap(doc), pointsMap(doc),
+  doc.getMap('markers'), // (markers.ts)
 ]
 
 const all = <T>(m: Y.Map<YM>) => [...m.values()].map((v) => v.toJSON() as T)

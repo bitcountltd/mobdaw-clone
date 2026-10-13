@@ -1,6 +1,6 @@
 // New-project templates, offered on the home page. Each builds into an empty doc.
 import type * as Y from 'yjs'
-import { DELAY, MASTER_TRACK, addClickTrack, addDevice, getClips, setTrackColor, updateClip, updateTrack } from '@mobdaw/shared'
+import { DELAY, MASTER_TRACK, addClickTrack, addDevice, addMarker, getClips, setTrackColor, updateClip, updateTrack } from '@mobdaw/shared'
 import { clip, initProject, track, type Song } from './compose'
 import { buildDemo } from './demo'
 import { GM, addDrumKit, addEffectPreset, addInstrument, drumKit, effectPreset, instrumentPreset } from './presets'
@@ -50,6 +50,7 @@ function beat(doc: Y.Doc) {
       [4, 31, 1.4, 0.88], [5.75, 31, 0.22, 0.5], [6.5, 38, 0.7, 0.7], [7.25, 40, 0.6, 0.65],
     ]
     for (const [at, pitch, dur, v] of line) b.note(at, pitch, dur, v)
+    addMarker(doc, { pos: 0, name: 'Groove' })
   })
 }
 

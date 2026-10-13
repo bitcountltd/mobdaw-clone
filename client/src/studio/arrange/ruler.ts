@@ -1,7 +1,10 @@
-// The ruler above the lanes: bars and beats (from the project tempo and meter), the loop region (cycle) and the
-// playheads. It sticks to the top of the arrangement's scroller.
-//   upper strip   drag on empty ruler: draw a loop region (snapped; alt = free). Drag the brace's ends to resize it, its
-//                 body to move it. Double-click: loop on / off. Right-click anywhere: the loop menu.
+// The ruler above the lanes: song markers, bars and beats (from the project tempo and meter), the loop region (cycle)
+// and the playheads. It sticks to the top of the arrangement's scroller.
+//   marker lane   a flag per song marker, its section a faint band to the next one. Click a flag: go there; drag it:
+//                 move it (to bars; shift = the snap grid, alt = free); double-click: rename; right-click: its menu.
+//                 Double-click empty lane: add a marker there.
+//   loop strip    drag on empty ruler: draw a loop region (snapped; alt = free). Drag the brace's ends to resize it, its
+//                 body to move it. Double-click: loop on / off. Right-click anywhere: the loop menu (+ add marker).
 //   lower part    click or drag: move the playhead.
 // The ticks are drawn on one canvas the size of the visible window (redrawn on scroll); the loop brace and the
 // playheads are a few positioned elements.
@@ -9,9 +12,11 @@ import { clipLength, getClips, getLoop, loopAround, loopBetween, metaMap, setLoo
 import { h } from '../../dom'
 import { fmt } from '../../ui/transport'
 import { popover } from '../../ui/popover'
+import { registerKeys } from '../keys'
 import type { Studio } from '../studio'
 import { rulerTicks, stepSamples } from './grid'
 import { HEADER } from './lanes'
+import { mountMarkerLane, MARKS } from './rulerMarkers'
 
 /** Second ticks with labels into `box` (rebuilt only when the extent or scale changes); `keep` stays after them. (Soundscape source lanes, which run in seconds.) */
 export function drawTicks(box: HTMLElement, totalSec: number, pps: number, keep: Node[] = []) {
@@ -24,8 +29,9 @@ export function drawTicks(box: HTMLElement, totalSec: number, pps: number, keep:
     h('span', { className: 'tick', style: `left:${i * step * pps}px` }, fmt(i * step).replace(/\.0$/, ''))), ...keep)
 }
 
-/** Height of the loop strip at the top of the ruler (px); keep in step with grid.css. */
+/** Height of the loop strip under the marker lane (px); keep in step with grid.css. */
 export const STRIP = 11
+export { MARKS }
 
 /** The span of the selected clips (samples), or null. */
 export function selectionRange(st: Studio): { start: number; end: number } | null {
@@ -57,6 +63,9 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
   const strip = h('div', { className: 'rl-strip', 'data-hint': 'drag: draw a loop region · double-click: loop on / off · right-click: loop menu' })
   const body = h('div', { className: 'ruler-body', 'data-hint': 'click or drag: move the playhead' }, canvas, strip, loopEl, heads)
   const el = h('div', { className: 'ruler bb' }, h('div', { className: 'corner' }), body)
+  const marks = mountMarkerLane(st, el, body)
+  body.prepend(marks.el)
+  const offMarkerKeys = registerKeys(st, marks.keys)
 
   const at = (clientX: number) => st.fromX(clientX - body.getBoundingClientRect().left)
   const drag = (e: PointerEvent, move: (m: PointerEvent) => void, up?: () => void) => {
@@ -82,9 +91,10 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
 
   el.onpointerdown = (e) => {
     if (e.button !== 0) return
+    if (marks.pointerdown(e)) return
     const t = e.target as HTMLElement
     const loop = getLoop(doc)
-    const y = e.clientY - body.getBoundingClientRect().top
+    const y = e.clientY - body.getBoundingClientRect().top - MARKS
     if (!st.readOnly && loop && (t === hl || t === hr)) {
       // resize from one end; dragging past the other end swaps them
       const fixed = t === hl ? loop.end : loop.start
@@ -97,7 +107,7 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
         write({ start, end: start + len, on: loop.on })
       })
     }
-    if (!st.readOnly && y < STRIP + 1) {
+    if (!st.readOnly && y >= 0 && y < STRIP + 1) {
       // draw a new region (it appears once the pointer has moved a little)
       const x0 = e.clientX, a = st.snap(at(e.clientX), e)
       let drawn = false
@@ -111,21 +121,24 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     drag(e, (m) => st.seek(at(m.clientX)))
   }
   el.ondblclick = (e) => {
-    if (st.readOnly) return
-    const y = e.clientY - body.getBoundingClientRect().top
+    if (st.readOnly || marks.dblclick(e)) return
+    const y = e.clientY - body.getBoundingClientRect().top - MARKS
     const loop = getLoop(doc)
-    if (loop && (e.target === brace || e.target === hl || e.target === hr || y < STRIP + 1)) writeOnce({ ...loop, on: !loop.on })
-    else if (!loop && y < STRIP + 1) writeOnce(loopAround(at(e.clientX), st.tempo(), st.rate))
+    const inStrip = y >= 0 && y < STRIP + 1
+    if (loop && (e.target === brace || e.target === hl || e.target === hr || inStrip)) writeOnce({ ...loop, on: !loop.on })
+    else if (!loop && inStrip) writeOnce(loopAround(at(e.clientX), st.tempo(), st.rate))
   }
   el.oncontextmenu = (e) => {
     e.preventDefault()
-    if (st.readOnly) return
+    if (st.readOnly || marks.contextmenu(e)) return
     const loop = getLoop(doc)
     const sel = selectionRange(st)
     const t = st.tempo()
     const step = stepSamples(st.ui.grid, t, st.rate)
     const here = at(e.clientX)
     popover(el, [
+      { label: 'add marker here', hint: 'I', run: () => marks.add(here, e.altKey) },
+      'sep',
       { label: 'loop selection', disabled: !sel, run: () => writeOnce(toggledLoop(null, 0, t, st.rate, sel, step)) },
       { label: 'loop these 4 bars', run: () => writeOnce(loopAround(here, t, st.rate)) },
       'sep',
@@ -141,7 +154,7 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     // the body starts after the header column; the visible part of it is [scrollLeft, scrollLeft + clientWidth - HEADER]
     const off = Math.max(0, scroll.scrollLeft)
     const visW = Math.max(1, Math.min(body.offsetWidth - off, scroll.clientWidth - HEADER))
-    const hgt = el.clientHeight || 30
+    const hgt = el.clientHeight || MARKS + 30
     const dpr = devicePixelRatio || 1
     canvas.style.left = `${off}px`
     canvas.style.width = `${visW}px`
@@ -159,7 +172,7 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     const ticks = rulerTicks(st.tempo(), st.ui.pps, off - 40, off + visW, st.ui.grid)
     for (const tk of ticks) {
       const x = Math.round(tk.px - off) + 0.5
-      const top = tk.kind === 'bar' ? STRIP + 1 : tk.kind === 'beat' ? hgt - 6 : hgt - 3
+      const top = tk.kind === 'bar' ? MARKS + STRIP + 1 : tk.kind === 'beat' ? hgt - 6 : hgt - 3
       ctx.fillStyle = colors[tk.kind]
       ctx.fillRect(x - 0.5, top, 1, hgt - top)
       if (tk.label) {
@@ -185,10 +198,11 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
       heads.append(h('div', { className: 'remote-head', style: `left:${st.x(r.playhead)}px;background:${r.user.color}` }))
     }
     drawLoop()
+    marks.draw()
     drawCanvas()
     drawHead(st.position())
   }
-  const drawHead = (p: number) => (head.style.left = `${st.x(p)}px`)
+  const drawHead = (p: number) => { head.style.left = `${st.x(p)}px`; marks.tick(p) }
   let raf = 0
   const soon = () => { if (!raf) raf = requestAnimationFrame(() => ((raf = 0), drawCanvas())) }
   const onMeta = () => { drawLoop(); soon() }
@@ -208,6 +222,8 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     el,
     destroy() {
       offs.forEach((f) => f())
+      offMarkerKeys()
+      marks.destroy()
       meta.unobserve(onMeta)
       scroll.removeEventListener('scroll', soon)
       removeEventListener('resize', soon)

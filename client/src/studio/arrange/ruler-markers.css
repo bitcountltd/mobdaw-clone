@@ -1,0 +1,56 @@
+/* The ruler's marker lane (arrange/rulerMarkers.ts): flags with names on a pole, and each section a faint band to the
+   next marker, every other one a shade lighter. The lanes carry the same bands, fainter still (grid.ts). Quiet on
+   purpose: the names are dim until the playhead is in their section. */
+.studio .arrange {
+  --sect-alt: rgba(235, 230, 220, .028);
+  --sect-band: rgba(235, 230, 220, .014);
+  --flag-bg: #2a2d32;
+}
+/* (the browser's header lines up with the ruler beside it) */
+.studio .browser-head { height: calc(30px + var(--marks, 17px)); }
+
+.studio .rl-marks {
+  position: absolute; left: 0; right: 0; top: 0; height: var(--marks); z-index: 1;
+  box-shadow: inset 0 -1px 0 rgba(235, 230, 220, .045); cursor: default;
+}
+.studio .rl-sections, .studio .rl-flags { position: absolute; inset: 0; pointer-events: none; }
+.studio .rl-sect { position: absolute; top: 0; bottom: 0; }
+.studio .rl-sect.alt { background: var(--sect-alt); }
+.studio .rl-sect.tinted { background: color-mix(in srgb, var(--mc) 9%, transparent); }
+.studio .rl-sect.tinted.alt { background: color-mix(in srgb, var(--mc) 13%, transparent); }
+
+/* a flag: a pole the height of the lane, and the name on a small tab beside it */
+.studio .rl-flag {
+  position: absolute; top: 0; height: var(--marks); box-sizing: border-box; display: flex; align-items: flex-start;
+  pointer-events: auto; cursor: grab; overflow: hidden;
+  border-left: 1.5px solid color-mix(in srgb, var(--mc, var(--fg)) 55%, transparent);
+}
+.studio .rl-flag-name {
+  margin-top: 2px; height: 13px; padding: 0 6px 0 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-xs); font-weight: 500; line-height: 13px; letter-spacing: .01em; color: var(--dim);
+  background: var(--flag-bg); border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.studio .rl-flag.coloured .rl-flag-name { background: color-mix(in srgb, var(--mc) 20%, var(--flag-bg)); }
+.studio .rl-flag:hover .rl-flag-name { color: var(--fg); background: color-mix(in srgb, var(--mc, var(--fg)) 14%, var(--flag-bg)); }
+.studio .rl-flag.cur { border-left-color: var(--mc, var(--fg)); }
+.studio .rl-flag.cur .rl-flag-name { color: var(--fg); }
+.studio .rl-flag.moving { cursor: grabbing; }
+.studio .rl-flag.moving .rl-flag-name { color: var(--fg); box-shadow: 0 0 0 1px var(--line-strong); }
+.studio .rl-flag.renaming .rl-flag-name { visibility: hidden; }
+
+/* renaming in place: a field over the flag's tab */
+.studio .rl-rename {
+  position: absolute; top: 1px; z-index: 4; width: 140px; height: 15px; min-height: 0; box-sizing: border-box; margin: 0 0 0 1.5px; padding: 0 5px 0 4px;
+  font: 500 var(--fs-xs) / 13px var(--font-ui); color: var(--fg);
+  background: var(--raise); border: 1px solid var(--accent); border-radius: 0 var(--r-sm) var(--r-sm) 0; outline: none;
+}
+
+/* the marker menu's colour row */
+.mk-colors { display: flex; gap: 5px; padding: 6px 10px 4px; }
+.mk-colors .mk-swatch {
+  width: 16px; height: 16px; min-width: 0; padding: 0; border-radius: 50%; flex: none;
+  background: var(--mc, transparent); border: 1px solid color-mix(in srgb, var(--mc, var(--dim)) 70%, transparent);
+}
+.mk-colors .mk-swatch:not([style]) { background: linear-gradient(135deg, transparent 45%, var(--dim) 45% 55%, transparent 55%); }
+.mk-colors .mk-swatch:hover { box-shadow: 0 0 0 2px var(--line-strong); }
+.mk-colors .mk-swatch.on { box-shadow: 0 0 0 2px var(--fg); }

@@ -1,0 +1,11 @@
+/* The current song section beside the top bar's counter (studio/markers.ts mountSectionLabel): small and quiet, it
+   brightens a step while playing. */
+.studio .tb-section {
+  flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: -6px;
+  font-size: var(--fs-sm); font-weight: 500; line-height: 32px; letter-spacing: .01em; color: var(--dim);
+}
+.studio .tb-section[hidden] { display: none; }
+.studio .tb-section.playing { color: color-mix(in srgb, var(--fg) 80%, var(--dim)); }
+@container (max-width: 480px) {
+  .studio .tb-section { display: none; }
+}
