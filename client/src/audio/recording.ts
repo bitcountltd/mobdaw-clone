@@ -42,7 +42,8 @@ export class Recorder {
   /** Called whenever the level moves (about 45 times a second while armed). */
   onlevel: (() => void) | null = null
 
-  constructor(private ctx: AudioContext, private hostP: Promise<EngineHost>, private rate: number) {}
+  /** `onRecording(true)` as a take starts and `(false)` as it ends (Playback suspends the transport cycle meanwhile). */
+  constructor(private ctx: AudioContext, private hostP: Promise<EngineHost>, private rate: number, private onRecording?: (on: boolean) => void) {}
 
   get armed() { return !!this.stream }
   get recording() { return !!this.take }
@@ -113,6 +114,7 @@ export class Recorder {
       if (!force) return
       this.host?.record(false)
       this.take = null
+      this.onRecording?.(false)
     }
     this.host?.meter(false)
     if (this.host) this.host.onlevel = null
@@ -148,6 +150,7 @@ export class Recorder {
       }
       if (m.final) take.done()
     }
+    this.onRecording?.(true)
     h.record(true, this.info.channels, live)
   }
 
@@ -156,6 +159,7 @@ export class Recorder {
     const take = this.take, h = this.host, info = this.info
     if (!take || !h || !info) return null
     h.record(false)
+    this.onRecording?.(false)
     await Promise.race([take.finished, new Promise((r) => setTimeout(r, 2000))])
     h.onrec = h.onrecstart = null
     this.take = null
