@@ -1,12 +1,23 @@
-// FX chain cards: title (click for the delete menu), on/off switch and param controls for one device.
-import { DEVICES, KEY_MAX, KEY_MIN, SIMPLE_FILTER, filterHasGain, paramToPos, paramToValue, type Device, type ParamDef, type ParamTarget } from '@mobdaw/shared'
+// Device panels for the dock's rack: each device is a hardware-like unit with a header (grip to reorder, power, name,
+// preset menu, collapse, remove) and its params as knobs, laid out per device: the finnwave's envelope as a row under a
+// drawing of it, the EQ's bands as columns under the response curve, the compressor next to its transfer curve.
+// Drums get a compact pad (`drumPad`) that the rack lines up inside a kit panel.
+//
+// Behaviour kept from the old cards: a param's label (or a right-click on its knob) offers automate / LFO; dragging
+// a knob plays the value live and shows it to collaborators, and lets go into the doc as one undo step; a param a lane
+// drives follows the lane and can't be dragged; other users' drags show on the knobs; instruments have a key range.
+import {
+  COMPRESSOR, DELAY, DEVICES, EQ, FINNWAVE, KEY_MAX, KEY_MIN, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO, filterHasGain,
+  type Device, type ParamDef, type ParamTarget,
+} from '@mobdaw/shared'
 import { h } from '../dom'
+import { formatValue, knob, segmented, type Knob } from '../theme/controls'
+import { icon } from '../theme/icons'
 import { NO_AUTO, type AutoInfo } from './automation'
-import { CARD_W, FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type FilterMember } from './filterCurve'
-import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
+import { FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type FilterMember } from './filterCurve'
 import { noteName, parseNote } from './noteName'
+import { popover, type MenuItem } from './popover'
 import { dragToReorder } from './reorder'
-import { valueTip } from './valueTip'
 
 export type CardDeps = {
   readOnly: boolean
@@ -20,132 +31,353 @@ export type CardDeps = {
   commitMany(deviceId: string, values: Record<number, number>): void
   bypass(deviceId: string, bypass: boolean): void
   remove(deviceId: string): void
-  /** Instruments: set the note range (MIDI pitches, inclusive), and rename the card. */
+  /** Instruments: set the note range (MIDI pitches, inclusive), and rename the device. */
   keys(deviceId: string, lo: number, hi: number): void
   rename(deviceId: string): void
   /** The run of adjacent filters this one is in, in chain order, with `self` standing in for it. */
   run(deviceId: string, self: FilterMember): FilterMember[]
-  /** This filter's values changed: the card that hosts its run's curve redraws it. */
+  /** This filter's values changed: the other filters of its run redraw their curves. */
   changed(deviceId: string): void
-  /** A card is being dragged by its title bar (merged views split meanwhile); dropped before `beforeId` (null: last). */
+  /** A panel is being dragged by its grip; dropped before `beforeId` (null: last). */
   reorderStart(): void
   reorderDrop(deviceId: string, beforeId: string | null): void
   reorderEnd(): void
-  /** The run's curve is moving a param of filter `deviceId` (any card in the run), and finished moving it. */
+  /** A run's curve is moving a param of filter `deviceId` (any panel in the run), and finished moving it. */
   dragFilter(deviceId: string, change: FilterChange): void
   dragFilterEnd(deviceId: string): void
-  /** Make a param's name offer "Automate" (the timeline owns the lanes). */
+  /** Make a param's label offer "Automate" (the timeline owns the lanes). */
   autoMenu(label: HTMLElement, target: ParamTarget): void
+  /** The panel's preset menu (null: none), and the preset its values match now. */
+  presets(dev: Device): { menu: ((anchor: HTMLElement) => void) | null; current: string | null }
+  /** Whether the panel is shown collapsed, and to change it. */
+  collapsed(deviceId: string): boolean
+  setCollapsed(deviceId: string, on: boolean): void
+  /** Play a drum or note on the device's track (on / off). */
+  audition?(trackId: string, pitch: number, on: boolean): void
 }
 
-export const fmt = (p: ParamDef, v: number) =>
-  `${v >= 1000 ? Math.round(v) : v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(3)}${p.unit ? ` ${p.unit}` : ''}`
+export const fmt = (p: ParamDef, v: number) => {
+  if (p.unit === ':1') return `${v < 10 ? v.toFixed(1) : Math.round(v)}:1`
+  if (p.unit === '×') return `${v.toFixed(2)}×`
+  if (!p.unit && p.max <= 2 && p.min >= 0 && p.name !== 'rolloff' && !p.name.includes('damping')) return `${Math.round(v * 100)}%`
+  return formatValue(v, p.unit)
+}
 
-type Row = { p: ParamDef; input: HTMLInputElement | HTMLSelectElement; out: HTMLElement; label: HTMLElement }
+/** Short knob labels where the catalogue's names are long. */
+const SHORT: Record<string, string> = { 'env→rolloff': 'env amt', resonance: 'res', predelay: 'pre-delay', threshold: 'thresh' }
+/** Each device's knob groups (param ids), in order; params left out go in a last group. */
+type Group = { label?: string; ids: number[]; draw?: 'adsr' | 'comp' }
+const LAYOUT: Record<number, Group[]> = {
+  [FINNWAVE]: [{ label: 'tone', ids: [0, 1] }, { label: 'envelope', ids: [2, 3, 4, 5], draw: 'adsr' }, { label: 'out', ids: [6] }],
+  [LOFI_DRUM]: [{ label: 'tone', ids: [0, 1] }, { label: 'body', ids: [2, 3] }],
+  [REVERB]: [{ ids: [0, 1, 2, 3] }],
+  [COMPRESSOR]: [{ ids: [0, 1], draw: 'comp' }, { label: 'time', ids: [2, 3] }, { label: 'out', ids: [4] }],
+  [TREMOLO]: [{ ids: [2, 0, 1, 3] }],
+  [DELAY]: [{ label: 'echo', ids: [1, 2, 0] }, { label: 'tape', ids: [3, 4] }, { label: 'tone', ids: [5, 6, 7] }],
+  [SIMPLE_FILTER]: [{ ids: [0, 1, 2, 3] }],
+}
+const EQ_BANDS = ['low', 'bell 1', 'bell 2', 'high']
+const EQ_MODES = [6, 5, 5, 7] // low shelf, bell, bell, high shelf (engine device.rs, kind 8)
+const EQ_COLORS = ['#e0896a', '#d9a648', '#58b4a8', '#6c9bd6']
+const SVGNS = 'http://www.w3.org/2000/svg'
+const svg = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}) => {
+  const e = document.createElementNS(SVGNS, tag)
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v))
+  return e
+}
 
+/** One param's control: a knob, or (for choices) a segmented switch / a compact select. */
+type Ctl = {
+  p: ParamDef
+  el: HTMLElement
+  /** The element whose click / right-click offers automation (null: choices can't be automated). */
+  label: HTMLElement | null
+  set(v: number): void
+  disable(d: boolean): void
+  active(): boolean
+}
+
+function paramCtl(p: ParamDef, o: { size: number; name?: string; disabled: boolean; input(v: number): void; change(v: number): void }): Ctl {
+  if (p.options) {
+    const name = h('span', { className: 'pc-name' }, o.name ?? p.name)
+    if (p.options.length <= 3) {
+      const seg = segmented(p.options.map((label, i) => ({ value: String(i), label: label.replace('pass', '') })), '0', (v) => (o.input(Number(v)), o.change(Number(v))))
+      seg.el.classList.add('sm')
+      const el = h('div', { className: 'pc choice' }, seg.el, name)
+      const disable = (d: boolean) => seg.el.querySelectorAll('button').forEach((b) => (b.disabled = d))
+      disable(o.disabled)
+      return { p, el, label: null, set: (v) => seg.set(String(Math.round(v))), disable, active: () => false }
+    }
+    const sel = h('select', { className: 'pc-select', disabled: o.disabled }, ...p.options.map((label, i) => h('option', { value: String(i) }, label))) as HTMLSelectElement
+    sel.onchange = () => (o.input(Number(sel.value)), o.change(Number(sel.value)))
+    sel.onkeydown = (e) => e.stopPropagation()
+    const el = h('div', { className: 'pc choice' }, sel, name)
+    return { p, el, label: null, set: (v) => (sel.value = String(Math.round(v))), disable: (d) => (sel.disabled = d), active: () => document.activeElement === sel }
+  }
+  const value = h('span', { className: 'pc-value' })
+  let k: Knob
+  let dragging = false
+  k = knob({
+    value: p.def, min: p.min, max: p.max, def: p.def, scale: p.scale, label: o.name ?? SHORT[p.name] ?? p.name, size: o.size,
+    format: (v) => fmt(p, v), title: p.name, disabled: o.disabled,
+    onInput: (v) => { dragging = true; value.textContent = fmt(p, v); o.input(v) },
+    onChange: (v) => { dragging = false; value.textContent = fmt(p, v); o.change(v) },
+  })
+  const label = k.el.querySelector<HTMLElement>('.knob-label')!
+  // a drag that ends over the label is not a click on it (the label's click opens the automation menu)
+  let down: [number, number] | null = null
+  k.el.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY]), true)
+  k.el.addEventListener('click', (e) => {
+    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 3) e.stopPropagation()
+  }, true)
+  // right-click anywhere on the knob: the label's menu
+  k.el.addEventListener('contextmenu', (e) => {
+    if (e.target === label) return
+    e.preventDefault()
+    e.stopPropagation()
+    label.dispatchEvent(new MouseEvent('contextmenu', { clientX: e.clientX, clientY: e.clientY, bubbles: true, cancelable: true }))
+  })
+  const el = h('div', { className: 'pc' }, k.el, value)
+  return {
+    p, el, label,
+    set: (v) => { k.set(v); if (!dragging) value.textContent = fmt(p, v) },
+    disable: (d) => k.setDisabled(d),
+    active: () => dragging,
+  }
+}
+
+/** The finnwave's envelope as a little drawing: attack, decay to the sustain level, a held stretch, release. */
+function adsrDrawing() {
+  const W = 168, H = 36
+  const fill = svg('path', { class: 'adsr-fill' })
+  const line = svg('path', { class: 'adsr-line' })
+  const el = svg('svg', { class: 'adsr', viewBox: `0 0 ${W} ${H}`, width: W, height: H })
+  el.append(fill, line)
+  const span = (ms: number) => Math.sqrt(Math.max(0, ms) / 5000) * 46 // short times stay visible
+  return {
+    el,
+    draw(a: number, d: number, s: number, r: number) {
+      const x1 = 2 + span(a), x2 = x1 + span(d), x3 = x2 + 28, x4 = Math.min(W - 2, x3 + span(r) * 0.8)
+      const y = (v: number) => 2 + (1 - v) * (H - 4)
+      const pts = `M2 ${H - 1}L${x1.toFixed(1)} ${y(1)}L${x2.toFixed(1)} ${y(s).toFixed(1)}L${x3.toFixed(1)} ${y(s).toFixed(1)}L${x4.toFixed(1)} ${H - 1}`
+      line.setAttribute('d', pts)
+      fill.setAttribute('d', `${pts}Z`)
+    },
+  }
+}
+
+/** The compressor's static curve: input level across, output up, the knee at the threshold. */
+function compDrawing() {
+  const S = 64
+  const grid = svg('path', { class: 'comp-grid', d: `M0 ${S}L${S} 0M0 ${S / 2}H${S}M${S / 2} 0V${S}` })
+  const line = svg('path', { class: 'comp-line' })
+  const knee = svg('circle', { class: 'comp-knee', r: 2.5 })
+  const el = svg('svg', { class: 'comp', viewBox: `0 0 ${S} ${S}`, width: S, height: S })
+  el.append(grid, line, knee)
+  const xy = (db: number) => S - ((db + 60) / 60) * S
+  return {
+    el,
+    draw(thr: number, ratio: number, makeup: number) {
+      const out = (i: number) => Math.min(6, (i < thr ? i : thr + (i - thr) / ratio) + makeup)
+      line.setAttribute('d', `M0 ${xy(out(-60)).toFixed(1)}L${(S - xy(thr)).toFixed(1)} ${xy(out(thr)).toFixed(1)}L${S} ${xy(out(0)).toFixed(1)}`)
+      knee.setAttribute('cx', (S - xy(thr)).toFixed(1))
+      knee.setAttribute('cy', xy(out(thr)).toFixed(1))
+    },
+  }
+}
+
+/** The header shared by the panels: grip, power, name (click: its menu), preset menu, collapse, remove. */
+function unitHead(dev: Device, deps: CardDeps, el: HTMLElement) {
+  const def = DEVICES[dev.type]
+  const kind = def?.instrument ? 'instrument' : 'effect'
+  const grip = h('span', { className: 'unit-grip', title: 'drag to move' }, icon('grip', 14))
+  const power = h('button', { className: 'unit-power', title: `${kind} on / off (bypass)`, role: 'switch', disabled: deps.readOnly }, h('i', { className: 'lamp' }))
+  const name = h('button', { className: 'unit-name', title: `${def?.name ?? 'device'}: click for its menu` })
+  const preset = h('button', { className: 'unit-preset', title: 'presets' }, h('span', {}), icon('chevron-down', 12))
+  const collapse = h('button', { className: 'unit-fold icon-btn sm', title: 'collapse' }, icon('chevron-down', 14))
+  const remove = h('button', { className: 'unit-remove icon-btn sm', title: `remove this ${kind}`, disabled: deps.readOnly }, icon('close', 14))
+  const head = h('div', { className: 'unit-head' }, grip, power, name, preset, h('span', { className: 'grow' }), collapse, remove)
+  let current = dev
+  power.onclick = () => deps.bypass(dev.id, !current.bypass)
+  remove.onclick = () => deps.remove(dev.id)
+  collapse.onclick = () => deps.setCollapsed(dev.id, !deps.collapsed(dev.id))
+  const menu = (at: [number, number] | undefined, anchor: HTMLElement) => {
+    if (deps.readOnly) return
+    const items: MenuItem[] = [
+      { label: 'rename', run: () => deps.rename(dev.id), icon: 'edit' },
+      { label: current.bypass ? 'turn on' : 'turn off (bypass)', run: () => deps.bypass(dev.id, !current.bypass), icon: 'power' },
+      { label: deps.collapsed(dev.id) ? 'expand' : 'collapse', run: () => deps.setCollapsed(dev.id, !deps.collapsed(dev.id)) },
+      'sep',
+      { label: `remove ${kind}`, run: () => deps.remove(dev.id), icon: 'trash', danger: true },
+    ]
+    popover(anchor, items, at)
+  }
+  name.onclick = () => menu(undefined, name)
+  el.addEventListener('contextmenu', (e) => {
+    if ((e.target as HTMLElement).closest('.knob, select, input')) return
+    e.preventDefault()
+    e.stopPropagation()
+    menu([e.clientX, e.clientY], el)
+  })
+  preset.onclick = () => deps.presets(current).menu?.(preset)
+  // a collapsed panel opens again from anywhere on its strip
+  el.addEventListener('click', (e) => {
+    if (el.classList.contains('collapsed') && !(e.target as HTMLElement).closest('.unit-power, .unit-remove')) deps.setCollapsed(dev.id, false)
+  })
+  if (!deps.readOnly) dragToReorder(grip, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(dev.id, before), end: deps.reorderEnd })
+  return {
+    head,
+    update(d: Device) {
+      current = d
+      const text = d.name ?? def?.name ?? `device ${d.type}`
+      if (name.textContent !== text) name.textContent = text
+      power.setAttribute('aria-checked', String(!d.bypass))
+      el.classList.toggle('bypassed', !!d.bypass)
+      const p = deps.presets(d)
+      preset.hidden = !p.menu || deps.readOnly
+      const label = p.current ?? 'preset'
+      const span = preset.firstElementChild as HTMLElement
+      if (span.textContent !== label) span.textContent = label
+      preset.classList.toggle('none', !p.current)
+      const shut = deps.collapsed(d.id)
+      el.classList.toggle('collapsed', shut)
+      collapse.title = shut ? 'expand' : 'collapse'
+      el.title = shut ? `${text}: click to expand` : ''
+    },
+  }
+}
+
+/** A device's panel. The API matches what the rack needs: update from the doc, refresh from automation, and the filter-run hooks. */
 export function deviceCard(dev: Device, deps: CardDeps) {
   const def = DEVICES[dev.type]
   const id = dev.id
-  // lit while the effect is running, off while bypassed
-  const bypass = onOffSwitch('bypass', () => deps.bypass(id, !current.bypass))
-  bypass.disabled = deps.readOnly
+  const el = h('div', { className: `unit t${dev.type}`, 'data-device': id })
+  const head = unitHead(dev, deps, el)
   let current = dev
-  const title = h('strong', {}, dev.name ?? def?.name ?? `device ${dev.type}`)
 
-  /** What each param currently shows (doc, automation, a remote drag or this card's own drag). */
+  /** What each param currently shows (doc, automation, a remote drag or this panel's own drag). */
   const shown = new Map<number, number>()
-  /** Params a lane drives: the curve can't move those. */
-  const locks: FilterLocks = { cutoff: false, damping: false, gain: false }
+  const val = (pid: number) => shown.get(pid) ?? def?.params.find((p) => p.id === pid)?.def ?? 0
+  /** Params a lane drives (the curve can't move those). */
+  const driven = new Set<number>()
   let nodeDrag: Map<number, number> | null = null
+  const ctls = new Map<number, Ctl>()
+  const extras: (() => void)[] = [] // drawings that follow the values
+
+  const make = (p: ParamDef, size = 36, name?: string) => {
+    const c = paramCtl(p, {
+      size, name, disabled: deps.readOnly,
+      input: (v) => {
+        shown.set(p.id, v)
+        deps.live(id, p.id, v)
+        deps.drag([{ deviceId: id, paramId: p.id, value: v }])
+        redraw()
+      },
+      change: (v) => {
+        shown.set(p.id, v)
+        deps.commit(id, p.id, v)
+        deps.drag(null)
+        redraw()
+      },
+    })
+    if (c.label) deps.autoMenu(c.label, { scope: dev.trackId, kind: def?.instrument ? 'synth' : 'effect', owner: id, param: String(p.id) })
+    ctls.set(p.id, c)
+    return c.el
+  }
+  const pdef = (pid: number) => def!.params.find((p) => p.id === pid)!
+
+  // --- the filter curve (a simple filter shows its whole run; the EQ its four bands)
+  let curve: ReturnType<typeof filterCurve> | null = null
+  const locksOf = (cut: number, damp: number, gain: number): FilterLocks =>
+    ({ cutoff: deps.readOnly || driven.has(cut), damping: deps.readOnly || driven.has(damp), gain: deps.readOnly || driven.has(gain) })
   const member = (): FilterMember => ({
-    id, mode: shown.get(0) ?? 0, cutoff: shown.get(1) ?? 1000, damping: shown.get(2) ?? 0.7071, gain: shown.get(3) ?? 0,
-    bypass: current.bypass, locks: { ...locks }, row: el.offsetTop,
+    id, mode: val(0), cutoff: val(1), damping: val(2), gain: val(3), bypass: !!current.bypass, locks: locksOf(1, 2, 3), row: 0,
   })
-  // The response curve is one view per run of adjacent filters: the run's first card hosts it, as wide as the run, over
-  // the curve slots of the cards after it (a run that wraps onto another row gets a view per row). The other cards keep their (empty) slot so everything lines up.
-  const slot = dev.type === SIMPLE_FILTER ? h('div', { className: 'fslot' }) : null
-  const curve = slot ? filterCurve({ move: (fid, change) => deps.dragFilter(fid, change), end: (fid) => deps.dragFilterEnd(fid) }) : null
-  const redrawCurve = () => {
-    if (!curve || !slot) return
-    const run = deps.run(id, member())
-    const at = run.findIndex((m) => m.id === id)
-    const row = run[at]?.row
-    let from = at
-    while (from > 0 && run[from - 1].row === row) from--
-    let to = at
-    while (to + 1 < run.length && run[to + 1].row === row) to++
-    const host = at >= 0 && from === at
-    if (host && curve.el.parentNode !== slot) slot.append(curve.el)
-    else if (!host) curve.el.remove()
-    // a run's filters are told apart by colour; a lone one keeps the default
-    const color = (i: number) => (run.length > 1 ? FILTER_COLORS[i % FILTER_COLORS.length] : null)
-    title.style.color = (at >= 0 && color(at)) || ''
-    if (host) curve.draw(run.slice(from, to + 1), run.slice(from, to + 1).map((_, k) => color(from + k)))
-  }
-  let told = ''
-  const showCurve = () => {
-    if (!curve) return
-    redrawCurve()
-    const now = JSON.stringify(member())
-    if (now !== told) (told = now, deps.changed(id))
-  }
-  /** The run's curve moves this filter: apply to the sliders and the engine now, commit when it lets go. */
-  const dragMove = (change: FilterChange) => {
+  const eqMembers = (): FilterMember[] => EQ_BANDS.map((_, i) => ({
+    id: `${id}#${i}`, mode: EQ_MODES[i], cutoff: val(i * 3), damping: val(i * 3 + 2), gain: val(i * 3 + 1), bypass: !!current.bypass,
+    locks: locksOf(i * 3, i * 3 + 2, i * 3 + 1), row: 0,
+  }))
+  /** The curve moves params: apply them to the knobs and the engine now, commit when it lets go. */
+  const dragMove = (change: FilterChange, band = -1) => {
     nodeDrag ??= new Map()
-    for (const [pid, v] of [[1, change.cutoff], [2, change.damping], [3, change.gain]] as const) if (v != null) nodeDrag.set(pid, v)
+    const ids = band < 0 ? [1, 2, 3] : [band * 3, band * 3 + 2, band * 3 + 1]
+    for (const [pid, v] of [[ids[0], change.cutoff], [ids[1], change.damping], [ids[2], change.gain]] as const) if (v != null) nodeDrag.set(pid, v)
     for (const [pid, v] of nodeDrag) {
       deps.live(id, pid, v)
       shown.set(pid, v)
-      const r = rows.find((r) => r.p.id === pid)!
-      ;(r.input as HTMLInputElement).value = String(paramToPos(r.p, v))
-      r.out.textContent = fmt(r.p, v)
+      ctls.get(pid)?.set(v)
     }
     deps.drag([...nodeDrag].map(([paramId, value]) => ({ deviceId: id, paramId, value })))
-    showCurve()
+    redraw()
   }
   const dragEnd = () => {
-    deps.commitMany(id, Object.fromEntries(nodeDrag ?? []))
+    if (nodeDrag) deps.commitMany(id, Object.fromEntries(nodeDrag))
     deps.drag(null)
     nodeDrag = null
   }
+  let told = ''
+  const redrawCurve = () => {
+    if (!curve) return
+    if (dev.type === EQ) return curve.draw(eqMembers(), EQ_COLORS, 470)
+    const run = deps.run(id, member())
+    curve.draw(run, run.map((_, k) => (run.length > 1 ? FILTER_COLORS[k % FILTER_COLORS.length] : null)), 216)
+    const at = run.findIndex((m) => m.id === id)
+    el.style.setProperty('--run-c', run.length > 1 && at >= 0 ? FILTER_COLORS[at % FILTER_COLORS.length] : '')
+  }
+  function redraw() {
+    extras.forEach((f) => f())
+    if (!curve) return
+    redrawCurve()
+    if (dev.type === SIMPLE_FILTER) {
+      const now = JSON.stringify(member())
+      if (now !== told) (told = now, deps.changed(id))
+      const g = ctls.get(3)
+      if (g) g.el.classList.toggle('off', !filterHasGain(val(0)))
+    }
+  }
 
-  const rows: Row[] = (def?.params ?? []).map((p) => {
-    const out = h('span', { className: 'dim out' })
-    const label = h('span', { className: 'dim' }, p.name)
-    // drop-downs can't be automated
-    if (!p.options) deps.autoMenu(label, { scope: dev.trackId, kind: def?.instrument ? 'synth' : 'effect', owner: id, param: String(p.id) })
-    if (p.options) {
-      const input = h('select', { onchange: () => {
-        const v = Number(input.value)
-        deps.live(id, p.id, v)
-        deps.commit(id, p.id, v)
-        shown.set(p.id, v)
-        showCurve()
-      } }, ...p.options.map((o, i) => h('option', { value: String(i) }, o)))
-      input.disabled = deps.readOnly
-      return { p, input, out, label }
+  // --- the body, per device
+  const body = h('div', { className: 'unit-body' })
+  if (dev.type === EQ && def) {
+    curve = filterCurve({ height: 78, move: (fid, change) => dragMove(change, Number(fid.split('#')[1])), end: () => dragEnd() })
+    const cols = EQ_BANDS.map((band, i) => h('div', { className: 'eq-col', style: `--c:${EQ_COLORS[i]}` },
+      h('div', { className: 'eq-band' }, band),
+      h('div', { className: 'eq-pair' }, make(pdef(i * 3), 32, 'freq'), make(pdef(i * 3 + 1), 32, 'gain')), make(pdef(i * 3 + 2), 24, 'q')))
+    cols.push(h('div', { className: 'eq-col out' }, h('div', { className: 'eq-band' }, 'out'), make(pdef(12), 32, 'output')))
+    body.append(h('div', { className: 'unit-plot' }, curve.el), h('div', { className: 'eq-cols' }, ...cols))
+  } else if (def) {
+    if (dev.type === SIMPLE_FILTER) {
+      curve = filterCurve({ height: 86, move: (fid, change) => deps.dragFilter(fid, change), end: (fid) => deps.dragFilterEnd(fid) })
+      body.append(h('div', { className: 'unit-plot' }, curve.el))
     }
-    const input = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly })
-    valueTip(input, out)
-    input.oninput = () => {
-      const v = paramToValue(p, Number(input.value))
-      out.textContent = fmt(p, v)
-      shown.set(p.id, v)
-      deps.live(id, p.id, v)
-      deps.drag([{ deviceId: id, paramId: p.id, value: v }])
-      showCurve()
+    const groups = LAYOUT[dev.type] ?? [{ ids: def.params.map((p) => p.id) }]
+    const used = new Set(groups.flatMap((g) => g.ids))
+    const rest = def.params.filter((p) => !used.has(p.id)).map((p) => p.id)
+    const row = h('div', { className: 'unit-groups' })
+    for (const g of rest.length ? [...groups, { ids: rest }] : groups) {
+      const knobs = h('div', { className: 'unit-knobs' }, ...g.ids.map((pid) => make(pdef(pid), dev.type === FINNWAVE ? 38 : 36)))
+      const box = h('div', { className: 'unit-group' })
+      if (g.label) box.append(h('div', { className: 'unit-glabel' }, g.label))
+      if (g.draw === 'adsr') {
+        const d = adsrDrawing()
+        extras.push(() => d.draw(val(2), val(3), val(4), val(5)))
+        box.append(h('div', { className: 'unit-draw' }, d.el))
+      }
+      if (g.draw === 'comp') {
+        const d = compDrawing()
+        extras.push(() => d.draw(val(0), val(1), val(4)))
+        box.classList.add('with-side')
+        box.append(h('div', { className: 'unit-side' }, d.el, knobs))
+      } else box.append(knobs)
+      row.append(box)
     }
-    input.onchange = () => { // fires on release
-      deps.commit(id, p.id, paramToValue(p, Number(input.value)))
-      deps.drag(null)
-    }
-    return { p, input, out, label }
-  })
+    body.append(row)
+  }
 
-  // Instruments take the notes inside their range: two note-name fields, lo and hi (c2, f#3, or a pitch number).
+  // Instruments take the notes inside their range: lo and hi note names (c2, f#3, or a pitch number).
   const keyIn = (tip: string) => h('input', { className: 'key', title: tip, spellcheck: false, disabled: deps.readOnly })
   const lo = keyIn('lowest note'), hi = keyIn('highest note')
-  const range = def?.instrument ? h('div', { className: 'prm keys' }, h('span', { className: 'dim' }, 'notes'), h('div', {}, lo, '–', hi)) : null
+  const range = def?.instrument ? h('div', { className: 'unit-foot' }, h('span', { className: 'dim' }, 'notes'), lo, h('span', { className: 'faint' }, 'to'), hi) : null
   const setKeys = (which: 'lo' | 'hi') => {
     const p = parseNote((which === 'lo' ? lo : hi).value)
     const [kl, kh] = [current.keyLo ?? KEY_MIN, current.keyHi ?? KEY_MAX]
@@ -160,49 +392,120 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   hi.onchange = () => setKeys('hi')
   for (const i of [lo, hi]) i.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') i.blur() }
 
-  const head = h('div', { className: 'dev-head' }, title, h('span', { className: 'grow' }), bypass)
-  const el = h('div', { className: 'dev', 'data-device': id },
-    head,
-    slot,
-    ...rows.map((r) => h('label', { className: 'prm' }, r.label, r.input)),
-    range)
-  if (slot) el.style.width = `${CARD_W}px` // filters stay narrow: their run shares one curve view, a card wide per filter
-  if (!deps.readOnly) dragToReorder(head, el, { start: deps.reorderStart, drop: (before) => deps.reorderDrop(id, before), end: deps.reorderEnd })
-  cardMenu(el, head, title, def?.instrument ? 'delete instrument' : 'delete effect', () => deps.remove(id), () => !deps.readOnly,
-    def?.instrument ? [['rename', () => deps.rename(id)]] : [])
+  el.append(head.head, body)
+  if (range) el.append(range)
 
   /**
-   * `remote`: in-progress values from other users' drags, keyed by param id. `auto`: the params a lane
-   * drives, keyed by param id as a string; those show the lane's value and can't be dragged.
+   * `remote`: in-progress values from other users' drags, keyed by param id. `auto`: the params a lane drives, keyed
+   * by param id as a string; those show the lane's value and can't be dragged.
    */
   let lastRemote = new Map<number, number>()
   function update(d: Device, remote: Map<number, number>, auto: Map<string, AutoInfo> = NO_AUTO) {
     current = d
     lastRemote = remote
-    setSwitch(bypass, el, !d.bypass)
-    title.textContent = d.name ?? def?.name ?? `device ${d.type}`
+    head.update(d)
     showKeys(d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
-    for (const { p, input, out, label } of rows) {
+    driven.clear()
+    for (const p of def?.params ?? []) {
+      const c = ctls.get(p.id)
+      if (!c) continue
       const a = auto.get(String(p.id))
-      const driven = !!a?.on && a.value != null
-      label.classList.toggle('auto', !!a)
-      label.classList.toggle('driven', driven)
-      input.disabled = deps.readOnly || driven
-      const v = (driven ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def
-      const mine = nodeDrag?.get(p.id) // the pointer is on this card's curve
-      const free = driven || (document.activeElement !== input && mine == null) // a driven slider follows the lane even while focused
-      if (free) shown.set(p.id, v)
-      if (p.id >= 1 && p.id <= 3) locks[(['cutoff', 'damping', 'gain'] as const)[p.id - 1]] = deps.readOnly || driven
-      if (free) input instanceof HTMLSelectElement ? (input.value = String(Math.round(v))) : (input.value = String(paramToPos(p, v)))
-      if (!(input instanceof HTMLSelectElement) && free) out.textContent = fmt(p, v)
+      const drive = !!a?.on && a.value != null
+      if (drive) driven.add(p.id)
+      c.label?.classList.toggle('auto', !!a)
+      c.el.classList.toggle('driven', drive)
+      c.disable(deps.readOnly || drive)
+      const v = (drive ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def
+      const free = drive || (!c.active() && nodeDrag?.get(p.id) == null) // a driven control follows the lane even mid-drag
+      if (free) {
+        shown.set(p.id, v)
+        c.set(v)
+      }
     }
-    // the gain row only matters to a bell or shelf
-    const gainRow = rows.find((r) => r.p.id === 3 && dev.type === SIMPLE_FILTER)
-    if (gainRow) gainRow.label.parentElement!.hidden = !filterHasGain(shown.get(0) ?? 0)
-    showCurve()
+    redraw()
   }
   update(dev, new Map())
   /** Repaint with new automation values only (the playhead moved). */
   const refresh = (auto: Map<string, AutoInfo>) => update(current, lastRemote, auto)
-  return { el, update, refresh, /** The filter's current values, or null for other devices. */ member: () => (curve ? member() : null), redrawCurve, dragMove, dragEnd }
+  return {
+    el, update, refresh,
+    /** The filter's current values, or null for other devices. */
+    member: () => (dev.type === SIMPLE_FILTER ? member() : null),
+    redrawCurve, dragMove: (c: FilterChange) => dragMove(c), dragEnd,
+  }
+}
+
+/** A drum in a kit panel: a pad to hear it (its name and key), on/off, and its four knobs. */
+export function drumPad(dev: Device, deps: CardDeps) {
+  const def = DEVICES[dev.type]
+  const id = dev.id
+  let current = dev
+  const name = h('span', { className: 'dpad-name' })
+  const key = h('input', { className: 'dpad-key', title: 'the key this drum plays on (c2, f#3…)', spellcheck: false, disabled: deps.readOnly })
+  const face = h('div', { className: 'dpad-face', title: 'click to hear it; double-click the name to rename' }, name, key)
+  const power = h('button', { className: 'unit-power sm', title: 'drum on / off', role: 'switch', disabled: deps.readOnly, onclick: () => deps.bypass(id, !current.bypass) }, h('i', { className: 'lamp' }))
+  const remove = h('button', { className: 'dpad-remove icon-btn sm', title: 'remove this drum', disabled: deps.readOnly, onclick: () => deps.remove(id) }, icon('close', 12))
+  const ctls = new Map<number, Ctl>()
+  const knobs = h('div', { className: 'dpad-knobs' }, ...(def?.params ?? []).map((p) => {
+    const c = paramCtl(p, {
+      size: 26, name: ({ cutoff: 'tone', resonance: 'res', decay: 'decay', gain: 'level' } as Record<string, string>)[p.name], disabled: deps.readOnly,
+      input: (v) => (deps.live(id, p.id, v), deps.drag([{ deviceId: id, paramId: p.id, value: v }])),
+      change: (v) => (deps.commit(id, p.id, v), deps.drag(null)),
+    })
+    if (c.label) deps.autoMenu(c.label, { scope: dev.trackId, kind: 'synth', owner: id, param: String(p.id) })
+    ctls.set(p.id, c)
+    return c.el
+  }))
+  const el = h('div', { className: 'dpad', 'data-device': id }, h('div', { className: 'dpad-top' }, power, remove), face, knobs)
+
+  face.onpointerdown = (e) => {
+    if (e.button !== 0 || (e.target as HTMLElement) === key || !deps.audition) return
+    const k = current.keyLo ?? KEY_MIN
+    face.classList.add('down')
+    deps.audition(current.trackId, k, true)
+    const up = () => (face.classList.remove('down'), deps.audition?.(current.trackId, k, false), removeEventListener('pointerup', up), removeEventListener('pointercancel', up))
+    addEventListener('pointerup', up)
+    addEventListener('pointercancel', up)
+  }
+  name.ondblclick = () => deps.readOnly || deps.rename(id)
+  key.onchange = () => {
+    const p = parseNote(key.value)
+    if (p == null) return void (key.value = noteName(current.keyLo ?? KEY_MIN))
+    deps.keys(id, p, p)
+  }
+  key.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') key.blur() }
+  el.addEventListener('contextmenu', (e) => {
+    if ((e.target as HTMLElement).closest('.knob')) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (deps.readOnly) return
+    popover(el, [
+      { label: 'rename', run: () => deps.rename(id), icon: 'edit' },
+      { label: current.bypass ? 'turn on' : 'turn off', run: () => deps.bypass(id, !current.bypass), icon: 'power' },
+      'sep',
+      { label: 'remove drum', run: () => deps.remove(id), icon: 'trash', danger: true },
+    ], [e.clientX, e.clientY])
+  })
+
+  let lastRemote = new Map<number, number>()
+  function update(d: Device, remote: Map<number, number>, auto: Map<string, AutoInfo> = NO_AUTO) {
+    current = d
+    lastRemote = remote
+    const text = d.name ?? def?.name ?? 'drum'
+    if (name.textContent !== text) name.textContent = text
+    if (document.activeElement !== key) key.value = noteName(d.keyLo ?? KEY_MIN)
+    power.setAttribute('aria-checked', String(!d.bypass))
+    el.classList.toggle('bypassed', !!d.bypass)
+    for (const p of def?.params ?? []) {
+      const c = ctls.get(p.id)!
+      const a = auto.get(String(p.id))
+      const drive = !!a?.on && a.value != null
+      c.label?.classList.toggle('auto', !!a)
+      c.el.classList.toggle('driven', drive)
+      c.disable(deps.readOnly || drive)
+      if (drive || !c.active()) c.set((drive ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def)
+    }
+  }
+  update(dev, new Map())
+  return { el, update, refresh: (auto: Map<string, AutoInfo>) => update(current, lastRemote, auto), member: () => null, redrawCurve: () => {}, dragMove: () => {}, dragEnd: () => {} }
 }

@@ -1,73 +1,24 @@
-/* The dock (studio/dock): tabs and resize edge, the clip editor and the device rack. The device card and editor rules
-   carried over from the old timeline come first (scoped to .studio; the soundscape looper cards in the lanes use them
-   too); the dock's own follow. */
+/* The dock (studio/dock): the bar (tabs, what is shown, the tab's tools), the resize edge and the empty states.
+   The editors are styled in editors.css, the rack in rack.css. */
+
+/* The old card rules, kept for the soundscape looper cards in the lanes (ui/loopers.ts). */
 .studio .dev { position: relative; width: 280px; font-size: 12px; border-right: 1px solid var(--line); }
 .studio .dev.bypassed { opacity: 0.55; }
-.studio .dev-head { display: flex; gap: 6px; align-items: center; padding: 0 0 0 8px; height: 18px; padding-right: 8px; }
+.studio .dev-head { display: flex; gap: 6px; align-items: center; padding: 0 8px; height: 18px; }
 .studio .dev button { border: 0; padding: 0 6px; font-size: 11px; line-height: 18px; }
-/* on/off switch: a square knob in a flat track; a red knob in a dark red slot while the effect runs */
 .studio .dev .sw { position: relative; flex: none; width: 24px; height: 12px; padding: 0; background: var(--line); }
 .studio .dev .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: var(--dim); }
 .studio .dev .sw:hover { background: color-mix(in srgb, var(--line) 70%, var(--dim)); }
 .studio .dev .sw[aria-checked=true] { background: var(--switch-track); }
 .studio .dev .sw[aria-checked=true]::after { left: 14px; background: var(--switch); }
-.studio .add-fx { align-self: center; margin: 0 16px; width: 64px; height: 40px; font-size: 22px; line-height: 1; color: var(--dim); background: none; border: 1px dashed var(--line); }
 .studio .dev .prm { display: grid; grid-template-columns: 1fr 2fr; gap: 6px; align-items: center; padding: 3px 8px; }
 .studio .dev .prm input, .studio .dev .prm select { padding: 0; border: 0; min-width: 0; accent-color: var(--accent); }
 .studio .dev .prm select { grid-column: 2; padding: 1px 4px; }
-.studio .dev .keys > div { display: flex; gap: 4px; align-items: center; color: var(--dim); }
-.studio .dev .keys input.key { width: 44px; padding: 1px 4px; text-align: center; background: rgba(0, 0, 0, .3); }
-.studio .add-fx:hover { color: var(--fg); border-color: var(--dim); }
 .studio .dev .prm .auto { color: var(--accent); }
 .studio .dev .prm .driven + input { opacity: .6; }
-/* note editor (lives inside the open clip; x scale follows timeline zoom via --beat) */
-.studio .ne { display: flex; flex-direction: column; height: 100%; }
-.studio .ne-head { display: flex; flex: none; gap: 12px; align-items: center; height: 20px; padding: 0 8px; font-size: 11px; background: var(--panel); border-bottom: 1px solid var(--line); cursor: pointer; }
-.studio .ne-head input { width: 56px; height: 16px; padding: 0 4px; border: 0; background: var(--raise); }
-.studio .ne-head button { border: 0; padding: 0 6px; font-size: 11px; line-height: 20px; color: inherit; }
-.studio .ne-head button.on { color: var(--bg); background: var(--accent); }
-.studio .ne-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
-.studio .ne-grid { position: relative; cursor: crosshair; background-color: var(--bg);
-  background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-beat) 1px, transparent 1px);
-  background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, 100% var(--row, 10px); }
-.studio .ne-c { position: absolute; left: 6px; font-size: 9px; color: var(--dim); pointer-events: none; transform: translateY(-1px); }
-.studio .ne-tint { position: absolute; inset: 0; pointer-events: none; }
-.studio .ne-keys { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; z-index: 1; pointer-events: none; }
-.studio .note { position: absolute; height: calc(var(--row, 10px) - 1px); border-radius: 2px; background: var(--tc-1); cursor: grab; }
-.studio .note.sel { background: var(--accent); }
-.studio .note.ignored { opacity: .35; }
-.studio .ne-loop { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
-.studio .ne-grip { position: absolute; top: 0; bottom: 0; left: -4px; width: 7px; cursor: ew-resize; pointer-events: auto; }
-.studio .ne-grip:hover { background: linear-gradient(var(--accent), var(--accent)) no-repeat center / 2px 100%; }
-
-/* drum grid: a row per drum, 4 steps to a beat (x scale follows timeline zoom via --beat) */
-.studio .dg { position: relative; }
-.studio .dg-row { position: relative; height: 18px; cursor: crosshair; border-bottom: 1px solid var(--line); background-color: var(--bg);
-  background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to right, var(--grid-beat) 1px, transparent 1px);
-  background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, calc(var(--beat) / 4) 100%; }
-.studio .dg-label { position: absolute; left: 4px; top: 3px; font-size: 9px; color: var(--dim); pointer-events: none; white-space: nowrap; }
-.studio .dg-hit { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--tc-1); pointer-events: none; }
-.studio .dg-hit.rep { opacity: .35; }
-.studio .dg-rep { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
-.studio .dg-add { display: block; position: sticky; left: 0; margin: 6px 4px; height: 20px; padding: 0 10px; font-size: 11px; color: var(--dim); background: none; border: 1px dashed var(--line); }
-.studio .dg-add:hover { color: var(--fg); border-color: var(--dim); background: none; }
-.studio .note::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
+.studio .dev .prm[hidden] { display: none; }
 .studio .dev.looper .prm > .btns { grid-column: 2; }
 .studio .dev.looper .btns { display: flex; gap: 6px; }
-/* simple filter response curve + XY pad: one view per run of adjacent filters, hosted in the run's first card */
-.studio .dev .fslot { position: relative; height: 112px; }
-.studio .fcurve { position: absolute; left: 0; top: 0; z-index: 1; max-width: none; display: block; height: 112px; background: var(--bg); touch-action: none; cursor: crosshair; user-select: none; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); box-sizing: border-box; }
-.studio .fcurve.locked { cursor: default; opacity: .7; }
-.studio .fcurve .grid { fill: none; stroke: var(--line); stroke-width: 1; }
-.studio .fcurve .resp { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
-.studio .fcurve .band { fill: none; stroke: var(--c, var(--dim)); stroke-width: 1; stroke-dasharray: 2 2; opacity: .6; }
-.studio .fcurve .node { fill: var(--c, var(--accent)); stroke: var(--bg); stroke-width: 1.5; }
-.studio .fcurve .node.on { r: 5; }
-.studio .fcurve .node.off { fill: var(--dim); opacity: .5; }
-.studio .fcurve .node.stuck { opacity: .6; }
-.studio .fcurve .ticks text { fill: var(--dim); font-size: 8px; pointer-events: none; opacity: .7; }
-.studio .fcurve .read { fill: var(--dim); font-size: 9px; pointer-events: none; }
-.studio .dev .prm[hidden] { display: none; }
 .studio .dev.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); background: var(--panel); }
 .studio .dev.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
 .studio .dev.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
@@ -75,37 +26,34 @@
 /* --- dock */
 .studio .dock { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-top: 1px solid var(--line); }
 .studio .dock-edge { position: absolute; z-index: 5; top: -4px; left: 0; right: 0; height: 7px; cursor: ns-resize; }
-.studio .dock-edge:hover { background: linear-gradient(transparent 3px, var(--line-strong) 3px 5px, transparent 5px); }
-.studio .dock-tabs { display: flex; flex: none; gap: 2px; align-items: center; height: 30px; padding: 0 8px; }
-.studio .dock.open .dock-tabs { border-bottom: 1px solid var(--line); }
-.studio .dock-tab { padding: 3px 12px; font-size: var(--fs-sm); color: var(--dim); border-radius: var(--r-sm); }
-.studio .dock-tab:hover { color: var(--fg); }
-.studio .dock-tab.on { color: var(--on-accent); background: var(--accent); }
-.studio .dock-toggle { padding: 2px 10px; color: var(--dim); border-radius: var(--r-sm); }
-.studio .dock-body { flex: none; min-height: 0; overflow: hidden; }
-.studio .dock-body[hidden], .studio .clip-editor[hidden], .studio .rack[hidden], .studio .dock-empty[hidden], .studio .dock-scroll[hidden], .studio .audio-clip[hidden] { display: none; }
+.studio .dock-edge:hover, .studio .dock.resizing .dock-edge { background: linear-gradient(transparent 3px, var(--accent) 3px 4px, transparent 4px); }
+.studio .dock-bar { display: flex; flex: none; gap: 12px; align-items: center; height: 36px; padding: 0 6px 0 8px; min-width: 0; }
+.studio .dock.open .dock-bar { border-bottom: 1px solid var(--line); }
+.studio .dock-tabs > button { gap: 5px; padding: 2px 10px 2px 8px; }
+.studio .dock-what { display: flex; flex: 0 1 auto; gap: 8px; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
+.studio .dock-what[hidden] { display: none; }
+.studio .dock-chip { flex: none; align-self: center; width: 10px; height: 10px; border-radius: 2px; background: var(--c); box-shadow: 0 0 0 1px rgba(0, 0, 0, .25) inset; }
+.studio .dock-name { font-size: var(--fs-h3); font-weight: 600; color: var(--c); overflow: hidden; text-overflow: ellipsis; }
+.studio .dock-sub { font-size: var(--fs-sm); color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.studio .dock-tools { display: flex; flex: 1; justify-content: flex-end; min-width: 0; }
+.studio .dock-tools > [hidden] { display: none; }
+.studio .dock-toggle { flex: none; transition: transform var(--t) var(--ease), color var(--t-fast) linear; }
+.studio .dock-toggle.shut { transform: rotate(-90deg); }
+.studio .dock:not(.open) .dock-what, .studio .dock:not(.open) .dock-tools { opacity: .7; }
+.studio .dock:not(.open) .dock-tools { visibility: hidden; }
+
+.studio .dock-body { flex: none; min-height: 0; overflow: hidden; transition: height var(--t) var(--ease); }
+.studio .dock.resizing .dock-body { transition: none; }
+.studio .clip-editor[hidden], .studio .rack[hidden], .studio .dock-empty[hidden], .studio .audio-clip[hidden], .studio .ce-body[hidden] { display: none; }
 .studio .clip-editor, .studio .rack { height: 100%; }
 .studio .clip-editor.locked, .studio .rack.locked .rack-chain { pointer-events: none; opacity: .6; }
-.studio .dock-empty { padding: 32px 16px; text-align: center; font-size: var(--fs-sm); }
-/* the MIDI editors scroll sideways at their own zoom; the piano roll scrolls its pitches itself */
-.studio .dock-scroll { height: 100%; overflow-x: auto; overflow-y: hidden; }
-.studio .dock-scroll .ne { min-width: 100%; }
-.studio .dock-scroll .ne-head { cursor: default; }
-/* the audio clip panel */
-.studio .audio-clip { padding: 12px 16px; }
-.studio .ac-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 12px; }
-.studio .ac-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px 20px; max-width: 900px; }
-.studio .ac-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
-.studio .ac-field input[type=number], .studio .ac-field select { width: 100%; }
-.studio .ac-field input[type=checkbox] { align-self: flex-start; margin: 4px 0; }
-/* the device rack: a MIDI track's instruments, then the effects, as one sideways chain */
-.studio .rack { display: flex; flex-direction: column; min-height: 0; }
-.studio .rack-head { display: flex; flex: none; gap: 10px; align-items: baseline; padding: 6px 12px; }
-.studio .rack-title { font-weight: 600; }
-.studio .rack.none .rack-head, .studio .rack.none .rack-chain { display: none; }
-.studio .rack-chain { display: flex; flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--line); }
-.studio .rack-group { display: flex; flex-direction: column; flex: none; border-right: 1px solid var(--line-strong); }
-.studio .rack-group[hidden] { display: none; }
-.studio .rack-label { padding: 3px 8px; font-size: var(--fs-xs); border-bottom: 1px solid var(--line); }
-.studio .rack-row { display: flex; flex: 1; align-items: stretch; }
-.studio .rack-row .add-fx { margin: 16px; }
+
+/* empty states: say what to do */
+.studio .dock-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; height: 100%; padding: 16px; text-align: center; }
+.studio .dock-empty p { margin: 0; font-size: var(--fs); color: var(--fg); }
+.studio .dock-empty p.dim { font-size: var(--fs-sm); color: var(--dim); }
+.studio .dock-empty-icon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 6px; border: 1px dashed var(--line-strong); border-radius: 50%; color: var(--dim); }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio .dock-body, .studio .dock-toggle { transition: none; }
+}

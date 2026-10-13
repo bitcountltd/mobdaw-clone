@@ -9,7 +9,6 @@ export const FILTER_COLORS = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0', '#b388
 
 /** Width of a filter card (the rest are wider); the merged view is this wide per filter in the run. */
 export const CARD_W = 160
-const H = 112
 const HZ_MIN = 20
 const HZ_MAX = 20000
 const DB_MIN = -24
@@ -17,10 +16,9 @@ const DB_MAX = 24
 const STEPS_PER_CARD = 96
 /** Vertical grid lines, labelled when the view is wide enough (a merged run). */
 const GRID_HZ: [hz: number, label: string][] = [[30, '30'], [100, '100'], [300, '300'], [1000, '1k'], [3000, '3k'], [10000, '10k']]
-const LABEL_MIN_W = 300
+const LABEL_MIN_W = 180
 const NS = 'http://www.w3.org/2000/svg'
 
-const yOf = (db: number) => ((DB_MAX - Math.min(DB_MAX, Math.max(DB_MIN, db))) / (DB_MAX - DB_MIN)) * H
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}): SVGElementTagNameMap[K] {
   const el = document.createElementNS(NS, tag)
@@ -45,18 +43,22 @@ export type CurveOpts = {
   move(id: string, change: FilterChange): void
   /** The gesture on `id` ended (pointer released, or the wheel went quiet) after at least one move. */
   end(id: string): void
+  /** Plot height in px (default 112). */
+  height?: number
 }
 
 const hzText = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(2)} khz` : `${Math.round(hz)} hz`)
 
 export function filterCurve(opts: CurveOpts) {
+  const H = opts.height ?? 112
+  const yOf = (db: number) => ((DB_MAX - Math.min(DB_MAX, Math.max(DB_MIN, db))) / (DB_MAX - DB_MIN)) * H
   const grid = svg('path', { class: 'grid' })
   const bands = svg('g', { class: 'bands' })
   const resp = svg('path', { class: 'resp' })
   const nodes = svg('g', { class: 'nodes' })
   const ticks = svg('g', { class: 'ticks' })
   const read = svg('text', { class: 'read', y: 10, 'text-anchor': 'end' })
-  const el = svg('svg', { class: 'fcurve', height: H })
+  const el = svg('svg', { class: 'fcurve', height: opts.height ?? 112 })
   el.append(grid, ticks, bands, resp, nodes, read)
 
   let members: FilterMember[] = []
@@ -78,11 +80,13 @@ export function filterCurve(opts: CurveOpts) {
   let active = -1 // the node being dragged
   let moved = false
 
-  /** `colors`: each filter's colour (null: the default), alongside `next`. */
-  function draw(next: FilterMember[], nextColors: (string | null)[] = []) {
+  /** `colors`: each filter's colour (null: the default), alongside `next`. `width`: the plot's width (default a card's per filter). */
+  let fixedW: number | undefined
+  function draw(next: FilterMember[], nextColors: (string | null)[] = [], width = fixedW) {
     members = next
     colors = nextColors
-    W = CARD_W * Math.max(1, members.length)
+    fixedW = width
+    W = width ?? CARD_W * Math.max(1, members.length)
     el.setAttribute('viewBox', `0 0 ${W} ${H}`)
     el.setAttribute('width', String(W))
     grid.setAttribute('d', GRID_HZ.map(([f]) => `M${xOf(f).toFixed(1)} 0V${H}`).join('') + `M0 ${yOf(0)}H${W}`)
@@ -92,7 +96,7 @@ export function filterCurve(opts: CurveOpts) {
       return t
     }) : []))
     const path = (db: (hz: number) => number) => {
-      const steps = STEPS_PER_CARD * members.length
+      const steps = Math.round(STEPS_PER_CARD * (W / CARD_W))
       let d = ''
       for (let i = 0; i <= steps; i++) {
         const hz = HZ_MIN * (HZ_MAX / HZ_MIN) ** (i / steps)
