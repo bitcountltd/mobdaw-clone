@@ -6,6 +6,7 @@ import { describeError } from '../errors'
 import { memberRows } from './members'
 import { pedalSettings } from './pedalSettings'
 import { popoverPanel } from './popover'
+import './panels.css'
 
 export type ProjectMenuOpts = {
   name: string
@@ -75,7 +76,7 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
       toggle.textContent = people.hidden ? 'collaborators…' : 'collaborators ▴'
       if (!people.hidden) void loadMembers(people, c, fail)
     } }, 'collaborators…')
-    sharing = section('sharing',
+    sharing = section('Sharing',
       h('p', { className: 'dim who' }, who),
       h('label', { className: 'check', title: 'anyone signed in who has the link can open it, read-only' }, pub, h('span', {}, 'public: anyone with the link can view')),
       demoRow,
@@ -123,11 +124,11 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   ...SAMPLE_RATES.map((r) => h('option', { value: String(r) }, `${+(r / 1000).toFixed(1)} kHz`)))
   rate.value = String(sr.value)
   rate.onchange = () => sr.set(Number(rate.value))
-  const audio = section('audio', field('sample rate', rate), field('microphone', mic), grant, offsetField)
+  const audio = section('Audio', field('sample rate', rate), field('microphone', mic), grant, offsetField)
   void listMics()
 
-  const pedal = o.onPedalChanged && section('foot pedal', pedalSettings(o.onPedalChanged))
-  const panel = h('div', { className: 'settings' }, section('project', field('name', name, true)), sharing, audio, pedal, msg)
+  const pedal = o.onPedalChanged && section('Foot pedal', pedalSettings(o.onPedalChanged))
+  const panel = h('div', { className: 'settings' }, section('Project', field('name', name)), sharing, audio, pedal, msg)
   popoverPanel(anchor, panel)
 }
 

@@ -2,6 +2,7 @@ import './theme/tokens.css'
 import './theme/base.css'
 import './styles.css'
 import { api, ApiError, getToken } from './api'
+import { CLOUD } from './cloud'
 import { go, route, start } from './router'
 import { h, mount } from './dom'
 import { loginPage } from './pages/login'
@@ -57,16 +58,19 @@ function optional(fn: (me: Me | null) => void | (() => void)) {
   }
 }
 
-route(/^\/login$/, () => void loginPage(() => go('/')))
-route(/^\/register(?:\/([^/]+))?$/, ([invite]) => void registerPage(invite ?? '', () => go('/')))
-route(/^\/$/, optional((me) => homePage(me)))
+route(/^\/$/, CLOUD ? optional((me) => homePage(me)) : () => homePage(null))
 route(/^\/(?:projects|local)$/, () => go('/', true)) // old URLs
-route(/^\/uploads$/, guarded((me) => uploadsPage(me)))
-route(/^\/account$/, guarded((me) => accountPage(me)))
 route(/^\/local\/([^/]+)$/, ([id]) => localProjectPage(id))
-route(/^\/admin$/, guarded((me) => adminPage(me), { admin: true }))
-// (signed-out visitors may open a public project, read-only; projectPage sends them to login if it isn't one)
-route(/^\/project\/([^/]+)$/, ([id]) => optional((me) => projectPage(me, id))())
+// Accounts and cloud projects need the server: the static build has neither (docs/redesign.md §1).
+if (CLOUD) {
+  route(/^\/login$/, () => void loginPage(() => go('/')))
+  route(/^\/register(?:\/([^/]+))?$/, ([invite]) => void registerPage(invite ?? '', () => go('/')))
+  route(/^\/uploads$/, guarded((me) => uploadsPage(me)))
+  route(/^\/account$/, guarded((me) => accountPage(me)))
+  route(/^\/admin$/, guarded((me) => adminPage(me), { admin: true }))
+  // (signed-out visitors may open a public project, read-only; projectPage sends them to login if it isn't one)
+  route(/^\/project\/([^/]+)$/, ([id]) => optional((me) => projectPage(me, id))())
+}
 route(/^\/engine-test$/, guarded((me) => engineTestPage(me))) // dev tool, linked from nowhere
 // the theme kit: every control and icon on one page, for review (dev builds only, linked from nowhere)
 if (import.meta.env.DEV) {
