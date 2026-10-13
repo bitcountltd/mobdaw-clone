@@ -4,7 +4,8 @@ import { IndexeddbPersistence } from 'y-indexeddb'
 import * as Y from 'yjs'
 import type { Session } from '../project/session'
 import { docDb } from './ids'
-import { touchLocal } from './projects'
+import { getLocal, touchLocal } from './projects'
+import { autoSnapshot } from '../snapshots'
 
 /** Open a project that lives on this device: same shape as a cloud session, but the document is saved to IndexedDB. */
 export function openLocalSession(projectId: string): Session {
@@ -20,6 +21,11 @@ export function openLocalSession(projectId: string): Session {
     touched = window.setTimeout(() => touchLocal(projectId), 2000) // "last edited", for sorting the list
   }
   doc.on('update', onUpdate)
+  // version history: keep a rolling automatic snapshot of the project as it was when opened (snapshots.ts)
+  void persistence.whenSynced.then(() => {
+    const p = getLocal(projectId)
+    if (p && !doc.isDestroyed) return autoSnapshot({ project: projectId, projectName: p.name, createdAt: p.createdAt, doc })
+  }).catch((e) => console.warn('automatic snapshot:', e))
   return {
     projectId, doc, provider: null, local: true, awareness, undo, user, userId: null,
     synced: persistence.whenSynced.then(() => {}),

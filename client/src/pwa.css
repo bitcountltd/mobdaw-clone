@@ -1,0 +1,13 @@
+/* The "update available" toast (pwa.ts): bottom centre, clear of the studio's status bar. */
+.sw-toast {
+  position: fixed; z-index: 90; left: 50%; bottom: 40px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 14px; background: var(--raise); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+  box-shadow: var(--shadow); color: var(--fg); font-size: var(--fs);
+  animation: sw-toast-in var(--t) var(--ease);
+}
+.sw-toast-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.sw-toast .btn { flex: none; }
+@media (max-width: 520px) { .sw-toast .sw-toast-text .dim { display: none; } }
+@keyframes sw-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+@media (prefers-reduced-motion: reduce) { .sw-toast { animation: none; } }

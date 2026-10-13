@@ -148,7 +148,8 @@ grep -q '"/assets/' "$DIST/index.html" \
 
 # --- 5. upload ------------------------------------------------------------------------------
 # One pass per file type so each object gets an explicit Content-Type (the CLI's guess for
-# .wasm is not reliable). Order: hashed assets, then root files, index.html last, then prune.
+# .wasm is not reliable). Order: hashed assets, then root files, index.html, then the service worker (it
+# precaches index.html, so it must not reach anyone before the index.html it was built with), then prune.
 IMMUTABLE='public,max-age=31536000,immutable'
 NOCACHE='no-cache'
 TYPED_EXTS='wasm js mjs css woff2 woff svg ico json html map txt webmanifest png'
@@ -190,11 +191,17 @@ log "Uploading assets (immutable)"
 if [ -d "$DIST/assets" ]; then upload "$DIST/assets" assets "$IMMUTABLE"; fi
 
 log "Uploading root files (no-cache)"
-upload "$DIST" "" "$NOCACHE" --exclude 'assets/*' --exclude 'index.html'
+upload "$DIST" "" "$NOCACHE" --exclude 'assets/*' --exclude 'index.html' --exclude 'sw.js'
 
 log "Uploading index.html"
 aws s3 cp "$DIST/index.html" "s3://$BUCKET/index.html" --only-show-errors \
   --cache-control "$NOCACHE" --content-type 'text/html; charset=utf-8'
+
+if [ -f "$DIST/sw.js" ]; then
+  log "Uploading the service worker (no-cache)"
+  aws s3 cp "$DIST/sw.js" "s3://$BUCKET/sw.js" --only-show-errors \
+    --cache-control "$NOCACHE" --content-type 'text/javascript; charset=utf-8'
+fi
 
 log "Removing files that are no longer in the build"
 LOCAL_KEYS=$(mktemp); REMOTE_KEYS=$(mktemp)
@@ -214,9 +221,9 @@ EOF
 echo "$STALE stale object(s) removed"
 
 # --- 6. invalidate --------------------------------------------------------------------------
-log "Invalidating /index.html and / on CloudFront"
+log "Invalidating /index.html, /, /sw.js and /manifest.webmanifest on CloudFront"
 INV_ID=$(aws cloudfront create-invalidation --distribution-id "$DIST_ID" \
-  --paths /index.html / --query 'Invalidation.Id' --output text)
+  --paths /index.html / /sw.js /manifest.webmanifest --query 'Invalidation.Id' --output text)
 echo "invalidation $INV_ID (completes in ~1 min; index.html is no-cache anyway)"
 
 log "Done: $URL"

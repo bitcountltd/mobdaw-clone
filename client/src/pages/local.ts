@@ -11,6 +11,7 @@ import { confirmModal } from '../theme/dialog'
 import { icon } from '../theme/icons'
 import { collectLocal, importProjectFile, importToLocal, localToCloud } from '../transfer'
 import { edited } from './edited'
+import { saveSnapshotDialog, savedDoc, snapshotsDialog } from './snapshots'
 import { docPicture, projectTile, renameInPlace, type TileAction } from '../ui/tile'
 
 /** A local project's picture, in its tracks' colours. */
@@ -78,6 +79,16 @@ export function localSection(me: Me | null): HTMLElement {
       { label: 'duplicate', icon: 'duplicate', title: 'make a copy of this project and its audio', onclick: () => busy(`duplicating ${p.name}…`, async () => {
         await importToLocal({ ...(await collectLocal(p.id)), name: `${p.name} copy` })
       }) },
+      { label: 'save a snapshot', icon: 'plus', title: 'keep a copy of this project as it is now (version history)', onclick: () => {
+        void saveSnapshotDialog({ project: p.id, projectName: p.name, source: savedDoc(p.id) }).then((s) => {
+          if (!s) return
+          const msg = (status.textContent = `saved “${s.name}”`)
+          setTimeout(() => status.textContent === msg && (status.textContent = ''), 4000)
+        })
+      } },
+      { label: 'snapshots…', icon: 'folder', title: 'earlier versions of this project: restore, download or delete', onclick: () => {
+        snapshotsDialog({ project: p.id, projectName: p.name, source: savedDoc(p.id) }).el.addEventListener('close', () => render())
+      } },
       { label: `export ${PROJECT_FILE_EXT}`, icon: 'export', title: 'save this project and its audio as one file', onclick: () => busy(`exporting ${p.name}…`, async () => {
         saveBlob(writeProjectFile(await collectLocal(p.id)), safeName(p.name) + PROJECT_FILE_EXT)
       }) },
@@ -92,7 +103,7 @@ export function localSection(me: Me | null): HTMLElement {
       { label: 'delete', icon: 'trash', danger: true, onclick: async () => {
         const yes = await confirmModal({
           title: `Delete “${p.name}”?`,
-          text: 'The project and its audio are removed from this device. This cannot be undone: export it first to keep a copy.',
+          text: 'The project, its audio and its snapshots are removed from this device. This cannot be undone: export it first to keep a copy.',
           action: 'delete', danger: true,
         })
         if (yes) busy('deleting…', () => removeLocal(p.id))

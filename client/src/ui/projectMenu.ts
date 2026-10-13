@@ -6,6 +6,8 @@ import { describeError } from '../errors'
 import { memberRows } from './members'
 import { pedalSettings } from './pedalSettings'
 import { popoverPanel } from './popover'
+import { liveDoc, saveSnapshotDialog, snapshotsDialog } from '../pages/snapshots'
+import type * as Y from 'yjs'
 import './panels.css'
 
 export type ProjectMenuOpts = {
@@ -21,6 +23,8 @@ export type ProjectMenuOpts = {
   onInputChanged(): void
   /** Absent when the pedal can't be used (viewers). The MIDI input or a binding changed. */
   onPedalChanged?(): void
+  /** Projects on this device: version history (snapshots of the open document). */
+  snapshots?: { project: string; doc: Y.Doc }
 }
 
 /** The rates a project can use (docs/engine.md §2). */
@@ -140,8 +144,15 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   const pedal = o.onPedalChanged && h('details', { className: 'settings-sec settings-more' },
     h('summary', {}, h('h3', {}, 'Foot pedal'), h('span', { className: 'dim' }, 'MIDI foot switch for record, loop and overdub')),
     pedalSettings(o.onPedalChanged))
-  const panel = h('div', { className: 'settings' }, section('Project', field('Name', name)), sharing, audio, pedal, msg)
-  popoverPanel(anchor, panel)
+  // version history (projects on this device): the dialogs replace the panel
+  const snaps = o.snapshots
+  const history = snaps && section('Snapshots',
+    h('p', { className: 'field-note' }, 'Copies of this project kept in this browser. Restoring one makes a new project.'),
+    h('div', { className: 'row' },
+      h('button', { title: 'keep a copy of the project as it is now', onclick: () => (closePanel(), void saveSnapshotDialog({ project: snaps.project, projectName: o.name, source: liveDoc(snaps.doc) })) }, 'save a snapshot'),
+      h('button', { title: 'earlier versions: restore as a new project, download or delete', onclick: () => (closePanel(), snapshotsDialog({ project: snaps.project, projectName: o.name, source: liveDoc(snaps.doc) })) }, 'snapshots…')))
+  const panel = h('div', { className: 'settings' }, section('Project', field('Name', name)), sharing, history ?? null, audio, pedal, msg)
+  const closePanel = popoverPanel(anchor, panel)
 }
 
 /** The collaborators of a cloud project, as on the home screen: change roles, remove, share with someone else. */

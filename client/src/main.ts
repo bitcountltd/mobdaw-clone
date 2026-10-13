@@ -14,6 +14,7 @@ import { uploadsPage } from './pages/uploads'
 import { projectPage } from './project/page'
 import { localProjectPage } from './project/localPage'
 import { engineTestPage } from './pages/engineTest'
+import { registerServiceWorker } from './pwa'
 import type { Me } from '@mobdaw/shared'
 
 async function getMe(): Promise<Me | null> {
@@ -82,3 +83,4 @@ if (import.meta.env.DEV) {
   })
 }
 start('/')
+registerServiceWorker() // installable + offline (production builds only)

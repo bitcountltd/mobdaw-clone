@@ -1,6 +1,7 @@
 // The list of projects on this device. Each project's document is persisted by y-indexeddb (see session.ts) and its audio
 // by audio.ts. The list itself is small, so it lives in localStorage (with an in-memory fallback if that is blocked).
 import { deleteProjectAudio } from './audio'
+import { deleteProjectSnapshots } from '../snapshots'
 import { docDb, newLocalId } from './ids'
 
 export type LocalProject = { id: string; name: string; createdAt: number; updatedAt: number }
@@ -43,10 +44,11 @@ export function touchLocal(id: string) {
   write(read().map((p) => (p.id === id ? { ...p, updatedAt: Date.now() } : p)))
 }
 
-/** Delete a local project and everything stored for it: its document and its audio. */
+/** Delete a local project and everything stored for it: its document, its audio and its snapshots. */
 export async function removeLocal(id: string) {
   write(read().filter((p) => p.id !== id))
   await deleteProjectAudio(id).catch(() => {})
+  await deleteProjectSnapshots(id).catch(() => {})
   await new Promise<void>((resolve) => {
     const req = indexedDB.deleteDatabase(docDb(id))
     req.onsuccess = req.onerror = req.onblocked = () => resolve()

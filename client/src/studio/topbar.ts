@@ -83,6 +83,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       },
       onInputChanged: () => void st.rec.reopenInput(),
       onPedalChanged: readOnly ? undefined : () => st.pedal.settingsChanged(),
+      snapshots: s.local ? { project: s.projectId, doc } : undefined, // version history (pages/snapshots.ts)
     })
   }
   const savedText = h('span', { className: 'saved-text' }, 'saved')

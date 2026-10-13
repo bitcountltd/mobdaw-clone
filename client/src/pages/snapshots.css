@@ -1,0 +1,24 @@
+/* The snapshot dialogs (pages/snapshots.ts). */
+dialog.modal.snap-dialog { width: min(560px, calc(100vw - 32px)); }
+dialog.modal.snap-save { width: min(440px, calc(100vw - 32px)); }
+.snap-form { display: flex; flex-direction: column; gap: 12px; }
+.snap-form input { width: 100%; }
+.snap-form .error:empty, .snap-dialog .error:empty, .snap-status:empty { display: none; }
+
+.snap-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.snap-row { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
+.snap-row:first-child { border-top: 0; padding-top: 0; }
+.snap-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.snap-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 500; }
+.snap-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snap-tag {
+  flex: none; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  font-size: var(--fs-xs); font-weight: 500; line-height: 16px; color: var(--dim);
+}
+.snap-sub { font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.snap-row .btn { flex: none; min-height: 26px; padding: 3px 10px; }
+.snap-row .icon-btn { flex: none; }
+.snap-empty { display: flex; flex-direction: column; gap: 6px; line-height: 1.5; }
+.snap-empty p { margin: 0; }
+.snap-dialog .modal-foot .btn { display: inline-flex; align-items: center; gap: 6px; }
+.snap-status { margin: 0; font-size: var(--fs-sm); }

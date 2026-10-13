@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite'
+import { swPlugin } from './swPlugin'
 
 // Public base path of the built site. BASE_PATH overrides it:
 //   - default build: '/mobdaw/' (wrongbad.com/mobdaw/; Caddy strips the prefix)
@@ -12,6 +13,8 @@ const normalize = (p: string) => {
 
 export default defineConfig(({ command }) => ({
   base: process.env.BASE_PATH ? normalize(process.env.BASE_PATH) : command === 'build' ? '/mobdaw/' : '/',
+  // the service worker (offline + install): build only, see swPlugin.ts and src/pwa.ts
+  plugins: [swPlugin()],
   server: {
     port: 5173,
     proxy: {
