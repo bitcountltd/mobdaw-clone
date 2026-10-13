@@ -9,6 +9,7 @@ import { mountBrowser } from './browser/browser'
 import { mountHelp } from './help'
 import { mountKeys } from './keys'
 import { mountQwerty } from './qwerty'
+import { mountStatusbar } from './statusbar'
 import { Studio } from './studio'
 import { mountTopbar, type Cloud } from './topbar'
 import './studio.css'
@@ -35,10 +36,8 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
   const dock = mountDock(st)
   const keys = mountKeys(st)
 
-  const statusText = h('span', { className: 'status-text' })
-  const statusBar = h('footer', { className: 'studio-status' }, statusText, h('span', { className: 'grow' }),
-    readOnly ? h('span', { className: 'dim' }, 'view only') : null,
-    s.local ? h('span', { className: 'dim', title: 'saved in this browser, on this device' }, 'saved on this device') : null)
+  const status = mountStatusbar(st, () => el)
+  const statusBar = status.el
 
   const el = h('div', { className: 'studio' },
     top.el,
@@ -51,7 +50,6 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
     el.classList.toggle('browser-open', st.ui.browserOpen)
   }
   const offs = [
-    st.on('status', (t) => (statusText.textContent = t)),
     st.on('ui', (p) => {
       if (!('browserOpen' in p)) return
       layout()
@@ -73,6 +71,7 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
       help.destroy()
       browserView.destroy()
       top.destroy()
+      status.destroy()
       arrange.destroy()
       dock.destroy()
       chat.destroy()

@@ -1,51 +1,158 @@
-/* The studio's top bar (studio/topbar.ts). Carried over from the old timeline bar; redesigned in Phase B. */
-.studio .studio-top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.studio .bar-l, .studio .bar-r, .studio .transport { display: flex; gap: 16px; align-items: center; padding: 0 16px; }
-.studio .bar-r { justify-content: flex-end; padding-right: 0; }
-.studio .logo { text-transform: lowercase; font-family: var(--font-logo); font-weight: 400; font-size: 22px; line-height: 1; letter-spacing: 1px; color: var(--rec); text-decoration: none; }
-.studio a.logo:hover { color: color-mix(in srgb, var(--rec) 80%, white); text-decoration: none; }
-.studio h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
-.studio .bar-btns { display: flex; }
-.studio .cpu { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); cursor: default; }
-.studio .cpu.hot { color: var(--danger); }
-.studio .bar-btn, .studio .chat-btn { height: 36px; padding: 0 14px; border: 0; background: none; color: var(--dim); }
-.studio .chat-btn.on { color: var(--fg); background: var(--raise); }
-.studio .bar-btn.zoom { width: 36px; padding: 0; display: grid; place-items: center; }
-.studio .bar-btn.zoom:hover { color: var(--fg); }
-.studio .bar-btn.on { color: var(--bg); background: var(--accent); }
-.studio .transport { gap: 0; padding: 0; }
-.studio .studio-top[data-status="disconnected"] .project-name::after { content: ' (offline)'; color: var(--dim); font-weight: normal; }
-.studio .time { width: 64px; text-align: center; font-variant-numeric: tabular-nums; color: var(--dim); }
-.studio .rewind { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--dim); }
-.studio .rewind:hover { color: var(--fg); }
-.studio .rewind::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%);
-  background: linear-gradient(to right, currentColor 0 2px, transparent 2px); }
-.studio .rewind::after { content: ''; position: absolute; left: calc(50% - 4px); top: 50%; width: 10px; height: 12px; transform: translateY(-50%);
-  background: currentColor; clip-path: polygon(100% 0, 0 50%, 100% 100%); }
-.studio .play { position: relative; width: 36px; height: 36px; padding: 0; border: 0; background: none; color: var(--fg); }
-.studio .play::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 14px; transform: translate(-50%, -50%); background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
-.studio .play[data-playing]::before { clip-path: none; background: linear-gradient(to right, currentColor 0 35%, transparent 35% 65%, currentColor 65%); }
-.studio .metro { position: relative; width: 36px; height: 36px; padding: 0; border: 0; background: none; color: var(--dim); }
-.studio .metro:hover { color: var(--fg); }
-.studio .metro.on { color: var(--bg); background: var(--accent); }
-.studio .metro:disabled { opacity: .4; }
-/* a metronome: a hollow trapezoid body (even-odd cut-out) and a tilted pendulum arm */
-.studio .metro::before { content: ''; position: absolute; left: 50%; top: 50%; width: 14px; height: 16px; transform: translate(-50%, -50%); background: currentColor;
-  clip-path: polygon(evenodd, 30% 0, 70% 0, 100% 100%, 0 100%, 30% 0, 38% 16%, 18% 86%, 82% 86%, 62% 16%, 38% 16%, 30% 0); }
-.studio .metro::after { content: ''; position: absolute; left: calc(50% - 1px); top: calc(50% - 10px); width: 2px; height: 15px; background: currentColor; transform: rotate(22deg); transform-origin: 50% 100%; }
-.studio .presence { display: flex; }
-.studio .dot { width: 20px; height: 20px; font-size: 10px; color: var(--on-accent); display: grid; place-items: center; }
-.studio .transport[hidden] { display: none; }
-.studio button.rec { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--danger); }
-.studio button.rec::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); border-radius: 50%; background: currentColor; }
-.studio button.rec.on { color: var(--fg); }
-.studio button.rec.on::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
-.studio .pedal-btn { height: 36px; padding: 0 10px; border: 0; background: none; color: var(--dim); }
-.studio .pedal-btn:hover { color: var(--fg); }
-.studio .pedal-btn.on { color: var(--bg); background: var(--accent); }
-.studio .pedal-btn:disabled { opacity: .4; }
-.studio .pedal-st { font-size: 11px; color: var(--faint); cursor: default; white-space: nowrap; }
-.studio .pedal-st.rec { color: var(--danger); }
-.studio .studio-top { position: relative; z-index: 4; }
-.studio .project-name { font-weight: 600; border: 0; background: none; padding: 2px 6px; cursor: pointer; border-radius: var(--r-sm); }
-.studio .project-name:hover { background: var(--raise); }
+/* The studio's top bar (studio/topbar.ts). One bold thing: the display well with the lit bars counter. The rest is quiet:
+   icon buttons with no resting tint, lit only when on. Narrow widths fold groups away (container queries on the bar). */
+.studio .studio-top.tb {
+  position: relative; z-index: 4; container-type: inline-size;
+  display: flex; align-items: center; gap: 16px; height: 48px; padding: 0 10px 0 14px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.studio .tb-l, .studio .tb-r { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.studio .tb-r { justify-content: flex-end; }
+.studio .tb-c { flex: none; display: flex; align-items: center; gap: 14px; }
+.studio .tb-grp { display: flex; gap: 1px; }
+.studio .tb .icon-btn { width: 30px; height: 30px; border-radius: var(--r-sm); }
+
+/* --- left */
+.studio .tb .logo { flex: none; margin-right: 8px; font-family: var(--font-logo); font-weight: 400; font-size: 23px; line-height: 1; letter-spacing: .5px; color: var(--rec); text-decoration: none; }
+.studio .tb a.logo:hover { color: color-mix(in srgb, var(--rec) 80%, white); text-decoration: none; }
+.studio .tb .project-name {
+  display: flex; align-items: center; gap: 3px; min-width: 0; height: 28px; padding: 0 6px 0 8px; border-radius: var(--r-sm);
+  font-weight: 600; font-size: var(--fs-h3); color: var(--fg); background: none;
+}
+.studio .tb .project-name:hover { background: var(--line); }
+.studio .tb .pn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio .tb .pn-chev { flex: none; color: var(--dim); }
+.studio .studio-top[data-status="disconnected"] .pn-text::after { content: ' (offline)'; color: var(--dim); font-weight: 400; }
+.studio .saved { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 4px; font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; cursor: default; }
+.studio .saved-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); opacity: .8; transition: background var(--t) var(--ease); }
+.studio .saved[data-state=saving] .saved-dot { background: var(--accent); }
+.studio .saved[data-state=offline] .saved-dot { background: var(--rec); }
+.studio .tb-ro { font-size: var(--fs-sm); white-space: nowrap; }
+
+/* --- transport */
+.studio .tb-transport { display: flex; align-items: center; gap: 2px; }
+.studio .tb .tb-play { width: 36px; height: 34px; color: var(--fg); }
+.studio .tb .tb-play svg { width: 18px; height: 18px; }
+.studio .tb .tb-play.playing { color: var(--accent); }
+.studio .tb .tb-rec { color: color-mix(in srgb, var(--rec) 85%, var(--dim)); }
+.studio .tb .tb-rec.armed { color: var(--rec); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rec) 55%, transparent); }
+.studio .tb .tb-rec.on { color: var(--on-rec); }
+.studio .tb .toggle.tb-count, .studio .tb .toggle.tb-pedal { height: 26px; padding: 0 7px; margin-left: 2px; font-size: var(--fs-sm); color: var(--dim); border-radius: var(--r-sm); }
+.studio .tb .toggle.tb-count:hover:not(:disabled), .studio .tb .toggle.tb-pedal:hover:not(:disabled) { color: var(--fg); }
+.studio .tb .toggle.tb-count.on, .studio .tb .toggle.tb-pedal.on { color: var(--on-accent); }
+.studio .tb .toggle:disabled { opacity: .4; }
+
+/* --- the display: a recessed window holding the counter, tempo and meter */
+.studio .tb-display {
+  display: flex; align-items: center; gap: 12px; height: 36px; padding: 0 6px 0 4px;
+  background: var(--bg); border-radius: var(--r-md);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .55), 0 1px 0 rgba(255, 255, 255, .035);
+  font-variant-numeric: tabular-nums;
+}
+.studio .tb .counter {
+  display: flex; align-items: baseline; gap: 10px; height: 32px; padding: 0 8px; border-radius: var(--r-sm); background: none;
+  font-variant-numeric: tabular-nums; white-space: pre; cursor: pointer;
+}
+.studio .tb .counter:hover { background: rgba(235, 230, 220, .035); }
+.studio .counter .c-main {
+  min-width: 6.2ch; text-align: right; font-weight: 600; font-size: var(--fs-counter); line-height: 32px; letter-spacing: .02em;
+  color: var(--accent); text-shadow: 0 0 14px rgba(240, 180, 76, .32);
+}
+.studio .counter .c-sub { min-width: 5.2ch; font-weight: 500; font-size: var(--fs); color: var(--dim); letter-spacing: .02em; }
+.studio .counter.clock-first .c-main { min-width: 5.4ch; }
+.studio .counter.clock-first .c-sub { min-width: 5.6ch; }
+.studio .tb.recording .counter .c-main { color: var(--rec); text-shadow: 0 0 14px rgba(238, 90, 82, .35); }
+.studio .counter.counting .c-main { color: var(--rec); text-shadow: 0 0 14px rgba(238, 90, 82, .35); }
+.studio .tb-sep { width: 1px; height: 18px; background: var(--line); }
+.studio .tb-tempo { display: flex; align-items: baseline; gap: 4px; }
+.studio .tb input.numfield.tb-bpm {
+  width: 3.4ch; height: 26px; padding: 0 2px; border: 0; border-radius: var(--r-sm); background: none; text-align: right;
+  font: 600 var(--fs-h3) / 26px var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; cursor: ew-resize;
+}
+.studio .tb input.numfield.tb-bpm:hover { background: var(--raise); }
+.studio .tb input.numfield.tb-bpm:not(:read-only) { background: var(--raise); box-shadow: inset 0 0 0 1px var(--accent); }
+.studio .tb input.numfield.tb-bpm.scrubbing { color: var(--accent); }
+.studio .tb-unit { font-size: var(--fs-xs); color: var(--dim); }
+.studio .tb .tb-tap {
+  margin-left: 4px; height: 20px; padding: 0 6px; border-radius: var(--r-sm); background: none; border: 1px solid var(--line);
+  font-size: var(--fs-xs); color: var(--dim); transition: background var(--t-fast) linear, color var(--t-fast) linear;
+}
+.studio .tb .tb-tap:hover:not(:disabled) { color: var(--fg); background: var(--raise); }
+.studio .tb .tb-tap.hit { background: var(--accent); border-color: var(--accent); color: var(--on-accent); transition: none; }
+.studio .tb .tb-meter { height: 26px; padding: 0 6px; border-radius: var(--r-sm); background: none; font: 600 var(--fs-h3) / 26px var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; }
+.studio .tb .tb-meter:hover:not(:disabled) { background: var(--raise); }
+
+/* --- snap */
+.studio .tb-snap { display: flex; align-items: center; }
+.studio .tb .tb-magnet.lit { color: var(--accent); }
+.studio .tb .tb-snapsize { display: flex; align-items: center; gap: 2px; height: 26px; padding: 0 4px 0 2px; border-radius: var(--r-sm); background: none; font-size: var(--fs-sm); color: var(--fg); font-variant-numeric: tabular-nums; }
+.studio .tb .tb-snapsize svg { color: var(--dim); }
+.studio .tb .tb-snapsize.off { color: var(--dim); }
+.studio .tb .tb-snapsize:hover { background: var(--line); }
+
+/* --- right */
+.studio .tb .seg.tb-view > button { padding: 3px 8px; }
+.studio .tb-meterbox { display: flex; align-items: center; gap: 8px; margin: 0 4px; }
+.studio .tb .scope {
+  flex: none; display: block; width: 120px; height: 28px; padding: 0; border-radius: var(--r-sm); background: var(--bg);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .5); cursor: pointer;
+}
+.studio .tb .scope:hover { background: color-mix(in srgb, var(--bg) 85%, var(--raise)); }
+.studio .scope-cv { display: block; }
+.studio .tb-cpu { min-width: 6ch; font-size: var(--fs-xs); color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
+.studio .tb-cpu.hot { color: var(--rec); }
+.studio .tb .pedal-st { font-size: var(--fs-xs); color: var(--faint); white-space: nowrap; cursor: default; }
+.studio .tb .pedal-st.rec { color: var(--rec); }
+.studio .tb .presence { display: flex; gap: 2px; }
+.studio .tb .presence .dot { width: 20px; height: 20px; border-radius: 50%; font-size: 10px; color: var(--on-accent); display: grid; place-items: center; }
+.studio .tb .chat-btn { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); background: none; color: var(--dim); }
+.studio .tb .chat-btn:hover { color: var(--fg); background: var(--line); }
+.studio .tb .chat-btn.on { color: var(--on-accent); background: var(--accent); }
+.studio .tb .chat-n:empty { display: none; }
+.studio .tb .chat-n { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.studio .tb .tb-more { display: none; }
+
+/* --- popovers opened from the bar */
+.tb-pop { padding: 10px; }
+.tb-pop-label { margin: 0 0 8px; font-size: var(--fs-sm); color: var(--dim); }
+.tb-pop.more-panel { width: 300px; display: flex; flex-direction: column; gap: 2px; }
+.more-panel .mp-row { display: flex; align-items: center; gap: 8px; min-height: 32px; flex-wrap: wrap; }
+.more-panel .mp-label { width: 84px; font-size: var(--fs-sm); color: var(--dim); }
+.more-panel .seg > button { padding: 3px 7px; }
+.more-panel .tb-tap { height: 22px; padding: 0 8px; border: 1px solid var(--line); background: none; color: var(--dim); font-size: var(--fs-xs); }
+.more-panel .sep { height: 1px; margin: 6px 0; background: var(--line); }
+.more-panel .mp-act { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); background: none; text-align: left; }
+.more-panel .mp-act:hover:not(:disabled) { background: var(--line); }
+.more-panel .mp-act svg { color: var(--dim); }
+.more-panel .mp-act .kbd-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--dim); }
+.more-panel input.numfield { height: 26px; font-variant-numeric: tabular-nums; }
+
+/* --- narrower: fold away, least important first */
+@container (max-width: 1320px) {
+  .studio .tb-cpu, .studio .tb .pedal-st { display: none; }
+}
+@container (max-width: 1180px) {
+  .studio .tb .tb-panels, .studio .tb .saved-text { display: none; }
+  .studio .tb .scope { width: 84px; }
+  .studio .tb-c { gap: 10px; }
+}
+@container (max-width: 900px) {
+  .studio .tb .tb-hist, .studio .tb .tb-view, .studio .tb .tb-meterbox, .studio .tb .tb-files, .studio .tb .tb-count { display: none; }
+  .studio .tb .tb-more { display: inline-grid; place-items: center; }
+  .studio .studio-top.tb { gap: 10px; }
+}
+@container (max-width: 700px) {
+  .studio .tb .tb-snap, .studio .tb .tb-meter, .studio .tb .tb-tap, .studio .tb .project-name, .studio .tb .saved, .studio .tb .tb-pedal { display: none; }
+  .studio .tb-l, .studio .tb-r { flex: none; }
+  .studio .tb-c { flex: 1; justify-content: center; }
+}
+@container (max-width: 480px) {
+  .studio .studio-top.tb { padding: 0 6px 0 10px; gap: 6px; }
+  .studio .tb .tb-rewind, .studio .tb .tb-metro, .studio .tb-sep, .studio .tb-tempo { display: none; }
+  .studio .tb .logo { font-size: 20px; margin-right: 0; }
+  .studio .tb-c { gap: 6px; }
+  .studio .tb-display { padding: 0 2px; }
+  .studio .counter .c-sub { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio .tb .tb-tap { transition: none; }
+}

@@ -1,0 +1,16 @@
+/* The status bar (studio/statusbar.ts). The layout rule for .studio-status lives in studio.css. */
+.studio .studio-status { height: 24px; gap: 14px; font-variant-numeric: tabular-nums; }
+.studio .studio-status .grow { flex: 1; }
+.studio .studio-status .status-text { min-width: 0; color: var(--dim); }
+.studio .studio-status .status-text.is-hint { color: var(--dim); }
+.studio .sb-zoom { display: flex; align-items: center; gap: 1px; }
+.studio .sb-zoom .icon-btn.sm { width: 20px; height: 20px; }
+.studio .sb-zoom .icon-btn.sm svg { width: 14px; height: 14px; }
+.studio .sb-fit { height: 18px; padding: 0 5px; border-radius: var(--r-sm); background: none; font-size: var(--fs-xs); color: var(--dim); }
+.studio .sb-fit:hover { color: var(--fg); background: var(--line); }
+.studio .sb-cpu, .studio .sb-rate { color: var(--faint); }
+.studio .sb-cpu { min-width: 6ch; }
+.studio .sb-cpu.hot { color: var(--rec); }
+.studio .sb-where { color: var(--dim); }
+.studio .sb-where::before { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--ok); vertical-align: middle; }
+@media (max-width: 600px) { .studio .sb-rate, .studio .sb-zoom { display: none; } }

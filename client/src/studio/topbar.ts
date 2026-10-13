@@ -1,13 +1,29 @@
-// The top bar: logo, project name (settings), transport and time, click track, loop pedal, cpu, presence, zoom, export
-// and the chat toggle. It reads the Studio and redraws on its events.
-import { addClickTrack, clipsMap, getLoopers, getPoints, getTracks, metaMap, updateTrack, type Role } from '@mobdaw/shared'
+// The top bar (docs/redesign.md §2, §3):
+//   left    wordmark (all projects), project name (settings), saved state
+//   centre  transport (rewind, play, record, loop, metronome, count-in, pedal), the display (the counter: bar.beat.16th
+//           lit, the clock dim, click to swap; tempo with drag / type / tap; meter), snap
+//   right   undo / redo, arrange / mix, browser / dock, the master scope, cpu, export, help; presence and chat (cloud)
+// Narrow windows fold the secondary groups into a "more" panel (≤ 900px), down to transport + counter on a phone.
+// It also owns the grid and view shortcuts: L loop, T tap tempo, Z zoom to fit, Tab arrange / mix, ⌘+ / ⌘- zoom.
+import {
+  BPM_MAX, BPM_MIN, GRID_SIZES, addClickTrack, barsBeats, clipsMap, fitClickTrack, getLoop, getLoopers, getPoints, getTracks,
+  metaMap, setBeatsPerBar, setProjectTempo, tapBpm, updateTrack, type GridSize, type Role,
+} from '@mobdaw/shared'
+import { getCtx } from '../audio/context'
 import { renderProject } from '../audio/render'
+import { CLOUD } from '../cloud'
 import { h } from '../dom'
 import { homeLink } from '../router'
+import { iconButton, numberField, segmented, toggle, tooltip } from '../theme/controls'
+import { icon } from '../theme/icons'
 import type { chatPanel } from '../ui/chat'
 import { exportDialog } from '../ui/exportDialog'
+import { popoverPanel } from '../ui/popover'
 import { projectMenu } from '../ui/projectMenu'
-import { transportControls } from '../ui/transport'
+import { fmt } from '../ui/transport'
+import { ZOOM_FIT, ZOOM_MAX, ZOOM_MIN } from './arrange/arrange'
+import { toggleLoop } from './arrange/ruler'
+import { mountScope } from './scope'
 import type { Studio } from './studio'
 import './topbar.css'
 
@@ -20,28 +36,47 @@ export type TopbarOpts = {
   chat?: ReturnType<typeof chatPanel>
 }
 
+export const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+const MOD = MAC ? '⌘' : 'ctrl+'
+/** The shortcuts this module handles, for the ? overlay. */
+export const TOPBAR_SHORTCUTS: [keys: string, what: string][] = [
+  ['L', 'loop on / off (makes a 4-bar loop, or one over the selection, if there is none)'],
+  ['T', 'tap tempo (tap three or more times)'],
+  ['Z', 'zoom to fit the song'],
+  [`${MOD}+ / ${MOD}-`, 'zoom in / out'],
+  ['Tab', 'switch arrange / mix'],
+]
+
 const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()
-const glass = (sign: string) => `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 18 18M6 8.5h5${sign}"/></svg>`
-const ZOOM_MIN = 10, ZOOM_MAX = 800
+const FIGURE = ' ' // a digit-wide space, for the counter's fixed width
+const COUNTER_KEY = 'mobdaw.counter'
+const gridLabel = (g: GridSize) => GRID_SIZES.find((s) => s.value === g)?.label ?? '1/16'
+
+/** True when a key press belongs to a text field (or a control that takes keys), not to the studio. */
+export const typing = (e: KeyboardEvent) => {
+  const t = e.target as HTMLElement
+  const tag = t?.tagName
+  return tag === 'SELECT' || tag === 'TEXTAREA' || !!t?.isContentEditable || (tag === 'INPUT' && (t as HTMLInputElement).type !== 'range')
+}
 
 export function mountTopbar(st: Studio, opts: TopbarOpts) {
-  const { s, doc, readOnly } = st
+  const { s, doc, readOnly, undo } = st
   let projectName = opts.projectName
   const { cloud, chat } = opts
+  if (import.meta.env.DEV) (window as unknown as { __studio?: Studio }).__studio = st // (for the screenshot scripts)
 
-  const transport = transportControls({
-    title: 'play / pause (space)', onToggle: () => st.toggle(), onRewind: () => st.rewind(),
-    record: readOnly ? undefined : { onToggle: () => void st.toggleRecord(), onMenu: (e) => st.rec.offsetMenu(e) },
-  })
-
+  // ---------------------------------------------------------------- left: wordmark, project, saved
   /** Nothing is placed on a timeline yet (positions are in samples, so only then can the rate change). */
   const isBlank = () => !getTracks(doc).length && !getPoints(doc).length && !getLoopers(doc).length
+  const titleText = h('span', { className: 'pn-text' }, projectName)
   /** The project's name: a button that opens the project settings (rename, sharing, audio input, pedal). */
-  const title = h('button', { className: 'project-name', title: 'project settings', onclick: () => {
-    projectMenu(title, {
+  const title: HTMLButtonElement = h('button', { className: 'project-name', type: 'button', title: 'project settings', onclick: () => openProject() },
+    titleText, icon('chevron-down', 14, 'pn-chev'))
+  function openProject(anchor: HTMLElement = title) {
+    projectMenu(anchor, {
       name: projectName,
       rename: opts.renameProject,
-      onRenamed: (n) => (title.textContent = projectName = n),
+      onRenamed: (n) => (titleText.textContent = projectName = n),
       cloud: cloud && { ...cloud, onPublic: (v) => (cloud.public = v), onDemo: (v) => (cloud.demo = v) },
       sampleRate: {
         value: st.rate,
@@ -51,55 +86,283 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       onInputChanged: () => void st.rec.reopenInput(),
       onPedalChanged: readOnly ? undefined : () => st.pedal.settingsChanged(),
     })
-  } }, projectName)
+  }
+  const savedText = h('span', { className: 'saved-text' }, 'saved')
+  const saved = h('span', { className: 'saved', 'data-state': 'saved', 'data-hint': s.local ? 'every change is saved in this browser, on this device' : 'every change is saved to the server' },
+    h('i', { className: 'saved-dot' }), savedText)
+  const left = h('div', { className: 'tb-l' },
+    h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), title,
+    readOnly ? h('span', { className: 'tb-ro dim' }, 'view only') : saved)
 
+  // ---------------------------------------------------------------- centre: transport
+  const rewind = iconButton('rewind', 'go to the start', () => st.rewind(), 'tb-rewind')
+  tooltip(rewind, 'go to the start', 'home')
+  const play = iconButton('play', 'play / pause', () => st.toggle(), 'tb-play')
+  tooltip(play, 'play / pause', 'space')
+  const rec = toggle({ icon: 'record' }, { tone: 'rec', className: 'tb-rec', onChange: () => { rec.set(!!st.rec.take); void st.toggleRecord() } })
+  tooltip(rec.el, 'record onto the armed track, or a new one · right-click: input offset', 'shift+space')
+  rec.el.addEventListener('contextmenu', (e) => { e.preventDefault(); st.rec.offsetMenu(e) })
+  const loopBtn = toggle({ icon: 'loop' }, { className: 'tb-loop', onChange: () => toggleLoop(st) })
+  tooltip(loopBtn.el, 'loop the cycle region', 'L')
   // The metronome is an ordinary MIDI track (role 'click'): the button makes it, and then mutes / unmutes it.
-  const clickBtn = h('button', { className: 'metro', disabled: readOnly, title: 'metronome: add a click track, then mute / unmute it', onclick: () => {
+  const metro = toggle({ icon: 'metronome' }, { className: 'tb-metro', onChange: () => toggleClick() })
+  tooltip(metro.el, 'metronome (adds a click track, then mutes / unmutes it)')
+  function toggleClick() {
     const t = getTracks(doc).find((x) => x.role === 'click')
     // switching it off closes its clip in the editor
     if (t && !t.muted && st.ui.editing && clipsMap(doc).get(st.ui.editing)?.get('trackId') === t.id) st.openClip(null)
     if (t) updateTrack(doc, t.id, { muted: !t.muted })
-    else addClickTrack(doc)
+    else doc.transact(() => { addClickTrack(doc); fitClickTrack(doc) })
+  }
+  let countInOn = false
+  try { countInOn = localStorage.getItem('mobdaw.countIn') === '1' } catch { /* (not remembered) */ }
+  const countBtn = toggle('1 bar', { className: 'tb-count', on: countInOn, onChange: (on) => {
+    countInOn = on
+    try { localStorage.setItem('mobdaw.countIn', on ? '1' : '0') } catch { /* (not remembered) */ }
   } })
-  const pedalBtn = h('button', { className: 'pedal-btn', onclick: () => void st.pedal.set(!st.pedal.on) }, 'pedal')
-  transport.el.append(clickBtn, pedalBtn) // sit right of the time readout
+  tooltip(countBtn.el, 'count-in: one bar of click before recording starts')
+  const pedalBtn = toggle('pedal', { className: 'tb-pedal', onChange: () => { pedalBtn.set(st.pedal.on); void st.pedal.set(!st.pedal.on) } })
+  const transport = h('div', { className: 'tb-transport' }, rewind, play, readOnly ? null : rec.el, loopBtn.el, metro.el, readOnly ? null : countBtn.el, readOnly ? null : pedalBtn.el)
+  for (const b of [loopBtn.el, metro.el]) b.disabled = readOnly
 
-  const pedalText = h('span', { className: 'pedal-st', title: 'loop pedal: the number of loops going; red while a layer is recording' })
-  const cpu = h('span', { className: 'cpu', title: 'audio engine load: share of the real-time budget used by DSP (peak call in the last half second)' })
-  const presence = h('span', { className: 'presence' })
-  const zoom = (f: number) => st.setUi({ pps: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, st.ui.pps * f)) })
-  const zoomOut = h('button', { className: 'bar-btn zoom', title: 'zoom out (ctrl + scroll)', onclick: () => zoom(1 / 1.5) })
-  zoomOut.innerHTML = glass('')
-  const zoomIn = h('button', { className: 'bar-btn zoom', title: 'zoom in (ctrl + scroll)', onclick: () => zoom(1.5) })
-  zoomIn.innerHTML = glass('M8.5 6v5')
-  const exportBtn = h('button', { className: 'bar-btn', title: 'render the whole project to a file', onclick: () => {
+  // ---------------------------------------------------------------- centre: the display (counter, tempo, meter)
+  let clockFirst = false
+  try { clockFirst = localStorage.getItem(COUNTER_KEY) === 'clock' } catch { /* (not remembered) */ }
+  const cMain = h('span', { className: 'c-main' })
+  const cSub = h('span', { className: 'c-sub' })
+  const counter = h('button', { className: 'counter', type: 'button', 'aria-live': 'off', 'data-hint': 'position: bar.beat.sixteenth and the clock · click to swap which is big' }, cMain, cSub)
+  tooltip(counter, 'click: swap bars and clock')
+  counter.onclick = () => {
+    clockFirst = !clockFirst
+    try { localStorage.setItem(COUNTER_KEY, clockFirst ? 'clock' : 'bars') } catch { /* (not remembered) */ }
+    drawCounter(st.position(), true)
+  }
+  let lastBars = '', lastClock = ''
+  function drawCounter(p: number, force = false) {
+    if (counting) return
+    const b = barsBeats(Math.max(0, p), st.tempo(), st.rate)
+    const bars = `${String(b.bar).padStart(3, FIGURE)}.${b.beat}.${b.sixteenth}`
+    const clock = fmt(Math.max(0, p) / st.rate)
+    if (!force && bars === lastBars && clock === lastClock) return
+    lastBars = bars
+    lastClock = clock
+    counter.classList.toggle('clock-first', clockFirst)
+    cMain.textContent = clockFirst ? clock : bars
+    cSub.textContent = clockFirst ? bars.replaceAll(FIGURE, '') : clock
+  }
+
+  const bpm = numberField({
+    value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, width: '3ch', title: 'tempo: drag to change, click to type',
+    onInput: (v) => setBpmSoon(v), onChange: (v) => setBpmSoon(v),
+  })
+  bpm.el.classList.add('tb-bpm')
+  bpm.el.disabled = readOnly
+  bpm.el.dataset.hint = 'tempo (bpm): drag sideways or up / down, click to type · clips stay on their bars'
+  let bpmRaf = 0, bpmWant = 0
+  function setBpmSoon(v: number) {
+    if (readOnly) return
+    bpmWant = v
+    if (!bpmRaf) bpmRaf = requestAnimationFrame(() => { bpmRaf = 0; setProjectTempo(doc, bpmWant) })
+  }
+  let taps: number[] = []
+  const tapBtn = h('button', { className: 'tb-tap', type: 'button', disabled: readOnly, onclick: (e: MouseEvent) => tap(e.timeStamp) }, 'tap')
+  tooltip(tapBtn, 'tap the tempo', 'T')
+  function tap(now: number) {
+    if (readOnly) return
+    if (taps.length && now - taps[taps.length - 1] > 2000) taps = []
+    taps.push(now)
+    tapBtn.classList.add('hit')
+    setTimeout(() => tapBtn.classList.remove('hit'), 90)
+    const v = taps.length >= 3 ? tapBpm(taps) : null
+    if (v != null) {
+      setProjectTempo(doc, Math.round(v))
+      st.status(`tempo ${Math.round(v)} bpm (tapped)`)
+    } else st.status(taps.length === 1 ? 'tap tempo: keep tapping…' : 'tap tempo: once more…')
+  }
+  const meterBtn = h('button', { className: 'tb-meter', type: 'button', disabled: readOnly, 'data-hint': 'meter: beats per bar' })
+  tooltip(meterBtn, 'meter (beats per bar)')
+  meterBtn.onclick = () => meterPanel(meterBtn)
+  function meterPanel(anchor: HTMLElement) {
+    const seg = segmented(['2', '3', '4', '5', '6', '7'].map((v) => ({ value: v, label: `${v}/4` })), String(st.tempo().beatsPerBar), (v) => {
+      setBeatsPerBar(doc, Number(v))
+      close()
+    })
+    const close = popoverPanel(anchor, h('div', { className: 'tb-pop' }, h('div', { className: 'tb-pop-label' }, 'Beats per bar'), seg.el))
+  }
+  const display = h('div', { className: 'tb-display' },
+    counter,
+    h('span', { className: 'tb-sep' }),
+    h('span', { className: 'tb-tempo' }, bpm.el, h('span', { className: 'tb-unit' }, 'bpm'), tapBtn),
+    meterBtn)
+
+  // ---------------------------------------------------------------- centre: snap
+  let lastGrid: GridSize = st.ui.grid || 0.25
+  const snapToggle = iconButton('magnet', 'snap to grid', () => {
+    if (st.ui.grid) (lastGrid = st.ui.grid), st.setUi({ grid: 0 })
+    else st.setUi({ grid: lastGrid || 0.25 })
+  }, 'tb-magnet')
+  tooltip(snapToggle, 'snap to grid on / off (hold alt while dragging: free)')
+  const snapSize = h('button', { className: 'tb-snapsize', type: 'button' }, h('span', {}), icon('chevron-down', 12))
+  tooltip(snapSize, 'grid size')
+  snapSize.onclick = () => gridPanel(snapSize)
+  function gridPanel(anchor: HTMLElement) {
+    const seg = segmented(GRID_SIZES.map((g) => ({ value: String(g.value), label: g.label })), String(st.ui.grid), (v) => {
+      st.setUi({ grid: (v === 'bar' ? 'bar' : Number(v)) as GridSize })
+      close()
+    })
+    const close = popoverPanel(anchor, h('div', { className: 'tb-pop' }, h('div', { className: 'tb-pop-label' }, 'Snap to'), seg.el))
+  }
+  const snap = h('div', { className: 'tb-snap', 'data-hint': 'snap: where clips, notes and the loop land when dragged' }, snapToggle, snapSize)
+
+  const centre = h('div', { className: 'tb-c' }, transport, display, snap)
+
+  // ---------------------------------------------------------------- right
+  const undoBtn = iconButton('undo', 'undo', () => undo.undo(), 'tb-undo')
+  tooltip(undoBtn, 'undo', `${MOD}Z`)
+  const redoBtn = iconButton('redo', 'redo', () => undo.redo(), 'tb-redo')
+  tooltip(redoBtn, 'redo', MAC ? '⇧⌘Z' : 'ctrl+shift+Z')
+  const view = segmented<'arrange' | 'mix'>([
+    { value: 'arrange', icon: 'arrange', title: 'arrange (Tab)' },
+    { value: 'mix', icon: 'mixer', title: 'mix (Tab)' },
+  ], st.ui.view, (v) => st.setUi({ view: v }))
+  view.el.classList.add('tb-view')
+  const browserBtn = toggle({ icon: 'browser' }, { on: st.ui.browserOpen, onChange: (on) => st.setUi({ browserOpen: on }) })
+  tooltip(browserBtn.el, 'browser', 'B')
+  const dockBtn = toggle({ icon: 'dock' }, { on: st.ui.dock.open, onChange: (on) => st.setUi({ dock: { ...st.ui.dock, open: on } }) })
+  tooltip(dockBtn.el, 'editor dock', 'D')
+  const scope = mountScope(st)
+  const cpu = h('span', { className: 'tb-cpu', 'data-hint': 'audio engine load: share of the real-time budget used by DSP' }, 'cpu –')
+  const doExport = () => {
     if (!st.pb) return // (the project has not synced yet)
     exportDialog({ name: projectName, render: (o) => renderProject(doc, s.projectId, st.rate, s.userId, o) })
-  } }, 'export')
-  const chatBtn = chat && h('button', { className: 'chat-btn', title: 'chat', onclick: () => {
+  }
+  const exportBtn = iconButton('export', 'export', doExport, 'tb-export')
+  tooltip(exportBtn, 'export the song to an audio file')
+  const help = () => window.dispatchEvent(new CustomEvent('mobdaw:help'))
+  const helpBtn = iconButton('help', 'shortcuts and help', help, 'tb-help')
+  tooltip(helpBtn, 'shortcuts and help', '?')
+  const pedalText = h('span', { className: 'pedal-st', title: 'loop pedal: the number of loops going; red while a layer is recording' })
+  const showCloud = CLOUD && !s.local
+  const presence = showCloud ? h('span', { className: 'presence' }) : null
+  const chatBtn = showCloud && chat ? h('button', { className: 'chat-btn', type: 'button', onclick: () => {
     chat.setOpen(!chat.open)
     chatBtn!.classList.toggle('on', chat.open)
     window.dispatchEvent(new Event('resize')) // the arrangement's width changed
-  } }, 'chat')
+  } }, icon('chat'), h('span', { className: 'chat-n' })) : null
+  if (chatBtn) tooltip(chatBtn, 'chat')
+  const moreBtn = iconButton('more', 'more', () => morePanel(), 'tb-more')
+  tooltip(moreBtn, 'more controls')
 
-  const el = h('header', { className: 'studio-top' },
-    h('div', { className: 'bar-l' }, h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), title,
-      readOnly ? h('span', { className: 'dim' }, 'view only') : null,
-      s.local ? h('span', { className: 'dim', title: 'saved in this browser, on this device' }, 'local') : null),
-    transport.el,
-    h('div', { className: 'bar-r' }, pedalText, cpu, presence, h('div', { className: 'bar-btns' }, zoomOut, zoomIn, exportBtn, chatBtn)))
+  const right = h('div', { className: 'tb-r' },
+    pedalText,
+    h('div', { className: 'tb-grp tb-hist' }, undoBtn, redoBtn),
+    view.el,
+    h('div', { className: 'tb-grp tb-panels' }, browserBtn.el, dockBtn.el),
+    h('div', { className: 'tb-meterbox' }, scope.el, cpu),
+    h('div', { className: 'tb-grp tb-files' }, exportBtn, helpBtn),
+    presence, chatBtn, moreBtn)
 
+  const el = h('header', { className: 'studio-top tb' }, left, centre, right)
+
+  /** ≤ 900px: what the bar hides lives here. */
+  function morePanel() {
+    const row = (label: string, ...kids: (Node | null)[]) => h('div', { className: 'mp-row' }, h('span', { className: 'mp-label' }, label), ...kids)
+    const act = (ic: Parameters<typeof icon>[0], label: string, run: () => void, hint?: string, disabled = false) =>
+      h('button', { className: 'mp-act', type: 'button', disabled, onclick: () => { close(); run() } }, icon(ic), h('span', {}, label), hint ? h('span', { className: 'kbd-hint' }, hint) : null)
+    const tempo = numberField({ value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, width: '4ch', onChange: (v) => !readOnly && setProjectTempo(doc, v) })
+    const meter = segmented(['2', '3', '4', '5', '6', '7'], String(st.tempo().beatsPerBar), (v) => !readOnly && setBeatsPerBar(doc, Number(v)))
+    const grid = segmented(GRID_SIZES.map((g) => ({ value: String(g.value), label: g.label })), String(st.ui.grid), (v) => st.setUi({ grid: (v === 'bar' ? 'bar' : Number(v)) as GridSize }))
+    const viewSeg = segmented<'arrange' | 'mix'>(['arrange', 'mix'], st.ui.view, (v) => st.setUi({ view: v }))
+    const panel = h('div', { className: 'tb-pop more-panel' },
+      row('Tempo', tempo.el, h('span', { className: 'dim' }, 'bpm'), h('button', { className: 'tb-tap', type: 'button', disabled: readOnly, onclick: (e: MouseEvent) => { tap(e.timeStamp); tempo.set(st.tempo().bpm) } }, 'tap')),
+      row('Beats per bar', meter.el),
+      row('Snap', grid.el),
+      row('View', viewSeg.el),
+      h('div', { className: 'sep' }),
+      act('undo', 'undo', () => undo.undo(), `${MOD}Z`, readOnly || !undo.undoStack.length),
+      act('redo', 'redo', () => undo.redo(), MAC ? '⇧⌘Z' : 'ctrl+shift+Z', readOnly || !undo.redoStack.length),
+      act('metronome', metro.get() ? 'metronome off' : 'metronome on', toggleClick, undefined, readOnly),
+      act('record', countInOn ? 'count-in off' : 'count-in: one bar', () => countBtn.el.click(), undefined, readOnly),
+      act('browser', st.ui.browserOpen ? 'hide the browser' : 'show the browser', () => st.setUi({ browserOpen: !st.ui.browserOpen }), 'B'),
+      act('dock', st.ui.dock.open ? 'hide the dock' : 'show the dock', () => st.setUi({ dock: { ...st.ui.dock, open: !st.ui.dock.open } }), 'D'),
+      act('zoom-in', 'zoom to fit', () => dispatchEvent(new Event(ZOOM_FIT)), 'Z'),
+      act('settings', 'project settings', () => openProject(moreBtn)),
+      act('export', 'export…', doExport),
+      act('help', 'shortcuts and help', help, '?'))
+    const close = popoverPanel(moreBtn, panel)
+  }
+
+  // ---------------------------------------------------------------- count-in
+  let counting = false
+  let cancelCount: (() => void) | null = null
+  /** One bar of click before a recording starts from stopped (resolves false when cancelled). */
+  async function countIn(): Promise<boolean> {
+    if (!countInOn || st.playing || st.rec.take) return true
+    if (cancelCount) return cancelCount(), false // pressed again while counting: cancel
+    const ctx = getCtx(st.rate)
+    await ctx.resume().catch(() => {})
+    const { bpm: tempo, beatsPerBar } = st.tempo()
+    const beat = 60 / tempo
+    const t0 = ctx.currentTime + 0.08
+    const out = ctx.createGain()
+    out.gain.value = 0.35
+    out.connect(ctx.destination)
+    const oscs: OscillatorNode[] = []
+    for (let i = 0; i < beatsPerBar; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain()
+      o.frequency.value = i === 0 ? 1760 : 1320
+      g.gain.setValueAtTime(0, t0 + i * beat)
+      g.gain.linearRampToValueAtTime(1, t0 + i * beat + 0.002)
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + i * beat + 0.06)
+      o.connect(g).connect(out)
+      o.start(t0 + i * beat)
+      o.stop(t0 + i * beat + 0.08)
+      oscs.push(o)
+    }
+    counting = true
+    counter.classList.add('counting')
+    return new Promise<boolean>((resolve) => {
+      const timers: number[] = []
+      const finish = (go: boolean) => {
+        timers.forEach(clearTimeout)
+        if (!go) oscs.forEach((o) => { try { o.stop() } catch { /* (already stopped) */ } })
+        setTimeout(() => out.disconnect(), 200)
+        counting = false
+        cancelCount = null
+        counter.classList.remove('counting')
+        drawCounter(st.position(), true)
+        resolve(go)
+      }
+      cancelCount = () => finish(false)
+      const lead = (t0 - ctx.currentTime) * 1000
+      for (let i = 0; i < beatsPerBar; i++) {
+        timers.push(window.setTimeout(() => {
+          cMain.textContent = `−${beatsPerBar - i}`
+          cSub.textContent = 'count-in'
+        }, lead + i * beat * 1000))
+      }
+      timers.push(window.setTimeout(() => finish(true), lead + beatsPerBar * beat * 1000 - 15))
+    })
+  }
+  st.beforeRecord = countIn
+
+  // ---------------------------------------------------------------- state -> controls
   /** The pedal needs Web MIDI (not in Safari) and a chosen input; otherwise the button says why it is off. */
   function syncTransport() {
     const why = st.pedal.why()
-    pedalBtn.disabled = !!why && !st.pedal.on
-    pedalBtn.title = why || 'loop pedal: foot switches record, loop and overdub on the beat (keys 1-4 do the same). Learn the switches in the project settings'
-    pedalBtn.classList.toggle('on', st.pedal.on)
-    transport.setPlaying(st.playing)
-    transport.setRecord(!!st.ui.armedTrack, !!st.rec.take)
+    pedalBtn.el.disabled = !!why && !st.pedal.on
+    tooltip(pedalBtn.el, why || 'loop pedal: foot switches record, loop and overdub on the beat (keys 1-4 do the same)')
+    pedalBtn.set(st.pedal.on)
+    const playing = st.playing
+    play.replaceChildren(icon(playing ? 'pause' : 'play'))
+    play.classList.toggle('playing', playing)
+    rec.set(!!st.rec.take)
+    rec.el.classList.toggle('armed', !!st.ui.armedTrack && !st.rec.take)
+    el.classList.toggle('recording', !!st.rec.take)
     drawPedalText()
+    drawCounter(st.position(), true)
   }
-  /** The text beside the CPU meter says what the pedal is doing. */
+  /** The text beside the right group says what the pedal is doing. */
   function drawPedalText() {
     const v = st.pedal.view()
     const now = st.position()
@@ -108,35 +371,120 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     if (pedalText.textContent !== text) pedalText.textContent = text
     pedalText.classList.toggle('rec', !!v?.layer)
   }
-  function drawDoc() {
-    clickBtn.classList.toggle('on', getTracks(doc).some((t) => t.role === 'click' && !t.muted)) // lit: a click track exists and is unmuted
-    presence.replaceChildren(...[s.user, ...st.remote.map((r) => r.user)].map((u) =>
-      h('span', { className: 'dot', title: u.username, style: `background:${u.color}` }, initials(u.username))))
-    transport.setRecord(!!st.ui.armedTrack, !!st.rec.take)
+  function drawMeta() {
+    const t = st.tempo()
+    bpm.set(t.bpm)
+    meterBtn.textContent = `${t.beatsPerBar}/4`
+    const loop = getLoop(doc)
+    loopBtn.set(!!loop?.on)
+    drawCounter(st.position(), true)
   }
-  const onStatus = ({ status }: { status: string }) => (el.dataset.status = status)
-  s.provider?.on('status', onStatus)
-  s.provider?.on('authenticationFailed', () => st.status('no access'))
+  function drawDoc() {
+    metro.set(getTracks(doc).some((t) => t.role === 'click' && !t.muted)) // lit: a click track exists and is unmuted
+    presence?.replaceChildren(...[s.user, ...st.remote.map((r) => r.user)].map((u) =>
+      h('span', { className: 'dot', title: u.username, style: `background:${u.color}` }, initials(u.username))))
+    rec.set(!!st.rec.take)
+    drawMeta()
+  }
+  function drawUi() {
+    const g = st.ui.grid
+    snapToggle.classList.toggle('lit', !!g)
+    snapSize.firstElementChild!.textContent = g ? gridLabel(g) : 'off'
+    snapSize.classList.toggle('off', !g)
+    view.set(st.ui.view)
+    browserBtn.set(st.ui.browserOpen)
+    dockBtn.set(st.ui.dock.open)
+  }
+  function drawUndo() {
+    undoBtn.disabled = readOnly || !undo.undoStack.length
+    redoBtn.disabled = readOnly || !undo.redoStack.length
+  }
 
+  // ---------------------------------------------------------------- saved state
+  let saveTimer = 0
+  const setSaved = (state: 'saved' | 'saving' | 'offline') => {
+    saved.dataset.state = state
+    savedText.textContent = state === 'saving' ? 'saving…' : state
+  }
+  const onUpdate = () => {
+    if (s.provider) return
+    setSaved('saving')
+    clearTimeout(saveTimer)
+    saveTimer = window.setTimeout(() => setSaved('saved'), 600)
+  }
+  doc.on('update', onUpdate)
+  const onUnsynced = () => { if (s.provider?.unsyncedChanges) setSaved('saving'); else if (saved.dataset.state !== 'offline') setSaved('saved') }
+  const onStatus = ({ status }: { status: string }) => {
+    el.dataset.status = status
+    if (status === 'disconnected') setSaved('offline')
+    else if (status === 'connected') onUnsynced()
+  }
+  const onAuthFail = () => st.status('no access')
+  s.provider?.on('status', onStatus)
+  s.provider?.on('unsyncedChanges', onUnsynced)
+  s.provider?.on('authenticationFailed', onAuthFail)
+
+  // ---------------------------------------------------------------- keys: L, T, Z, Tab, ⌘+ / ⌘-
+  const zoom = (f: number) => st.setUi({ pps: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, st.ui.pps * f)) })
+  const onKey = (e: KeyboardEvent) => {
+    if (e.defaultPrevented || typing(e)) return
+    const mod = e.metaKey || e.ctrlKey
+    const k = e.key.toLowerCase()
+    if (mod && !e.altKey && (e.key === '=' || e.key === '+')) return e.preventDefault(), zoom(1.5)
+    if (mod && !e.altKey && e.key === '-') return e.preventDefault(), zoom(1 / 1.5)
+    if (mod || e.altKey) return
+    if (e.key === 'Tab' && !e.shiftKey) {
+      // (keyboard users moving focus between controls keep Tab)
+      const a = document.activeElement as HTMLElement | null
+      if (a && a !== document.body && a.matches(':focus-visible')) return
+      e.preventDefault()
+      return st.setUi({ view: st.ui.view === 'arrange' ? 'mix' : 'arrange' })
+    }
+    if (e.shiftKey || e.repeat) return
+    if (k === 'l') { e.preventDefault(); toggleLoop(st) }
+    else if (k === 't') { e.preventDefault(); tap(e.timeStamp) }
+    else if (k === 'z') { e.preventDefault(); dispatchEvent(new Event(ZOOM_FIT)) }
+    else if (e.key === 'Home') { e.preventDefault(); st.rewind() }
+  }
+  addEventListener('keydown', onKey)
+
+  const meta = metaMap(doc)
+  meta.observe(drawMeta)
+  const undoEvents = ['stack-item-added', 'stack-item-popped', 'stack-cleared'] as const
+  undoEvents.forEach((ev) => undo.on(ev, drawUndo))
   const offs = [
     st.on('transport', syncTransport),
-    st.on('ui', (p) => { if ('armedTrack' in p) syncTransport() }),
+    st.on('ui', (p) => { if ('armedTrack' in p) syncTransport(); drawUi() }),
     st.on('doc', drawDoc),
-    st.on('tick', (p) => { transport.setTime(p / st.rate); drawPedalText() }),
+    st.on('tick', (p) => { drawCounter(p); drawPedalText() }),
     st.on('cpu', (m) => {
-      cpu.textContent = `cpu ${Math.round(m.load * 100)}%`
+      const t = `cpu ${Math.round(m.load * 100)}%`
+      if (cpu.textContent !== t) cpu.textContent = t
       cpu.classList.toggle('hot', m.peak >= 0.8)
     }),
   ]
   syncTransport()
   drawDoc()
+  drawUi()
+  drawUndo()
   return {
     el,
     /** The chat's unread count, on its toggle. */
-    setUnread(n: number) { if (chatBtn) chatBtn.textContent = n ? `chat (${n})` : 'chat' },
+    setUnread(n: number) { if (chatBtn) chatBtn.querySelector('.chat-n')!.textContent = n ? String(n) : '' },
     destroy() {
       offs.forEach((f) => f())
+      cancelCount?.()
+      if (st.beforeRecord === countIn) st.beforeRecord = null
+      removeEventListener('keydown', onKey)
+      meta.unobserve(drawMeta)
+      undoEvents.forEach((ev) => undo.off(ev, drawUndo))
+      doc.off('update', onUpdate)
+      clearTimeout(saveTimer)
+      cancelAnimationFrame(bpmRaf)
+      scope.destroy()
       s.provider?.off('status', onStatus)
+      s.provider?.off('unsyncedChanges', onUnsynced)
+      s.provider?.off('authenticationFailed', onAuthFail)
     },
   }
 }
