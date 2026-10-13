@@ -68,4 +68,13 @@ route(/^\/admin$/, guarded((me) => adminPage(me), { admin: true }))
 // (signed-out visitors may open a public project, read-only; projectPage sends them to login if it isn't one)
 route(/^\/project\/([^/]+)$/, ([id]) => optional((me) => projectPage(me, id))())
 route(/^\/engine-test$/, guarded((me) => engineTestPage(me))) // dev tool, linked from nowhere
+// the theme kit: every control and icon on one page, for review (dev builds only, linked from nowhere)
+if (import.meta.env.DEV) {
+  route(/^\/kit$/, () => {
+    let cleanup: void | (() => void)
+    let dead = false
+    void import('./pages/kit').then((m) => dead || (cleanup = m.kitPage()))
+    return () => ((dead = true), typeof cleanup === 'function' && cleanup())
+  })
+}
 start('/')

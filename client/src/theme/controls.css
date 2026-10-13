@@ -1,0 +1,92 @@
+/* Studio controls (theme/controls.ts). Sizes are set with custom properties so a view can scale them:
+   --knob-c (arc colour), --fader-len, --fader-c (cap index / fill colour). */
+
+/* ---------- knob ---------- */
+.knob {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 1px;
+  cursor: ns-resize; touch-action: none; user-select: none; -webkit-user-select: none;
+  border-radius: var(--r-sm); outline-offset: 2px;
+}
+.knob svg { overflow: visible; }
+.knob-track { fill: none; stroke: var(--line-strong); stroke-width: 3; stroke-linecap: round; }
+.knob-fill { fill: none; stroke: var(--knob-c, var(--accent)); stroke-width: 3; stroke-linecap: round; }
+.knob-cap { fill: var(--raise); stroke: var(--line-strong); stroke-width: 1; transition: stroke var(--t-fast) linear; }
+.knob-pointer { stroke: var(--fg); stroke-width: 2; stroke-linecap: round; }
+.knob-def { fill: var(--faint); }
+.knob:hover .knob-cap, .knob.active .knob-cap { stroke: var(--dim); }
+.knob.active .knob-pointer { stroke: var(--knob-c, var(--accent)); }
+.knob-label { max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); line-height: 14px; color: var(--dim); }
+.knob:hover .knob-label, .knob.active .knob-label { color: var(--fg); }
+.knob.disabled { opacity: .4; cursor: default; }
+
+/* ---------- fader ---------- */
+.fader { --cap: 22px; display: grid; touch-action: none; user-select: none; -webkit-user-select: none; border-radius: var(--r-sm); outline-offset: 2px; }
+.fader-track { position: relative; min-width: 0; min-height: 0; }
+.fader-slot { position: absolute; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+.fader-fill { position: absolute; background: color-mix(in srgb, var(--fader-c, var(--accent)) 55%, transparent); }
+.fader-cap {
+  position: absolute; z-index: 1; border-radius: var(--r-sm);
+  border: 1px solid #5a606a;
+  background:
+    linear-gradient(var(--fader-c, var(--fg)), var(--fader-c, var(--fg))) center / 100% 2px no-repeat,
+    repeating-linear-gradient(transparent 0 3px, rgba(0, 0, 0, .22) 3px 4px),
+    linear-gradient(#3b4047, #2a2d33);
+  box-shadow: 0 2px 5px rgba(6, 6, 8, .5);
+  cursor: grab;
+}
+.fader.active .fader-cap { cursor: grabbing; border-color: var(--dim); }
+.fader-mark { position: absolute; pointer-events: none; }
+.fader-mark span { position: absolute; font-size: 9px; line-height: 10px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.fader-mark.unity span { color: var(--dim); }
+.fader-readout { font-size: var(--fs-xs); line-height: 16px; color: var(--dim); text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fader.hot .fader-readout { color: var(--accent); }
+.fader:hover .fader-readout, .fader.active .fader-readout { color: var(--fg); }
+.fader.disabled { opacity: .4; pointer-events: none; }
+
+/* vertical: scale on the left, slot and cap on the right half */
+.fader.v { grid-template-rows: 1fr auto; gap: 4px; width: 46px; height: var(--fader-len, 160px); }
+.fader.v .fader-track { cursor: ns-resize; }
+.fader.v .fader-slot { left: calc(50% + 6px); width: 6px; margin-left: -3px; top: calc(var(--cap) / 2); bottom: calc(var(--cap) / 2); }
+.fader.v .fader-fill { left: 0; right: 0; bottom: 0; height: calc(var(--pos) * 100%); }
+.fader.v .fader-cap { left: calc(50% + 6px); width: 24px; margin-left: -12px; height: var(--cap); bottom: calc(var(--pos) * (100% - var(--cap))); }
+.fader.v .fader-mark { left: calc(50% - 1px); width: 4px; height: 1px; background: var(--faint); bottom: calc(var(--p) * (100% - var(--cap)) + var(--cap) / 2); }
+.fader.v .fader-mark.unity { background: var(--dim); width: 5px; margin-left: -1px; }
+.fader.v .fader-mark span { right: calc(100% + 3px); top: -5px; }
+
+/* horizontal: a slim slot, small cap, readout on the right */
+.fader.h { --cap: 12px; grid-template-columns: 1fr 34px; align-items: center; gap: 6px; width: 100%; height: 20px; }
+.fader.h .fader-track { height: 100%; cursor: ew-resize; }
+.fader.h .fader-slot { top: 50%; height: 4px; margin-top: -2px; left: calc(var(--cap) / 2); right: calc(var(--cap) / 2); border-radius: 2px; }
+.fader.h .fader-fill { top: 0; bottom: 0; left: 0; width: calc(var(--pos) * 100%); }
+.fader.h .fader-cap {
+  top: 50%; height: 16px; margin-top: -8px; width: var(--cap); left: calc(var(--pos) * (100% - var(--cap)));
+  background:
+    linear-gradient(var(--fader-c, var(--fg)), var(--fader-c, var(--fg))) center / 2px 100% no-repeat,
+    linear-gradient(#3b4047, #2a2d33);
+}
+.fader.h .fader-mark { top: calc(50% + 4px); width: 1px; height: 3px; background: var(--faint); left: calc(var(--p) * (100% - var(--cap)) + var(--cap) / 2); }
+.fader.h .fader-mark:not(.unity) { display: none; }
+.fader.h .fader-readout { text-align: right; }
+
+/* ---------- meter ---------- */
+.meter-el { position: relative; flex: none; cursor: pointer; }
+.meter-el canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.meter-el.v { width: 5px; height: 100%; }
+.meter-el.v.stereo { width: 9px; }
+.meter-el.h { height: 5px; width: 100%; }
+.meter-el.h.stereo { height: 9px; }
+
+/* ---------- number field ---------- */
+input.numfield {
+  width: 64px; text-align: center; cursor: ew-resize; user-select: none; -webkit-user-select: none;
+  font-variant-numeric: tabular-nums; touch-action: none;
+}
+input.numfield:read-only { caret-color: transparent; }
+input.numfield:not(:read-only) { cursor: text; user-select: text; -webkit-user-select: text; }
+input.numfield.scrubbing { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- toggle ---------- */
+.toggle { color: var(--dim); }
+.toggle:hover:not(:disabled) { color: var(--fg); }
+.toggle.on, .toggle.on:hover:not(:disabled) { color: var(--on-accent); }
+.toggle.on[data-tone=rec], .toggle.on[data-tone=rec]:hover:not(:disabled) { color: var(--on-rec); }

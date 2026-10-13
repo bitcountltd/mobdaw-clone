@@ -52,8 +52,8 @@ body {
 :where(button:active:not(:disabled)) { background: var(--line-strong); }
 :where(button.on) { background: var(--accent); color: var(--on-accent); }
 :where(button.on:hover:not(:disabled)) { background: color-mix(in srgb, var(--accent) 88%, white); }
-:where(button.on.rec, button.on[data-tone=rec]) { background: var(--rec); color: var(--on-rec); }
-:where(button.on.rec:hover, button.on[data-tone=rec]:hover) { background: color-mix(in srgb, var(--rec) 88%, white); }
+:where(button.on[data-tone=rec]) { background: var(--rec); color: var(--on-rec); }
+:where(button.on[data-tone=rec]:hover) { background: color-mix(in srgb, var(--rec) 88%, white); }
 :disabled { opacity: .4; cursor: default; }
 :where(button) svg { pointer-events: none; }
 
@@ -71,7 +71,8 @@ body {
 /* A square icon button: 28px, dim icon, brightens on hover. */
 .icon-btn { width: 28px; height: 28px; padding: 0; color: var(--dim); }
 .icon-btn:hover:not(:disabled) { color: var(--fg); }
-.icon-btn.on { color: var(--on-accent); }
+.icon-btn.on, .icon-btn.on:hover:not(:disabled) { color: var(--on-accent); }
+.icon-btn.on[data-tone=rec], .icon-btn.on[data-tone=rec]:hover:not(:disabled) { color: var(--on-rec); }
 .icon-btn.sm { width: 22px; height: 22px; }
 .icon-btn.lg { width: 34px; height: 34px; }
 
@@ -193,7 +194,7 @@ dialog.invite-dialog p { margin: 0 0 8px; }
 .seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: calc(var(--r-sm) + 2px); background: var(--bg); }
 .seg > button { padding: 3px 10px; font-size: var(--fs-sm); color: var(--dim); }
 .seg > button:hover:not(:disabled) { color: var(--fg); }
-.seg > button.on { color: var(--on-accent); }
+.seg > button.on, .seg > button.on:hover:not(:disabled) { color: var(--on-accent); }
 .seg > button svg { margin: 0 -2px; }
 
 /* ---------- chips ---------- */
