@@ -10,7 +10,7 @@
 // Dispatch order: higher `priority` first, then the most recently registered. The first binding whose keys and modifiers
 // match and whose `when` allows it handles the event (and prevents the default). A held key's repeats run it again only
 // when `repeat` is set, and are swallowed otherwise.
-import { clipsMap, deleteClip, deleteNote, deletePad, getLoop, getTempo, setLoop, splitClip, tracksMap } from '@mobdaw/shared'
+import { clipsMap, deleteClip, deleteNote, deletePad, splitClip, tracksMap } from '@mobdaw/shared'
 import { ACTIONS } from '../audio/pedal'
 import type { Studio } from './studio'
 
@@ -153,15 +153,7 @@ export function mountKeys(st: Studio) {
     // transport
     { key: 'space', run: () => st.toggle(), label: 'play / stop', group: 'Transport', readOnly: true },
     { key: 'space', mods: { shift: true }, run: () => void st.toggleRecord(), label: 'record', group: 'Transport' },
-    { key: ['home', 'enter'], run: () => st.rewind(), label: 'back to the start', group: 'Transport', readOnly: true },
-    { key: 'l', run: () => {
-      const l = getLoop(doc)
-      if (l) return setLoop(doc, { ...l, on: !l.on })
-      // No loop region yet: the four bars from the playhead's bar.
-      const t = getTempo(doc), bar = (t.beatsPerBar * 60 / t.bpm) * st.rate
-      const start = Math.floor(st.position() / bar) * bar
-      setLoop(doc, { start, end: start + 4 * bar, on: true })
-    }, label: 'loop on / off', group: 'Transport' },
+    { key: 'enter', run: () => st.rewind(), label: 'back to the start', group: 'Transport', readOnly: true },
     { key: ['1', '2', '3', '4'], when: () => st.pedal.on, run: (e) => st.pedal.press(ACTIONS[Number(e.key) - 1], e.timeStamp), label: 'loop pedal actions (pedal mode)', group: 'Transport', display: '1 – 4' },
     // editing
     { key: 'z', mods: { mod: true }, run: () => undo.undo(), label: 'undo', group: 'Editing', repeat: true },
@@ -189,7 +181,6 @@ export function mountKeys(st: Studio) {
     // view
     { key: 'b', run: () => st.setUi({ browserOpen: !st.ui.browserOpen }), label: 'browser', group: 'View', readOnly: true },
     { key: 'd', run: () => st.setUi({ dock: { ...st.ui.dock, open: !st.ui.dock.open } }), label: 'dock', group: 'View', readOnly: true },
-    { key: 'tab', run: () => st.setUi({ view: st.ui.view === 'mix' ? 'arrange' : 'mix' }), label: 'arrange / mix', group: 'View', readOnly: true },
     { key: ['=', '+'], run: () => zoom(1.5), label: 'zoom in', group: 'View', repeat: true, readOnly: true },
     { key: '-', run: () => zoom(1 / 1.5), label: 'zoom out', group: 'View', repeat: true, readOnly: true },
     { key: 'f', run: () => st.setUi({ follow: !st.ui.follow }), label: 'follow the playhead', group: 'View', readOnly: true },

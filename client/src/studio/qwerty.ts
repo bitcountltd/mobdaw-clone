@@ -4,7 +4,7 @@
 // Both play the target MIDI track (see MidiRec.target) and are recorded during a MIDI take.
 import { actionFor, getBindings, getMidiInput, midiGranted, midiOpen, midiSupported, onMidiDevices, onNote, openMidi } from '../midi'
 import { noteName } from '../ui/noteName'
-import { registerKeys } from './keys'
+import { IS_MAC, isTyping, pick, registerKeys, type KeyBinding } from './keys'
 import type { Studio } from './studio'
 
 /** Physical key -> semitones above the keyboard's lowest C. */
@@ -102,12 +102,25 @@ export function mountQwerty(st: Studio) {
   instances.set(st, q)
   if (import.meta.env.DEV) (globalThis as { __mobdawStudio?: Studio }).__mobdawStudio = st // (for test scripts)
   const playing = () => q.on
-  const off = registerKeys(st, [
+  const bindings: KeyBinding[] = [
     { key: 'k', mods: { shift: true }, run: () => q.toggle(), label: 'computer keyboard on / off', group: 'Keyboard instrument', priority: 10, readOnly: true },
     { code: Object.keys(QWERTY_KEYS), when: playing, run: (e) => q.press(e.code, e.timeStamp || performance.now()), label: 'play: white keys on the A row, black above', group: 'Keyboard instrument', display: "A – '", priority: 10, readOnly: true },
     { code: ['KeyZ', 'KeyX'], when: playing, run: (e) => q.shiftOctave(e.code === 'KeyX' ? 1 : -1), label: 'octave down / up', group: 'Keyboard instrument', display: 'Z / X', priority: 10, readOnly: true },
     { code: ['KeyC', 'KeyV'], when: playing, run: (e) => q.shiftVelocity(e.code === 'KeyV' ? 1 : -1), label: 'velocity down / up', group: 'Keyboard instrument', display: 'C / V', priority: 10, readOnly: true },
-  ])
+  ]
+  const off = registerKeys(st, bindings)
+  // While it plays, the instrument's keys go to it before anything else on the page sees them (other views may have
+  // their own key listeners), except in text fields and dialogs.
+  const mine = bindings.slice(1).map((b, seq) => ({ ...b, seq }))
+  const early = (e: KeyboardEvent) => {
+    if (!q.on || e.defaultPrevented || e.isComposing || isTyping(e.target) || (e.target as Element | null)?.closest?.('dialog')) return
+    const b = pick(mine, e, IS_MAC, true)
+    if (!b) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    if (!e.repeat) b.run(e)
+  }
+  addEventListener('keydown', early, true)
   const up = (e: KeyboardEvent) => q.release(e.code, e.timeStamp || performance.now())
   const blur = () => q.releaseAll()
   addEventListener('keyup', up)
@@ -131,6 +144,7 @@ export function mountQwerty(st: Studio) {
       offNote()
       offDevices()
       removeEventListener('keyup', up)
+      removeEventListener('keydown', early, true)
       removeEventListener('blur', blur)
       instances.delete(st)
     },
