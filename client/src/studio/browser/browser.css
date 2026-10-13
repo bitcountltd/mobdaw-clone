@@ -1,0 +1,73 @@
+/* The browser panel (browser.ts), inside .studio-browser */
+.studio-browser:has(.browser) { overflow: hidden; display: flex; flex-direction: column; }
+.studio .browser-mount:has(.browser) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.browser { flex: 1; min-height: 0; display: flex; flex-direction: column; font-size: var(--fs); }
+
+/* header: search and the keyboard toggle */
+.browser-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 10px; border-bottom: 1px solid var(--line); }
+.browser-find {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px;
+  background: var(--raise); border: 1px solid transparent; border-radius: var(--r-sm); color: var(--dim); cursor: text;
+}
+.browser-find:focus-within { border-color: var(--line-strong); color: var(--fg); }
+.browser-find .icon { flex: none; }
+.browser .browser-search {
+  flex: 1; min-width: 0; height: 26px; padding: 0; border: 0; outline: 0; background: none; color: var(--fg);
+  font: inherit; font-size: var(--fs-sm);
+}
+.browser-search::placeholder { color: var(--faint); }
+.browser-search::-webkit-search-cancel-button { filter: grayscale(1) brightness(1.6); opacity: .5; }
+.browser .browser-kb { flex: none; gap: 3px; width: auto; min-width: 28px; height: 28px; padding: 0 6px; }
+.browser-kb .kb-range { font-size: var(--fs-xs); font-weight: 600; }
+.browser-kb .kb-range:empty { display: none; }
+
+/* the list */
+.browser-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 0 12px; scrollbar-width: thin; }
+.bsec { padding-top: 2px; }
+.bsec-head {
+  display: flex; align-items: center; gap: 4px; width: 100%; height: 28px; padding: 0 10px 0 6px;
+  border: 0; background: none; color: var(--dim); font: inherit; font-size: var(--fs-sm); font-weight: 600; text-align: left; cursor: pointer;
+}
+.bsec-head { position: sticky; top: 0; z-index: 1; background: var(--panel); }
+.bsec-head:hover { color: var(--fg); }
+.bsec-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bsec-chev { color: var(--faint); transition: transform var(--t-fast) var(--ease); }
+.bsec.folded .bsec-chev { transform: rotate(-90deg); }
+.bsec-count { margin-left: auto; font-size: var(--fs-xs); font-weight: 500; color: var(--faint); }
+.bsec.folded .bsec-body { display: none; }
+.browser.searching .bsec.folded .bsec-body { display: block; }
+.browser.searching .bsec-count { visibility: hidden; }
+.bsub { padding: 6px 12px 2px 28px; font-size: var(--fs-xs); color: var(--faint); }
+.bsec-empty, .browser-none { margin: 0; padding: 4px 12px 8px 28px; font-size: var(--fs-sm); color: var(--faint); line-height: 1.4; }
+
+.brow {
+  position: relative; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px 0 26px;
+  color: var(--fg); cursor: grab; user-select: none; outline: 0;
+}
+.brow:hover { background: var(--raise); }
+.brow:focus { background: var(--raise); }
+.browser .brow:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.brow:active { cursor: grabbing; }
+.brow.dragging { opacity: .5; }
+.brow.missing { color: var(--faint); }
+.brow-icon { flex: none; }
+.brow-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brow-meta { flex: none; font-size: var(--fs-xs); color: var(--dim); }
+.brow-wave { flex: none; width: 40px; height: 16px; opacity: .85; }
+.brow-play {
+  flex: none; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; margin-right: -2px;
+  border: 0; border-radius: 50%; background: var(--line); color: var(--fg); cursor: pointer; opacity: 0;
+}
+.brow:hover .brow-play, .brow:focus .brow-play { opacity: 1; }
+.brow-play:hover { background: var(--line-strong); }
+.brow-play.on { opacity: 1; background: var(--accent); color: var(--on-accent); }
+
+/* footer */
+.browser-foot { flex: none; display: flex; flex-direction: column; padding: 6px; border-top: 1px solid var(--line); }
+.browser-act {
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px; height: 28px; padding: 0 8px; border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--dim); font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer;
+}
+.browser-act:hover:not(:disabled) { background: var(--line); color: var(--fg); }
+.browser-act:disabled { color: var(--faint); cursor: default; }
+.browser-act[hidden] { display: none; }

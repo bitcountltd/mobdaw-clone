@@ -1,7 +1,7 @@
 // Drag-and-drop between studio views (browser → lanes, track headers, the dock's rack, the mixer).
 // The payload travels as JSON under DND_MIME. During dragover only the type list is readable, so use `hasPayload`.
-import { DEVICES, MASTER_TRACK, addAudioClip, addDevice, getSamples, getTracks, type TrackKind } from '@mobdaw/shared'
-import { addDrumKit, addEffectPreset, addInstrument, drumKit, effectPreset, instrumentPreset } from '../content/presets'
+import { DEVICES, MASTER_TRACK, addAudioClip, addDevice, getDevices, getSamples, getTracks, isDrum, type TrackKind } from '@mobdaw/shared'
+import { addDrumKit, addEffectPreset, addInstrument, applyInstrumentPreset, drumKit, effectPreset, instrumentPreset } from '../content/presets'
 import type { Studio } from './studio'
 
 export const DND_MIME = 'application/x-mobdaw'
@@ -50,7 +50,7 @@ export function canDrop(st: Studio, p: DropPayload, trackId: string | null | und
 
 /**
  * Apply a payload. A target track of the wrong kind (or none) gets a new track of the right kind, named after what was
- * dropped. Returns the track id it landed on, or null. One undo step.
+ * dropped. An instrument preset on a track that already plays that instrument changes its sound. Returns the track id it landed on, or null. One undo step.
  */
 export function applyDrop(st: Studio, p: DropPayload, target: DropTarget = {}): string | null {
   if (st.readOnly) return null
@@ -65,7 +65,11 @@ export function applyDrop(st: Studio, p: DropPayload, target: DropTarget = {}): 
       case 'instrument': {
         const pre = instrumentPreset(p.id)
         if (!pre) return
-        addInstrument(doc, make(pre.name.toLowerCase()), pre)
+        // A track that already has this kind of instrument (over the full key range) changes its sound rather than
+        // stacking a second one.
+        const have = trackId ? getDevices(doc).find((d) => d.trackId === trackId && d.type === pre.type && !isDrum(d)) : undefined
+        if (have) applyInstrumentPreset(doc, have.id, pre)
+        else addInstrument(doc, make(pre.name.toLowerCase()), pre)
         break
       }
       case 'kit': {

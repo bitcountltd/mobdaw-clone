@@ -1,5 +1,6 @@
-// Web MIDI for the loop pedal: pick an input, learn what its switches send, and report each press once. Thin on purpose;
-// what a press means is in audio/pedal.ts. Chromium and Firefox have Web MIDI; Safari does not.
+// Web MIDI: the loop pedal (pick an input, learn what its switches send, report each press once; what a press means is
+// in audio/pedal.ts) and notes from any keyboard (`onNote`, played live by the studio). Thin on purpose.
+// Chromium and Firefox have Web MIDI; Safari does not.
 import { ACTIONS, type Action } from './audio/pedal'
 
 /** What one foot switch sends when pressed: a note-on (velocity > 0) or a controller change (value > 0). */
@@ -14,6 +15,16 @@ export function parseTrigger(data: ArrayLike<number>): Trigger | null {
   const type = status & 0xf0, channel = status & 0x0f
   if (type === 0x90 && value > 0) return { kind: 'note', channel, number }
   if (type === 0xb0 && value > 0) return { kind: 'cc', channel, number }
+  return null
+}
+
+/** A key on a keyboard: note-on (velocity 1..127) or note-off (a note-on with velocity 0 is one too). Null for anything else. */
+export type NoteMsg = { on: boolean; channel: number; pitch: number; velocity: number }
+export function parseNote(data: ArrayLike<number>): NoteMsg | null {
+  const [status = 0, pitch = 0, velocity = 0] = Array.from(data)
+  const type = status & 0xf0, channel = status & 0x0f
+  if (type === 0x90 && velocity > 0) return { on: true, channel, pitch, velocity }
+  if (type === 0x80 || type === 0x90) return { on: false, channel, pitch, velocity: 0 }
   return null
 }
 
@@ -69,6 +80,7 @@ type Hit = { input: string; trigger: Trigger; at: number }
 
 let access: Promise<MIDIAccess> | null = null
 const subs = new Set<(h: Hit) => void>()
+const noteSubs = new Set<(input: string, n: NoteMsg, at: number) => void>()
 const changed = new Set<() => void>()
 let learner: ((h: Hit) => void) | null = null
 const accept = debouncer()
@@ -80,6 +92,8 @@ function attach(a: MIDIAccess) {
       const trigger = parseTrigger(data)
       // (a stamp of 0 or from another clock would defeat the debounce: fall back to now)
       const at = e.timeStamp > 0 ? e.timeStamp : performance.now()
+      const note = noteSubs.size && !learner ? parseNote(data) : null
+      if (note) noteSubs.forEach((f) => f(input.id, note, at)) // (not debounced: a fast trill is music)
       if (debug()) console.log(`midi ${input.name} [${[...data].map((b) => b.toString(16).padStart(2, '0')).join(' ')}]`, trigger ? describeTrigger(trigger) : 'ignored', `t=${at.toFixed(1)}`)
       if (!trigger || !accept(trigger, at)) return
       const hit = { input: input.id, trigger, at }
@@ -100,6 +114,25 @@ export function openMidi(): Promise<MIDIAccess> {
     access = null
     throw new Error(e.name === 'SecurityError' || e.name === 'NotAllowedError' ? 'MIDI access was denied' : `MIDI: ${e.message}`)
   }))
+}
+
+/** Whether MIDI access was already granted (so opening it shows no prompt). */
+export async function midiGranted(): Promise<boolean> {
+  if (!midiSupported()) return false
+  if (access) return true
+  try {
+    return (await navigator.permissions.query({ name: 'midi' as PermissionName })).state === 'granted'
+  } catch {
+    return false
+  }
+}
+/** Whether MIDI access is open in this page. */
+export const midiOpen = () => !!access
+
+/** Call `f(inputId, note, timeStamp)` for each note-on and note-off from any input (performance.now clock, ms). Returns the unsubscribe function. */
+export function onNote(f: (input: string, n: NoteMsg, at: number) => void) {
+  noteSubs.add(f)
+  return () => void noteSubs.delete(f)
 }
 
 export async function listMidiInputs(): Promise<MidiInputInfo[]> {
