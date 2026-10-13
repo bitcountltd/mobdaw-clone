@@ -200,7 +200,7 @@ function unitHead(dev: Device, deps: CardDeps, el: HTMLElement) {
   let current = dev
   power.onclick = () => deps.bypass(dev.id, !current.bypass)
   remove.onclick = () => deps.remove(dev.id)
-  collapse.onclick = () => deps.setCollapsed(dev.id, !deps.collapsed(dev.id))
+  collapse.onclick = (e) => { e.stopPropagation(); deps.setCollapsed(dev.id, !deps.collapsed(dev.id)) }
   const menu = (at: [number, number] | undefined, anchor: HTMLElement) => {
     if (deps.readOnly) return
     const items: MenuItem[] = [

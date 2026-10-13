@@ -186,7 +186,8 @@ export function mountClipEditor(st: Studio) {
     const sub = clip.kind === 'audio'
       ? getSamples(doc)[clip.sourceHash]?.name ?? 'audio clip'
       : clip.view === 'drums' ? 'drum pattern' : 'midi clip'
-    return { name: track?.name ?? 'clip', sub, color: colorOf(clip.trackId) }
+    const name = track?.name ?? 'clip'
+    return { name, sub: sub === name ? 'audio clip' : sub, color: colorOf(clip.trackId) }
   }
 
   // The piano roll's keys: while the pointer is over the clip tab or it has the focus, and a piano roll is showing.
@@ -214,8 +215,17 @@ export function mountClipEditor(st: Studio) {
     { key: 'escape', when: sel, run: () => ne.commands.clearSelection(), label: 'clear the note selection', group: G, priority: 10, readOnly: true },
   ])
 
+  // the editors measure themselves (fit, centring on the notes): draw again when the dock's size settles
+  let lastSize = ''
+  const ro = new ResizeObserver(() => {
+    const size = `${el.clientWidth}x${el.clientHeight}`
+    if (size !== lastSize && el.clientHeight > 40) (lastSize = size), draw()
+  })
+  ro.observe(el)
+
   const offs = [
     offKeys,
+    () => ro.disconnect(),
     st.on('doc', draw),
     st.on('ui', (p) => { if ('editing' in p || 'note' in p || 'dock' in p || 'grid' in p) draw() }),
     st.on('tick', playhead),

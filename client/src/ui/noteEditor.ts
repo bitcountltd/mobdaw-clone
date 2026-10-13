@@ -46,7 +46,8 @@ export function noteEditor(deps: NoteEditorDeps) {
   const { doc, undo, readOnly, noteLive } = deps
   let clip: MidiClip | null = null
   let notes = new Map<string, Note>()
-  let centered = false
+  let centered = 0 // the height the view was last centred at
+  let touched = false // the user has scrolled the pitches: leave them be
   let pxBeat = 48
   let row = 12 // px per pitch: ctrl/cmd + wheel zooms it
   let extent = 0
@@ -97,6 +98,8 @@ export function noteEditor(deps: NoteEditorDeps) {
   el.style.setProperty('--vel-h', `${VEL_H}px`)
 
   scroll.addEventListener('scroll', () => (velScroll.scrollLeft = scroll.scrollLeft), { passive: true })
+  scroll.addEventListener('wheel', () => (touched = true), { passive: true })
+  scroll.addEventListener('pointerdown', () => (touched = true))
   scroll.addEventListener('wheel', (e) => { // pinch (ctrl + wheel): zoom the pitch axis around the pointer
     if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return
     e.preventDefault()
@@ -396,10 +399,11 @@ export function noteEditor(deps: NoteEditorDeps) {
     }
     paintSel()
     hint.hidden = list.length > 0
-    if (!centered && el.isConnected && scroll.clientHeight) { // centre on the notes (C4 when empty)
+    // centre on the notes (C4 when empty), again while the dock settles, until the user scrolls
+    if (!touched && el.isConnected && scroll.clientHeight > 40 && centered !== scroll.clientHeight) {
       const mid = list.length ? (Math.min(...list.map((n) => n.pitch)) + Math.max(...list.map((n) => n.pitch))) / 2 : 60
       scroll.scrollTop = (PITCH_MAX - mid) * row + row / 2 - scroll.clientHeight / 2
-      centered = true
+      centered = scroll.clientHeight
     }
   }
   /** The transport's place in the clip (ticks from its start), or null when it is elsewhere. */
@@ -409,6 +413,6 @@ export function noteEditor(deps: NoteEditorDeps) {
     if (on) playhead.style.transform = `translateX(${px(tick!)}px)`
   }
   /** Call when another clip opens: the next update re-centres on its notes. */
-  const reset = () => { centered = false; sel.clear(); lastLen = 0 }
+  const reset = () => { centered = 0; touched = false; sel.clear(); lastLen = 0 }
   return { el, scroller: scroll, keysWidth: KEYS_W, update, reset, setPlayhead, commands }
 }

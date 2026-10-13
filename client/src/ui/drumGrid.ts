@@ -47,22 +47,22 @@ export function drumGrid(deps: DrumGridDeps) {
   const px = (ticks: number) => (ticks / clip!.ppq) * pxBeat
 
   /** The pattern step under the pointer in a row (a repeat's cell is its pattern's), or null past the end. */
-  function stepAt(e: { clientX: number }, row: HTMLElement): number | null {
+  function stepAt(e: { clientX: number }): number | null {
     const c = clip!
     const pattern = patternTicks(c)
-    const at = Math.floor((((e.clientX - row.getBoundingClientRect().left) / pxBeat) * c.ppq) / stepT) * stepT
+    const at = Math.floor((((e.clientX - cells.getBoundingClientRect().left) / pxBeat) * c.ppq) / stepT) * stepT // (the rows are rebuilt as hits change)
     if (at < 0 || at >= extent) return null
     const tick = at % pattern
     return tick + stepT > pattern + 1e-6 ? null : tick
   }
   const hitsAt = (pitch: number, tick: number) => notes.filter((n) => n.pitch === pitch && n.tick >= tick && n.tick < tick + stepT)
 
-  function press(e: PointerEvent, row: HTMLElement, pitch: number) {
+  function press(e: PointerEvent, pitch: number) {
     e.stopPropagation()
     el.focus({ preventScroll: true })
     if (readOnly || e.button !== 0 || !clip) return
     const c = clip
-    const tick = stepAt(e, row)
+    const tick = stepAt(e)
     if (tick == null) return
     e.preventDefault()
     const here = hitsAt(pitch, tick)
@@ -100,7 +100,7 @@ export function drumGrid(deps: DrumGridDeps) {
     setTimeout(() => deps.noteLive?.(c.trackId, pitch, 1, false), 120)
     dragPointer(e, {
       onDrag: (m) => {
-        const t = stepAt(m, row)
+        const t = stepAt(m)
         if (t == null || added.has(t)) return
         added.add(t)
         if (!hitsAt(pitch, t).length) addNote(doc, { clipId: c.id, tick: t, durTicks: stepT, pitch, velocity: 1 })
@@ -154,7 +154,7 @@ export function drumGrid(deps: DrumGridDeps) {
       pad.onpointerdown = (e) => audition(e, key, pad)
       nameRows.push(pad)
       const row = h('div', { className: 'dg-row' })
-      row.onpointerdown = (e) => press(e, row, key)
+      row.onpointerdown = (e) => press(e, key)
       const passes = looping ? Math.ceil(extent / pattern) : 1
       for (const n of notes) {
         if (n.pitch !== key || n.tick < 0 || n.tick >= pattern) continue
