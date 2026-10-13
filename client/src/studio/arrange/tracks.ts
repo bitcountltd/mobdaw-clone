@@ -109,7 +109,10 @@ export function mountTrackHeaders(st: Studio) {
     const t = getTracks(doc).find((x) => x.id === id)
     const n = getClips(doc).filter((c) => c.trackId === id).length
     const ok = n === 0 || await confirmModal({ title: `Delete ${t?.name ?? 'track'}?`, text: `Its ${n} clip${n > 1 ? 's' : ''} and devices go with it. You can undo this.`, action: 'delete track', danger: true })
-    if (ok) deleteTrack(doc, id)
+    if (!ok) return
+    st.undo.stopCapturing()
+    deleteTrack(doc, id)
+    st.undo.stopCapturing()
   }
 
   /** The track menu: rename, colour, duplicate, delete. */
@@ -117,7 +120,7 @@ export function mountTrackHeaders(st: Studio) {
     const close = popover(anchor, [
       { label: 'rename', icon: 'edit', run: () => rename(id) },
       'sep',
-      { label: 'duplicate track', icon: 'duplicate', run: () => { const nid = duplicateTrack(doc, id); if (nid) st.focus(nid) } },
+      { label: 'duplicate track', icon: 'duplicate', run: () => { st.undo.stopCapturing(); const nid = duplicateTrack(doc, id); st.undo.stopCapturing(); if (nid) st.focus(nid) } },
       { label: 'delete track', icon: 'trash', danger: true, run: () => void del(id) },
     ], at)
     // the colour swatches go between rename and the rest
@@ -129,7 +132,7 @@ export function mountTrackHeaders(st: Studio) {
     const sw = h('div', { className: 'th-swatches', role: 'group', 'aria-label': 'track colour' },
       ...TRACK_COLORS.map((c, i) => {
         const b = h('button', { type: 'button', className: `th-swatch${i === now ? ' on' : ''}`, title: `colour ${i + 1}`, 'aria-pressed': String(i === now),
-          onclick: () => { close(); setTrackColor(doc, id, i) } })
+          onclick: () => { close(); st.undo.stopCapturing(); setTrackColor(doc, id, i); st.undo.stopCapturing() } })
         b.style.setProperty('--c', c)
         return b
       }))
@@ -251,7 +254,7 @@ export function mountTrackHeaders(st: Studio) {
       hd.bound = true
       dragToReorder(hd.grip, lane, {
         start: () => lane.classList.add('reordering'),
-        drop: (before) => moveTrack(t.id, before),
+        drop: (before) => { st.undo.stopCapturing(); moveTrack(t.id, before); st.undo.stopCapturing() },
         end: () => lane.classList.remove('reordering'),
       }, { attr: 'lane', axis: 'y' })
     },

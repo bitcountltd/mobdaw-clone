@@ -109,6 +109,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
       else if (kind === 'drums') addDrumKit(doc, (id = st.addTrack('midi', 'drums')), DRUM_KITS[0])
       else id = st.addTrack(kind)
     })
+    st.undo.stopCapturing()
     st.focus(id)
     return id
   }
@@ -766,7 +767,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
       masterBody.dataset.sig = chipSig
       masterBody.replaceChildren(...(fx.length
         ? fx.map((d) => h('span', { className: `chip master-chip${d.bypass ? ' off' : ''}`, title: d.bypass ? 'bypassed' : 'click to show the master effects' }, icon('effect', 12), d.name ?? DEVICES[d.type]?.name ?? ''))
-        : [h('span', { className: 'dim' }, readOnly ? 'no effects on the mix' : 'no effects on the mix · click to add some, or drop one here')]))
+        : [h('span', { className: 'dim' }, readOnly ? 'no effects on the mix' : 'no effects on the mix: click to add one, or drop one here')]))
     }
 
     // lanes
