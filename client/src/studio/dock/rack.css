@@ -6,8 +6,8 @@
 .studio .rack-tools[hidden], .studio .rack-tools > [hidden], .studio .rack-chain[hidden], .studio .rack-sec[hidden] { display: none; }
 .studio .rack-chain { display: flex; flex: 1; min-height: 0; overflow-x: auto; overflow-y: auto; padding: 10px 12px 12px; gap: 22px; align-items: flex-start; overscroll-behavior-x: contain; }
 .studio .rack-sec { position: relative; display: flex; flex: none; gap: 8px; align-items: stretch; }
-.studio .rack-sec + .rack-sec::before { content: ''; position: absolute; left: -17px; top: 19px; width: 12px; height: 1px; background: var(--line-strong); }
-.studio .rack-sec + .rack-sec::after { content: ''; position: absolute; left: -8px; top: 15px; border: 4px solid transparent; border-left-color: var(--line-strong); }
+.studio .rack-sec:not([hidden]) + .rack-sec::before { content: ''; position: absolute; left: -17px; top: 19px; width: 12px; height: 1px; background: var(--line-strong); }
+.studio .rack-sec:not([hidden]) + .rack-sec::after { content: ''; position: absolute; left: -8px; top: 15px; border: 4px solid transparent; border-left-color: var(--line-strong); }
 .studio .rack-rail { flex: none; display: flex; align-items: center; justify-content: center; width: 18px; border-radius: 4px;
   background: repeating-linear-gradient(to bottom, transparent 0 10px, rgba(0, 0, 0, .18) 10px 11px), var(--panel); border: 1px solid var(--line); }
 .studio .rack-rail span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: var(--fs-xs); color: var(--dim); white-space: nowrap; }
