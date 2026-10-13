@@ -8,6 +8,20 @@ import type { Studio } from './studio'
 
 export type Take = { trackId: string; trackName: string; start: number; journal: ReturnType<typeof takeJournal> }
 
+export const NO_MIC = 'No microphone found. Plug one in, or choose one in project settings.'
+/** What to tell someone whose microphone couldn't be opened (never the raw DOMException). */
+export function micErrorText(err: unknown): string {
+  const name = (err as { name?: string } | null)?.name ?? ''
+  const msg = String((err as { message?: string } | null)?.message ?? err ?? '').toLowerCase()
+  if (name === 'NotAllowedError' || name === 'SecurityError' || /denied|not allowed|permission/.test(msg))
+    return 'Microphone access is blocked. Allow it for this site in the browser, then press record again.'
+  if (/cannot record|getusermedia/.test(msg)) return 'This browser cannot record audio. Try a recent Chrome, Edge, Firefox or Safari.'
+  if (/engine/.test(msg)) return 'The audio engine did not start. Reload the page and try again.'
+  if (name === 'NotReadableError' || /could not start|in use|not readable/.test(msg))
+    return 'The microphone is busy in another app. Close it there, or choose another one in project settings.'
+  return NO_MIC
+}
+
 export class RecordingCtl {
   /** The take being recorded. */
   take: Take | null = null
@@ -31,11 +45,18 @@ export class RecordingCtl {
     try {
       await pb.recorder.arm()
     } catch (err) {
-      return this.st.status(`record: ${(err as Error).message}`)
+      return this.failed(err)
     }
     this.st.status('')
     this.st.setUi({ armedTrack: id })
     this.st.emit('transport')
+  }
+
+  /** The microphone couldn't be opened: say so plainly (the record button shows it), and in the status bar. */
+  failed(err: unknown) {
+    const text = micErrorText(err)
+    this.st.status(text)
+    this.st.emit('recordError', text)
   }
 
   setMonitoring(on: boolean) {
@@ -51,7 +72,10 @@ export class RecordingCtl {
     if (want !== this.monitored) pb?.monitor((this.monitored = want))
   }
 
-  /** ●: play and capture from the playhead (onto a new track if none is armed); again to stop. */
+  /**
+   * ●: play and capture from the playhead, onto the armed audio track, else the focused audio track, else a new one
+   * (an armed MIDI track doesn't take audio: Studio.toggleRecord sends those to MidiRec); again to stop.
+   */
   async toggle() {
     const st = this.st
     const { doc, s } = st
@@ -59,19 +83,20 @@ export class RecordingCtl {
     if (!pb || st.readOnly || this.preparing) return
     if (st.pedal.active) return st.status('record: the loop pedal is recording')
     if (this.take) return st.stop()
-    let armed = st.ui.armedTrack
-    if (!armed || !tracksMap(doc).has(armed) || !pb.recorder.armed) {
+    const audio = (id: string | null) => (id && tracksMap(doc).get(id)?.get('kind') === 'audio' ? id : null)
+    let armed = audio(st.ui.armedTrack)
+    if (!armed || !pb.recorder.armed) {
       this.preparing = true
       try {
         await pb.recorder.arm()
       } catch (err) {
-        return st.status(`record: ${(err as Error).message}`)
+        return this.failed(err)
       } finally {
         this.preparing = false
       }
       if (st.destroyed || this.take) return
-      armed = st.ui.armedTrack
-      if (!armed || !tracksMap(doc).has(armed)) armed = st.addTrack()
+      armed = audio(st.ui.armedTrack) ?? audio(st.ui.focusTrack)
+      if (!armed) armed = st.addTrack()
       st.setUi({ armedTrack: armed })
     }
     const trackId = armed
@@ -132,7 +157,7 @@ export class RecordingCtl {
       this.st.status('')
     } catch (err) {
       this.st.setUi({ armedTrack: null })
-      this.st.status(`record: ${(err as Error).message}`)
+      this.failed(err)
     }
     this.st.emit('transport')
   }

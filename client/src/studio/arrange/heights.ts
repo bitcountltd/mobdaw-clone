@@ -5,6 +5,7 @@ import type { Studio } from '../studio'
 export const TRACK_H_MIN = 40
 export const TRACK_H_MAX = 240
 export const TRACK_H_DEFAULT = 64 // --track-h
+export const TRACK_H_NARROW = 56 // under 600px (ui.narrow)
 
 export type Heights = {
   get(trackId: string): number
@@ -27,7 +28,7 @@ export function heightsFor(st: Studio): Heights {
   const subs = new Set<() => void>()
   let saveTimer = 0
   s = {
-    get: (id) => clampHeight(map[id] ?? TRACK_H_DEFAULT),
+    get: (id) => clampHeight(map[id] ?? (st.ui.narrow ? TRACK_H_NARROW : TRACK_H_DEFAULT)),
     set(id, h) {
       const v = clampHeight(h)
       if (map[id] === v) return

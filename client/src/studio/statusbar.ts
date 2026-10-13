@@ -9,6 +9,10 @@ import './statusbar.css'
 
 /** A fresh status message wins over hover hints for this long (ms). */
 const FRESH = 4000
+/** Until the first real status message: what to try first. */
+export const SEED_HINT = 'Space plays · click a clip to edit it · drag a sound from the browser onto the tracks · ? for all shortcuts'
+/** The cpu reading turns red at this average load. */
+export const CPU_HOT = 0.7
 
 export function mountStatusbar(st: Studio, host: () => HTMLElement | null) {
   const { s, readOnly } = st
@@ -21,7 +25,7 @@ export function mountStatusbar(st: Studio, host: () => HTMLElement | null) {
   tooltip(zOut, 'zoom out', `${mod}-`)
   tooltip(zFit, 'zoom to fit the song', 'Z')
   tooltip(zIn, 'zoom in', `${mod}+`)
-  const cpu = h('span', { className: 'sb-cpu', 'data-hint': 'audio engine load: share of the real-time budget used by DSP (peak in the last half second)' }, 'cpu –')
+  const cpu = h('span', { className: 'sb-cpu', 'data-hint': 'audio engine load: average share of the real-time budget used by DSP (red from 70%)' }, 'cpu –')
   const rate = h('span', { className: 'sb-rate', 'data-hint': 'the project sample rate' })
   const where = readOnly
     ? h('span', { className: 'sb-where' }, 'view only')
@@ -32,14 +36,16 @@ export function mountStatusbar(st: Studio, host: () => HTMLElement | null) {
 
   let hint = ''
   let statusAt = 0
+  let seeded = !readOnly // the seed hint shows until the first status message
   const draw = () => {
     const fresh = st.statusText && performance.now() - statusAt < FRESH
-    const t = fresh ? st.statusText : hint || st.statusText
+    const t = fresh ? st.statusText : hint || st.statusText || (seeded ? SEED_HINT : '')
     if (text.textContent !== t) text.textContent = t
-    text.classList.toggle('is-hint', !fresh && !!hint)
+    text.classList.toggle('is-hint', !fresh && (!!hint || (seeded && !st.statusText)))
   }
   let freshTimer = 0
   const onStatus = () => {
+    if (st.statusText) seeded = false
     statusAt = performance.now()
     clearTimeout(freshTimer)
     freshTimer = window.setTimeout(draw, FRESH + 20)
@@ -65,7 +71,8 @@ export function mountStatusbar(st: Studio, host: () => HTMLElement | null) {
     st.on('cpu', (m) => {
       const t = `cpu ${Math.round(m.load * 100)}%`
       if (cpu.textContent !== t) cpu.textContent = t
-      cpu.classList.toggle('hot', m.peak >= 0.8)
+      cpu.classList.toggle('hot', m.load >= CPU_HOT) // (by the average shown, not a momentary peak)
+      cpu.title = `peak ${Math.round(m.peak * 100)}%`
     }),
     st.on('transport', drawRate),
     st.on('doc', drawRate),

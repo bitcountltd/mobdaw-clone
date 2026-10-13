@@ -4,7 +4,7 @@
 // Positions in the doc are integer samples; the zoom is the Studio's pixels per second.
 import {
   DEVICES, FINNWAVE, MASTER_TRACK, addDevice, addNextLooper, clipLength, clipsMap, deleteClip, deleteLooper, deletePad, getClips, getDevices, getLoopers, getNotes, getPads,
-  getSamples, getTracks, isForever, isLooping, padsMap, passLength, resolveTarget, trackColor, tracksMap, updateClip, updateLooper, updatePad,
+  getSamples, getTracks, isDrum, isForever, isLooping, padsMap, passLength, resolveTarget, splitClip, trackColor, tracksMap, updateClip, updateLooper, updatePad,
   type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget, type SampleMeta, type Track,
 } from '@mobdaw/shared'
 import { drawWave, peaksFor, storedPeaks } from '../../audio/peaks'
@@ -19,9 +19,10 @@ import { LOOP_COLORS, looperCard } from '../../ui/loopers'
 import { closedBy, deleteMenu, popover, type MenuItem } from '../../ui/popover'
 import { icon } from '../../theme/icons'
 import { transportControls, type TransportControls } from '../../ui/transport'
-import { clipboard, copyClips, moveGroup, pasteClips } from '../clipboard'
+import { clipboard, copyClips, cutClips, duplicateClips, moveGroup, pasteClips } from '../clipboard'
 import { canDrop, applyDrop, hasPayload, readDragPayload, type DropPayload } from '../drops'
 import { IS_MAC } from '../keys'
+import { kindOf } from './kinds'
 import type { Studio } from '../studio'
 import { registerArrangeKeys } from './edit'
 import { heightsFor } from './heights'
@@ -29,7 +30,13 @@ import { MIN_SEC, loopClip, passClip, setLoopOff, setLoopOn, sourceFrames, trimC
 import { drawTicks } from './ruler'
 import type { mountTrackHeaders } from './tracks'
 
-export const HEADER = 206 // the track header (200) plus the gutter to its left; keep in step with --head / --gutter in arrange.css
+/** The track header (200) plus the gutter to its left; keep in step with --head / --gutter in arrange.css. */
+export const HEADER_WIDE = 206
+/** Under 600px (`.studio.narrow`): a 128px header with only the name and m / s / arm (--head: 128px). */
+export const HEADER_NARROW = 134
+/** The header column's width now (a live binding: it follows `ui.narrow`, see setNarrowHeader). */
+export let HEADER = HEADER_WIDE
+export function setNarrowHeader(narrow: boolean) { HEADER = narrow ? HEADER_NARROW : HEADER_WIDE }
 const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
 const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
 const CLIP_HEAD = 14 // a clip's name strip; the waveform or notes fill the rest of its height (keep in step with arrange.css)
@@ -105,8 +112,8 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     st.undo.stopCapturing()
     let id = ''
     doc.transact(() => {
-      if (kind === 'instrument') addDevice(doc, (id = st.addTrack('midi', 'instrument')), FINNWAVE)
-      else if (kind === 'drums') addDrumKit(doc, (id = st.addTrack('midi', 'drums')), DRUM_KITS[0])
+      if (kind === 'instrument') addDevice(doc, (id = st.addTrack('midi', st.trackName('instrument'))), FINNWAVE)
+      else if (kind === 'drums') addDrumKit(doc, (id = st.addTrack('midi', st.trackName('drums'))), DRUM_KITS[0])
       else id = st.addTrack(kind)
     })
     st.undo.stopCapturing()
@@ -115,11 +122,11 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
   }
   const TRACK_KINDS = [
     { kind: 'audio', label: 'audio', icon: 'wave', title: 'an audio track, for recordings and samples' },
-    { kind: 'instrument', label: 'instrument', icon: 'piano', title: 'a MIDI track with a synth' },
-    { kind: 'drums', label: 'drums', icon: 'drum', title: `a MIDI track with a drum kit (${DRUM_KITS[0].name.toLowerCase()})` },
+    { kind: 'instrument', label: 'instrument', icon: 'piano', title: 'an instrument track with a synth' },
+    { kind: 'drums', label: 'drums', icon: 'drum', title: `a drum track with a kit (${DRUM_KITS[0].name})` },
     { kind: 'soundscape', label: 'soundscape', icon: 'loop', title: 'loopers over a source recording' },
   ] as const
-  const addLink = h('button', { type: 'button', className: 'add-track', title: 'add a track', onclick: () => {
+  const addLink = h('button', { type: 'button', className: 'add-track', title: 'add a track', 'data-hint': 'add a track: audio, instrument, drums or a soundscape', onclick: () => {
     popover(addLink, TRACK_KINDS.map((k) => ({ label: k.label, icon: k.icon, title: k.title, run: () => void newTrack(k.kind) })))
   } }, icon('plus', 14), 'add track')
   const overlay = h('div', { className: 'overlay' })
@@ -133,13 +140,29 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     readOnly ? null : h('div', { className: 'arr-empty-btns' }, ...TRACK_KINDS.map((k) =>
       h('button', { type: 'button', className: 'btn', title: k.title, onclick: () => void newTrack(k.kind) }, icon(k.icon), k.label))),
     readOnly ? null : h('p', { className: 'arr-empty-sub dim' }, 'Sounds, instruments and effects from the browser can be dragged in too.'))
+  // Tracks but no clips yet: a lighter version of the same, under the last track.
+  const recordAudio = async () => {
+    const id = newTrack('audio')
+    await st.rec.arm(id)
+    if (st.ui.armedTrack === id) st.status('Armed. Press record (⇧space) to start.')
+  }
+  const LITE = [
+    { label: 'record audio', icon: 'record', title: 'a new audio track, armed for the microphone', run: () => void recordAudio() },
+    { label: 'add an instrument', icon: 'piano', title: 'an instrument track with a synth', run: () => void newTrack('instrument') },
+    { label: 'add drums', icon: 'drum', title: 'a drum track with a kit', run: () => void newTrack('drums') },
+  ] as const
+  const lite = h('div', { className: 'arr-lite', hidden: true },
+    h('p', { className: 'arr-lite-sub dim' }, 'Next: double-click a lane for a clip, drag a sound in from the browser, or'),
+    h('div', { className: 'arr-lite-btns' }, ...LITE.map((k) =>
+      h('button', { type: 'button', className: 'btn', title: k.title, onclick: k.run }, icon(k.icon), k.label))))
   const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
   // The master row: its header focuses the master bus (the dock shows its effects); the body shows its chain as chips.
   const masterHead = headers.master()
   const masterBody = h('div', { className: 'lane-body master-body' })
   masterBody.onclick = () => st.setUi({ focusTrack: MASTER_TRACK, dock: { ...st.ui.dock, open: true, tab: 'devices' } })
-  const master = h('div', { className: 'lane master' }, h('div', { className: 'lane-row master-row' }, masterHead, masterBody))
-  const tail = h('div', { className: 'arr-tail' }, readOnly ? null : addLink)
+  const master = h('div', { className: 'lane master', 'data-hint': readOnly ? 'the master: effects on the whole mix' : 'the master: click to show the effects on the whole mix in the dock · drop an effect here' },
+    h('div', { className: 'lane-row master-row' }, masterHead, masterBody))
+  const tail = h('div', { className: 'arr-tail' }, readOnly ? null : addLink, readOnly ? null : lite)
   const el = h('div', { className: 'arr-lanes' }, master, laneBox, masterAuto.el, hint, tail, bgPicker, overlay, marquee)
   const heights = heightsFor(st)
   const parts = new Map<string, Parts>()
@@ -231,7 +254,9 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
   }
 
   // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
-  const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX: (px: number) => st.fromX(px), get rate() { return st.rate } }
+  const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX: (px: number) => st.fromX(px),
+    snap: (smp: number, ev: { altKey: boolean; ctrlKey: boolean; metaKey?: boolean }) => st.snap(smp, { altKey: ev.altKey, ctrlKey: ev.ctrlKey || !!ev.metaKey }),
+    get rate() { return st.rate } }
 
   function makeAutoSection(scope: string, title = 'automation'): AutoSec {
     const toggle = h('button', { className: 'fx-toggle', title: 'automation lanes', onclick: () => {
@@ -290,6 +315,9 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     let l = lanes.get(t.id)
     if (l) return l
     const body = h('div', { className: 'lane-body', 'data-track': t.id })
+    if (!readOnly) body.dataset.hint = t.kind === 'audio' ? 'arm the track and press record, or drop an audio file here · drag: select clips'
+      : t.kind === 'midi' ? 'double-click: new clip · right-click: piano roll or drum grid · drop a sound here · drag: select clips'
+      : 'right-click: new region (the loopers play during it) · drag: select'
     // empty space: a drag draws a selection box (shift adds to the selection); a click selects nothing and focuses the track
     body.addEventListener('pointerdown', (e) => {
       if (e.target !== body || e.button !== 0 || st.ui.looperArm) return
@@ -298,7 +326,8 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const atX = (e: MouseEvent) => st.snap(st.fromX(e.clientX - body.getBoundingClientRect().left), e)
     body.ondblclick = (e) => { // empty space on a MIDI lane: a new clip, opened in the dock
       if (readOnly || e.target !== body || t.kind !== 'midi') return
-      st.newMidiClip(t.id, atX(e))
+      const cur = tracksMap(doc).get(t.id)?.toJSON() as Track | undefined
+      st.newMidiClip(t.id, atX(e), !!cur && kindOf(doc, cur).kind === 'drums') // a drum track's clips are drum grids
     }
     // background menu: audio lanes take uploads; MIDI lanes and soundscapes make a new region; any lane can paste
     const paste = (e: MouseEvent): MenuItem[] => clipboard.get() ? ['sep', { label: 'paste here', icon: 'duplicate', hint: IS_MAC ? '⌘V' : 'ctrl+V', run: () => {
@@ -422,6 +451,10 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
   // --- selection box: drag on empty lane space; clips it touches are selected (shift: added to the selection)
   function marqueeDown(e: PointerEvent, trackId: string | null) {
     e.preventDefault()
+    // the arrangement has the keys now: let go of the dock's editor (its focus and note selection)
+    const active = document.activeElement as HTMLElement | null
+    if (active?.closest('.dock')) active.blur()
+    if (st.ui.note) st.setUi({ note: null })
     const base = e.shiftKey ? [...st.ui.selection] : []
     const box0 = el.getBoundingClientRect()
     const x0 = e.clientX - box0.left, y0 = e.clientY - box0.top
@@ -774,6 +807,13 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     hint.hidden = tracks.length > 0
     el.classList.toggle('empty', tracks.length === 0)
     tail.hidden = tracks.length === 0
+    lite.hidden = readOnly || tracks.length === 0 || clips.length > 0 || pads.length > 0
+    // what a MIDI clip without a name of its own is called: its track's instrument (a synth), else the track
+    const midiLabel = new Map(tracks.filter((t) => t.kind === 'midi').map((t) => {
+      const inst = kindOf(doc, t, devices, clips).kind === 'instrument'
+        ? devices.find((d) => d.trackId === t.id && DEVICES[d.type]?.instrument && !isDrum(d)) : undefined
+      return [t.id, (inst && (inst.name || DEVICES[inst.type]?.name)) || t.name] as const
+    }))
     const ids = new Set(tracks.map((t) => t.id))
     for (const [id, l] of lanes) if (!ids.has(id)) { l.el.remove(); lanes.delete(id) }
     tracks.forEach((t, i) => {
@@ -832,9 +872,10 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         const meta = samples[c.sourceHash]
         canPlay = !!meta && playable(meta)
         const status = meta?.status // incoming and missing audio is drawn from the stored peaks (docs/engine.md §9.3)
-        let label = meta ? (canPlay ? meta.name : `${meta.name} · too long to play yet`) : '…'
-        if (status === 'incoming') label = `${meta.name} · ${incomingLabel(meta)}`
-        else if (status === 'missing') label = `${meta.name} · audio deleted`
+        const own = c.name || meta?.name
+        let label = meta ? (canPlay ? own! : `${own} · too long to play yet`) : c.name || '…'
+        if (status === 'incoming') label = `${own} · ${incomingLabel(meta)}`
+        else if (status === 'missing') label = `${own} · audio deleted`
         e.classList.toggle('incoming', status === 'incoming')
         e.classList.toggle('missing', status === 'missing')
         const w = waves.get(c.id)!
@@ -844,7 +885,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         const pk = !st.pb || !canPlay ? undefined : status ? storedPeaks(meta, rt) : peaksFor(s.projectId, c.sourceHash, rt)
         if (pk) drawVisibleWave(c, w, pk, width, bodyH, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps: cpps, scroller: scroll, off: HEADER })
         else w.cv.style.display = 'none'
-      } else drawMidiClip(pt, c, notes.filter((n) => n.clipId === c.id), forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks)
+      } else drawMidiClip(pt, c, notes.filter((n) => n.clipId === c.id), forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks, c.name || midiLabel.get(c.trackId) || 'clip')
       e.classList.toggle('midi', c.kind === 'midi')
       e.classList.toggle('editing', c.id === editing)
       e.classList.toggle('sel', selection.includes(c.id))
@@ -871,9 +912,10 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
 
   function makeClip(c: Clip) {
     const name = h('span', { className: 'clip-name' })
+    name.addEventListener('dblclick', (ev) => { if (readOnly) return; ev.stopPropagation(); renameClip(c.id) })
     const head = h('div', { className: 'clip-head' }, name)
     const body = h('div', { className: 'clip-body' })
-    const e = h('div', { className: 'clip' }, head, body)
+    const e = h('div', { className: 'clip', 'data-hint': readOnly ? 'click: show it in the dock' : 'click: edit in the dock · drag: move · drag the edges: trim · right edge, top: loop · alt: no snap · right-click: more' }, head, body)
     parts.set(c.id, { head, name, body })
     if (c.kind === 'audio') {
       const fade = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -1053,11 +1095,10 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
    * A MIDI clip's preview: its label plus tiny note marks, rebuilt only when the notes change. A looping clip draws its
    * first pass in full and the repeats faded. (The editors live in the dock.)
    */
-  function drawMidiClip(pt: Parts, c: Clip & { kind: 'midi' }, notes: Note[], extent: number) {
+  function drawMidiClip(pt: Parts, c: Clip & { kind: 'midi' }, notes: Note[], extent: number, label: string) {
     const lp = isLooping(c) ? c.loopTicks! : 0
     const sig = `${extent}|${lp}|${c.view ?? ''}|${notes.map((n) => `${n.tick},${n.durTicks},${n.pitch},${n.velocity}`).join(';')}`
-    const label = c.view === 'drums' ? 'drums' : 'midi'
-    if (pt.name.textContent !== label) pt.name.textContent = label
+    if (pt.name.textContent !== label) (pt.name.textContent = label), (pt.head.title = label)
     if (pt.body.dataset.sig === sig) return
     pt.body.dataset.sig = sig
     const shown = lp ? notes.filter((n) => n.tick < lp) : notes
@@ -1134,13 +1175,13 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const mode = clipZone(ev, ev.currentTarget as HTMLElement, clip)
     const lane0 = lanes.get(clip.trackId)
     const cpps = lane0?.src ? lane0.src.pps : pps // source clips scale with their own lane
-    // a click (no drag) on a clip shows it in the dock's editor, when that is what the dock shows
-    const clicked = () => { if (st.ui.dock.open && st.ui.dock.tab === 'clip' && st.ui.editing !== id) st.openClip(id) }
+    // a click (no drag) on a clip opens it in the dock's clip tab (D2)
+    const clicked = () => { if (!(st.ui.dock.open && st.ui.dock.tab === 'clip' && st.ui.editing === id)) st.openClip(id) }
     st.setUi({ pad: null, note: null })
     // shift- or ⌘-click (ctrl elsewhere) adds the clip to the selection, or takes it out
     if (ev.shiftKey || (IS_MAC ? ev.metaKey : ev.ctrlKey)) {
       const sel = st.ui.selection
-      st.select(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id])
+      st.select(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id], false)
       return
     }
     // grabbing a clip of a selection moves all of it (the clips of locked tracks and source lanes stay)
@@ -1148,7 +1189,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const group = mode === 'move' && sel0.length > 1 && sel0.includes(id)
       ? sel0.filter((x) => { const c = clipOf(x); return !!c && !lanes.get(c.trackId)?.src && !st.locks.has(c.trackId) })
       : null
-    if (!group) st.select([id])
+    if (!group) st.select([id], false) // (opened in the dock on release, if it was a click)
     if (readOnly || lane0?.src || st.locks.has(clip.trackId)) return clicked() // source audio stays anchored: only the loop windows move
     undo.stopCapturing()
     ev.preventDefault()
@@ -1199,9 +1240,12 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         if (mode !== 'move') {
           let d = Math.round(((m.clientX - ev.clientX) / cpps) * rt)
           // an audio clip's edge snaps to the same targets, repeat seams included, so it can be trimmed to land on them
+          // every edge lands on the grid otherwise (alt / ctrl: free)
           const edge = mode === 'l' ? clip.start + d : clip.start + length + d
-          const snap = clip.kind !== 'audio' || m.altKey || m.ctrlKey || m.metaKey ? null : snapAt(edge, 0, (SNAP_PX / pps) * rt)
+          const free = m.altKey || m.ctrlKey || m.metaKey
+          const snap = clip.kind !== 'audio' || free ? null : snapAt(edge, 0, (SNAP_PX / pps) * rt)
           if (snap) d += snap.at - edge
+          else if (!free) d += st.snap(edge, m) - edge
           showSnap(snap ? snap.at : null)
           return trimClip(doc, rt, clip, mode, d, srcFrames, notes0)
         }
@@ -1270,21 +1314,80 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     return `incoming from ${m.byName ?? 'someone'}${mine ? ', not on this device' : ''}`
   }
   const failed = (err: unknown) => st.status((err as Error).message)
-  function clipMenu(clipId: string): [string, () => void][] {
-    const open: [string, () => void] = ['open in editor', () => st.openClip(clipId)]
-    if (readOnly) return [open]
-    const items: [string, () => void][] = [open, ['delete clip', () => { // the whole selection if this clip is in it
-      const sel = st.ui.selection
-      const ids = sel.includes(clipId) ? [...sel] : [clipId]
-      doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
-      st.select([])
-    }]]
-    const clip = getClips(doc).find((c) => c.id === clipId)
-    if (clip) { // looping repeats the pass to the end of the clip (drag its right edge to extend), or past it with forever
-      const looping = isLooping(clip)
-      items.splice(1, 0, [isForever(clip) ? 'loop to end' : 'loop forever', () => setLoopOn(doc, rate(), clip, !clip.forever)])
-      if (looping) items.splice(1, 0, ['no loop', () => setLoopOff(doc, clip)])
+  /** Rename a clip in place: its name strip becomes a text field (empty: back to the default label). */
+  function renameClip(clipId: string) {
+    const pt = parts.get(clipId)
+    if (!pt || readOnly) return
+    const cur = clipOf(clipId)
+    const input = h('input', { className: 'clip-rename', value: cur?.name ?? pt.name.textContent ?? '', 'aria-label': 'clip name' })
+    let finished = false
+    const done = (ok: boolean) => {
+      if (finished) return
+      finished = true
+      if (ok && clipsMap(doc).has(clipId)) {
+        const v = input.value.trim()
+        undo.stopCapturing()
+        if (v) updateClip(doc, clipId, { name: v })
+        else clipsMap(doc).get(clipId)?.delete('name')
+        undo.stopCapturing()
+      }
+      input.replaceWith(pt.name)
+      pt.name.textContent = '' // (redrawn with the new label)
+      draw()
     }
+    input.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false) }
+    input.onblur = () => done(true)
+    for (const t of ['pointerdown', 'click', 'dblclick'] as const) input.addEventListener(t, (e) => e.stopPropagation())
+    pt.name.replaceWith(input)
+    input.focus()
+    input.select()
+  }
+
+  /** The clip's right-click menu (P3-15): open, split, duplicate, copy, cut, rename, looping, delete. */
+  function clipMenu(clipId: string): MenuItem[] {
+    const clip = clipOf(clipId)
+    const mod = IS_MAC ? '⌘' : 'ctrl+'
+    const kindIcon = clip?.kind === 'audio' ? 'wave' : clip?.kind === 'midi' && clip.view === 'drums' ? 'drum' : 'piano'
+    const open: MenuItem = { label: 'open in the dock', icon: kindIcon, hint: 'click', run: () => st.openClip(clipId) }
+    if (readOnly || !clip) return [open]
+    // the whole selection when this clip is in it
+    const targets = () => { const sel = st.ui.selection; return sel.includes(clipId) ? [...sel] : [clipId] }
+    const step = (f: () => void) => { undo.stopCapturing(); f(); undo.stopCapturing() }
+    const at = Math.round(position())
+    const onSource = !!lanes.get(clip.trackId)?.src
+    const inside = !onSource && at > clip.start && at < clip.start + clipLength(clip, rate())
+    const items: MenuItem[] = [
+      open,
+      'sep',
+      { label: 'split at the playhead', icon: 'scissors', hint: 'S', disabled: !inside,
+        title: inside ? undefined : 'move the playhead into the clip to split it there', run: () => step(() => { splitClip(doc, clipId, at) }) },
+      { label: 'duplicate', icon: 'duplicate', hint: `${mod}D`, run: () => {
+        let ids: string[] = []
+        step(() => { ids = duplicateClips(doc, targets(), rate()) })
+        if (ids.length) st.select(ids, ids.length === 1)
+      } },
+      { label: 'copy', icon: 'duplicate', hint: `${mod}C`, run: () => { const d = copyClips(doc, targets()); clipboard.set(d); if (d) st.status(`Copied ${d.items.length} clip${d.items.length === 1 ? '' : 's'}.`) } },
+      { label: 'cut', icon: 'scissors', hint: `${mod}X`, run: () => {
+        let d: ReturnType<typeof cutClips> = null
+        step(() => { d = cutClips(doc, targets()) })
+        clipboard.set(d)
+        st.select([])
+      } },
+      { label: 'rename', icon: 'edit', hint: 'double-click the name', run: () => renameClip(clipId) },
+      'sep',
+    ]
+    if (!onSource) {
+      if (!isForever(clip)) items.push({ label: 'loop forever', icon: 'loop',
+        title: 'repeat the clip (its pattern, or its audio) for as long as the song plays; drag the right edge to stop it somewhere instead',
+        run: () => step(() => setLoopOn(doc, rate(), clip, true)) })
+      else items.push({ label: 'loop to the end of the clip only', icon: 'loop', title: 'stop repeating past the clip\'s right edge', run: () => step(() => setLoopOn(doc, rate(), clip, false)) })
+      if (isLooping(clip)) items.push({ label: 'no loop', icon: 'close', title: 'play the pattern once', run: () => step(() => setLoopOff(doc, clip)) })
+      items.push('sep')
+    }
+    items.push({ label: 'delete', icon: 'trash', danger: true, hint: '⌫', run: () => {
+      step(() => doc.transact(() => targets().forEach((id) => deleteClip(doc, id))))
+      st.select([])
+    } })
     const hash = String(clipsMap(doc).get(clipId)?.get('sourceHash'))
     const meta = getSamples(doc)[hash]
     if (meta?.status !== 'incoming') return items
@@ -1311,7 +1414,8 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
   // --- events
   scroll.addEventListener('scroll', schedule, { passive: true })
   addEventListener('resize', schedule)
-  const LANE_UI: (keyof typeof st.ui)[] = ['pps', 'selection', 'editing', 'focusTrack', 'pad', 'looperArm', 'autoOpen']
+  const LANE_UI: (keyof typeof st.ui)[] = ['pps', 'selection', 'editing', 'focusTrack', 'pad', 'looperArm', 'autoOpen', 'narrow']
+  setNarrowHeader(st.ui.narrow)
   const offs = [
     st.on('doc', draw),
     st.on('ui', (p) => { if (LANE_UI.some((k) => k in p)) draw() }),

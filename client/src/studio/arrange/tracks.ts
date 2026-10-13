@@ -3,7 +3,7 @@
 // header's background focuses the track (the dock shows its devices); right-click opens the track menu; the bottom edge
 // drags to resize the track. The lanes place each header at the left of its row; this module builds and updates them.
 import {
-  DEVICES, MASTER_TRACK, TRACK_COLORS, deleteTrack, getClips, getDevices, getTracks, isDrum, orderBetween, setTrackColor, trackColor, tracksMap,
+  MASTER_TRACK, TRACK_COLORS, deleteTrack, getClips, getDevices, getTracks, orderBetween, setTrackColor, trackColor, tracksMap,
   updateTrack, type Track,
 } from '@mobdaw/shared'
 import { h } from '../../dom'
@@ -15,12 +15,16 @@ import { closedBy, popover } from '../../ui/popover'
 import { dragToReorder } from '../../ui/reorder'
 import { duplicateTrack } from '../clipboard'
 import type { Studio } from '../studio'
-import { TRACK_H_DEFAULT, heightsFor } from './heights'
+import { TRACK_H_DEFAULT, TRACK_H_NARROW, heightsFor } from './heights'
+import { kindOf } from './kinds'
+
+/** A track's kind as people say it ("drum track"), with its icon. For other views too. */
+export { kindOf, type Kind, type KindName } from './kinds'
 
 type Head = {
   el: HTMLElement; grip: HTMLElement; bound: boolean; name: HTMLElement; kind: HTMLElement; kindName: IconName | ''
   mute: HTMLButtonElement; solo: HTMLButtonElement; arm: HTMLButtonElement | null; monitor: HTMLButtonElement | null
-  gain: Fader; pan: Knob; meter: Meter
+  gain: Fader; pan: Knob; meter: Meter; bottom: HTMLElement
 }
 
 const fmtPan = (v: number) => (Math.abs(v) < 0.005 ? 'centre' : `${Math.round(Math.abs(v) * 100)} ${v < 0 ? 'L' : 'R'}`)
@@ -33,8 +37,14 @@ export function mountTrackHeaders(st: Studio) {
 
   /** Ask before a press on a slider writes: the drag that follows is one undo step. */
   const grabs = (el: HTMLElement) => el.addEventListener('pointerdown', () => st.undo.stopCapturing(), true)
+  /** A header button; each press is its own undo step (a quick mute then solo are two). */
   const btn = (cls: string, title: string, content: string | Node, onclick: () => void) => {
-    const b = h('button', { type: 'button', className: `th-btn ${cls}`, title, disabled: readOnly, onclick: (e: MouseEvent) => { e.stopPropagation(); onclick() } })
+    const b = h('button', { type: 'button', className: `th-btn ${cls}`, title, disabled: readOnly, onclick: (e: MouseEvent) => {
+      e.stopPropagation()
+      st.undo.stopCapturing()
+      onclick()
+      st.undo.stopCapturing()
+    } })
     b.append(content)
     return b
   }
@@ -49,6 +59,7 @@ export function mountTrackHeaders(st: Studio) {
     const solo = btn('solo', 'solo (⇧S)', 's', () => updateTrack(doc, id, { soloed: !cur(id)?.get('soloed') }))
     const arm = t.kind === 'audio' || (t.kind === 'midi' && t.role !== 'click') ? btn('arm', 'arm for recording', icon('arm', 14), () => void st.rec.arm(id)) : null
     if (arm) arm.dataset.tone = 'rec'
+    arm?.setAttribute('aria-pressed', 'false')
     const monitor = arm && t.kind === 'audio' ? btn('monitor', 'monitor the input through this track\'s effects (use headphones)', icon('speaker', 14), () => st.rec.setMonitoring(!st.rec.monitoring)) : null
     if (monitor) monitor.hidden = true
     const gain = fader({ value: t.gain, orientation: 'horizontal', color: trackColor(t, 0), title: 'gain (double-click: 0 dB)', disabled: readOnly,
@@ -60,9 +71,11 @@ export function mountTrackHeaders(st: Studio) {
     const m = meter({ orientation: 'vertical', stereo: true })
     m.el.classList.add('th-meter')
     const resize = h('div', { className: 'th-resize', title: 'drag to resize the track (double-click: default height)' })
-    const el = h('div', { className: 'head track-head', 'data-track-head': id },
+    const bottom = h('div', { className: 'th-bottom' }, gain.el, pan.el)
+    const el = h('div', { className: 'head track-head', 'data-track-head': id,
+      'data-hint': readOnly ? 'a track' : 'click: show its devices in the dock · right-click: track menu · double-click the name: rename · drag the grip: move · drag the bottom edge: resize' },
       h('div', { className: 'th-top' }, grip, kind, name, h('div', { className: 'th-btns' }, mute, solo, arm, monitor)),
-      h('div', { className: 'th-bottom' }, gain.el, pan.el),
+      bottom,
       m.el, resize)
     for (const c of [gain.el, pan.el]) c.addEventListener('click', (e) => e.stopPropagation())
 
@@ -89,9 +102,9 @@ export function mountTrackHeaders(st: Studio) {
       el.classList.add('resizing')
       dragPointer(e, { onDrag: (mv) => heights.set(id, h0 + mv.clientY - e.clientY), onEnd: () => el.classList.remove('resizing') })
     })
-    resize.addEventListener('dblclick', (e) => { e.stopPropagation(); heights.set(id, TRACK_H_DEFAULT) })
+    resize.addEventListener('dblclick', (e) => { e.stopPropagation(); heights.set(id, st.ui.narrow ? TRACK_H_NARROW : TRACK_H_DEFAULT) })
 
-    const head: Head = { el, grip, bound: false, name, kind, kindName: '', mute, solo, arm, monitor, gain, pan, meter: m }
+    const head: Head = { el, grip, bound: false, name, kind, kindName: '', mute, solo, arm, monitor, gain, pan, meter: m, bottom }
     heads.set(id, head)
     return head
   }
@@ -160,27 +173,13 @@ export function mountTrackHeaders(st: Studio) {
     input.select()
   }
 
-  /** The kind icon: a wave for audio, a piano (or a drum, for a drum kit or drum clips) for MIDI, loops for a soundscape. */
-  function kindOf(t: Track, drumTracks: Set<string>): { icon: IconName; label: string } {
-    if (t.kind === 'audio') return { icon: 'wave', label: 'audio track' }
-    if (t.kind === 'soundscape') return { icon: 'loop', label: 'soundscape' }
-    return drumTracks.has(t.id) ? { icon: 'drum', label: 'drum track' } : { icon: 'piano', label: 'instrument track' }
-  }
-
   function update() {
     const tracks = getTracks(doc)
     const ids = new Set(tracks.map((t) => t.id))
     for (const [id, hd] of heads) if (!ids.has(id)) { hd.meter.destroy(); hd.el.remove(); heads.delete(id) }
-    // MIDI tracks that are drums: every instrument a drum, or every clip a drum grid
     const devs = getDevices(doc), clips = getClips(doc)
-    const drumTracks = new Set(tracks.filter((t) => {
-      if (t.kind !== 'midi') return false
-      const inst = devs.filter((d) => d.trackId === t.id && DEVICES[d.type]?.instrument)
-      const kit = inst.length > 0 && inst.every(isDrum)
-      const cs = clips.filter((c) => c.trackId === t.id)
-      return kit || (cs.length > 0 && cs.every((c) => c.kind === 'midi' && c.view === 'drums'))
-    }).map((t) => t.id))
     const armed = st.ui.armedTrack
+    const narrow = st.ui.narrow
     tracks.forEach((t, i) => {
       const hd = heads.get(t.id) ?? make(t)
       const tc = trackColor(t, i)
@@ -188,17 +187,23 @@ export function mountTrackHeaders(st: Studio) {
       hd.gain.el.style.setProperty('--fader-c', tc)
       hd.pan.el.style.setProperty('--knob-c', tc)
       hd.el.classList.toggle('focus', st.ui.focusTrack === t.id)
-      hd.el.classList.toggle('compact', heights.get(t.id) < COMPACT_H)
+      // narrow screens: only the name and m / s / arm
+      hd.el.classList.toggle('compact', narrow || heights.get(t.id) < COMPACT_H)
+      hd.el.classList.toggle('slim', narrow)
+      hd.bottom.hidden = narrow
+      hd.grip.hidden = narrow
+      hd.kind.hidden = narrow
       if (hd.name.textContent !== t.name) (hd.name.textContent = t.name), (hd.name.title = `${t.name} (double-click to rename)`)
-      const k = kindOf(t, drumTracks)
+      const k = kindOf(doc, t, devs, clips)
       if (hd.kindName !== k.icon) {
         hd.kindName = k.icon
         hd.kind.replaceChildren(icon(k.icon, 14))
         hd.kind.title = k.label
       }
       hd.arm?.classList.toggle('on', armed === t.id)
+      hd.arm?.setAttribute('aria-pressed', String(armed === t.id))
       if (hd.monitor) {
-        hd.monitor.hidden = armed !== t.id
+        hd.monitor.hidden = armed !== t.id || narrow
         hd.monitor.classList.toggle('on', st.rec.monitoring)
       }
       hd.mute.classList.toggle('on', t.muted)
@@ -217,7 +222,7 @@ export function mountTrackHeaders(st: Studio) {
   let masterMeter: Meter | null = null
   const offs = [
     st.on('doc', update),
-    st.on('ui', (p) => { if ('armedTrack' in p || 'focusTrack' in p) update() }),
+    st.on('ui', (p) => { if ('armedTrack' in p || 'focusTrack' in p || 'narrow' in p) update() }),
     st.on('transport', update),
     st.on('meters', (m) => {
       for (const [id, hd] of heads) {
@@ -242,10 +247,8 @@ export function mountTrackHeaders(st: Studio) {
       masterMeter.el.classList.add('master-meter')
       const el = h('div', { className: 'head track-head master-head', title: 'effects on the whole mix: click to show them in the dock' },
         h('span', { className: 'th-name' }, 'master'), masterMeter.el)
-      el.onclick = (e) => {
-        if ((e.target as HTMLElement).closest('.meter-el')) return
-        st.setUi({ focusTrack: MASTER_TRACK, dock: { ...st.ui.dock, open: true, tab: 'devices' } })
-      }
+      // anywhere on it, the meter included
+      el.onclick = () => st.setUi({ focusTrack: MASTER_TRACK, dock: { ...st.ui.dock, open: true, tab: 'devices' } })
       return el
     },
     /** The lanes built `lane` around `t`'s header: its grip now drags that lane up and down the list. */

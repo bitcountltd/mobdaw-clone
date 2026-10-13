@@ -4,6 +4,7 @@ import { h } from '../dom'
 import type { Session } from '../project/session'
 import { chatPanel } from '../ui/chat'
 import { mountArrange } from './arrange/arrange'
+import { setNarrowHeader } from './arrange/lanes'
 import { mountDock } from './dock/dock'
 import { mountBrowser } from './browser/browser'
 import { mountHelp } from './help'
@@ -41,7 +42,15 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
   const status = mountStatusbar(st, () => el)
   const statusBar = status.el
 
+  // A visually hidden link, first in the tab order: straight to the tracks (past the top bar and the browser).
+  const skip = h('a', { className: 'sr-only skip-link', href: '#', onclick: (e: MouseEvent) => {
+    e.preventDefault()
+    const head = arrange.el.querySelector<HTMLElement>('.lanes .track-head') ?? arrange.el.querySelector<HTMLElement>('.add-track, .arr-empty button')
+    if (head && !head.matches('button')) head.tabIndex = -1
+    ;(head ?? arrange.el).focus()
+  } }, 'Skip to tracks')
   const el = h('div', { className: 'studio' },
+    skip,
     top.el,
     h('div', { className: 'studio-main' }, browser, h('div', { className: 'studio-centre' }, arrange.el, mixer.el, chat.el)),
     dock.el,
@@ -51,10 +60,20 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
     arrange.el.hidden = st.ui.view === 'mix'
     browser.hidden = !st.ui.browserOpen
     el.classList.toggle('browser-open', st.ui.browserOpen)
+    el.classList.toggle('narrow', st.ui.narrow)
   }
+  // Under 600px wide: slim track headers (.studio.narrow; the lanes' header column follows HEADER).
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    const w = el.clientWidth || innerWidth
+    const narrow = w > 0 && w < 600
+    if (narrow === st.ui.narrow) return
+    setNarrowHeader(narrow)
+    st.setUi({ narrow })
+  }) : null
+  ro?.observe(el)
   const offs = [
     st.on('ui', (p) => {
-      if (!('browserOpen' in p) && !('view' in p)) return
+      if (!('browserOpen' in p) && !('view' in p) && !('narrow' in p)) return
       layout()
       window.dispatchEvent(new Event('resize')) // the arrangement's width changed
     }),
@@ -69,6 +88,7 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
     studio: st,
     destroy() {
       offs.forEach((f) => f())
+      ro?.disconnect()
       keys.destroy()
       qwerty.destroy()
       help.destroy()

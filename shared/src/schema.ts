@@ -50,6 +50,8 @@ export type AudioClip = {
   start: number; length: number; sourceHash: string; sourceOffset: number
   gain: number; fadeIn: number; fadeOut: number; fadeShape: FadeShape
   loopLength?: number; loopPhase?: number; forever?: boolean
+  /** The clip's own label (absent: the sample's name). */
+  name?: string
 }
 /**
  * `lengthTicks` is the clip's extent on the timeline. `loopTicks` (absent or 0 = no loop) is the pattern length: the notes in
@@ -58,7 +60,7 @@ export type AudioClip = {
  * `forever` (only while looping) keeps the pattern repeating past `lengthTicks` for as long as the transport runs: `lengthTicks`
  * stays the finite part that sets the scroll bounds and the export's end.
  */
-export type MidiClip = { id: string; trackId: string; kind: 'midi'; start: number; bpm: number; ppq: number; lengthTicks: number; loopTicks?: number; forever?: boolean; view?: 'drums' }
+export type MidiClip = { id: string; trackId: string; kind: 'midi'; start: number; bpm: number; ppq: number; lengthTicks: number; loopTicks?: number; forever?: boolean; view?: 'drums'; name?: string }
 export type Clip = AudioClip | MidiClip
 export type Note = { id: string; clipId: string; tick: number; durTicks: number; pitch: number; velocity: number }
 /** `name`, `keyLo` and `keyHi` are optional: an instrument's label and its note range (MIDI 0..127 inclusive; absent = 0 and 127). Not params. */
@@ -280,9 +282,15 @@ export function deleteClip(doc: Y.Doc, id: string) {
   })
 }
 
-/** Split an audio clip at timeline sample `at`; returns the new (right-hand) clip id, or null. */
+/**
+ * Split a clip at timeline sample `at`; returns the new (right-hand) clip id, or null when `at` is not inside it.
+ * A MIDI clip splits on the nearest tick: notes after the split move to the right half, notes crossing it are cut at
+ * the split (the right half doesn't get their tail). A looping clip keeps its pattern on both halves, the right half's
+ * turned so its repeats stay where they were (see `splitMidiNotes`); `forever` goes to the right half.
+ */
 export function splitClip(doc: Y.Doc, id: string, at: number): string | null {
   const c = clipsMap(doc).get(id)?.toJSON() as Clip | undefined
+  if (c?.kind === 'midi') return splitMidiClip(doc, c, at)
   if (c?.kind !== 'audio' || at <= c.start || at >= c.start + c.length) return null
   const left = at - c.start
   const pass = c.loopLength ?? 0
@@ -294,6 +302,47 @@ export function splitClip(doc: Y.Doc, id: string, at: number): string | null {
     updateClip(doc, id, { length: left, fadeOut: 0, ...(c.forever ? { forever: false } : {}) })
   })
   return right
+}
+
+/** Where a MIDI clip's notes go when it splits `split` ticks in (pure): the left half's notes and the right half's (ticks from its start). */
+export function splitMidiNotes<N extends Pick<Note, 'tick' | 'durTicks'>>(notes: N[], split: number, loopTicks = 0): { left: N[]; right: N[] } {
+  if (loopTicks > 0) { // a pattern: both halves keep all of it; the right half starts `split mod loop` into it
+    const phase = split % loopTicks
+    const inPattern = notes.filter((n) => n.tick < loopTicks)
+    return { left: inPattern, right: inPattern.map((n) => ({ ...n, tick: (((n.tick - phase) % loopTicks) + loopTicks) % loopTicks })) }
+  }
+  const left: N[] = [], right: N[] = []
+  for (const n of notes) {
+    if (n.tick >= split) right.push({ ...n, tick: n.tick - split })
+    else left.push(n.tick + n.durTicks > split ? { ...n, durTicks: split - n.tick } : n)
+  }
+  return { left, right }
+}
+
+function splitMidiClip(doc: Y.Doc, c: MidiClip, at: number): string | null {
+  const rate = getSampleRate(doc)
+  const split = Math.round(((at - c.start) * c.bpm * c.ppq) / (60 * rate))
+  if (split <= 0 || split >= c.lengthTicks) return null
+  const loop = isLooping(c) ? c.loopTicks! : 0
+  const notes = getNotes(doc).filter((n) => n.clipId === c.id)
+  const { left, right } = splitMidiNotes(notes, split, loop)
+  let id = ''
+  doc.transact(() => {
+    const { id: _id, kind: _k, ...rest } = c
+    const rightLen = c.lengthTicks - split
+    id = addMidiClip(doc, {
+      ...rest, start: c.start + ticksToSamples(split, c.bpm, c.ppq, rate), lengthTicks: rightLen,
+      ...(loop ? { loopTicks: Math.min(loop, rightLen) } : { loopTicks: 0, forever: false }),
+    })
+    for (const n of right) addNote(doc, { clipId: id, tick: n.tick, durTicks: n.durTicks, pitch: n.pitch, velocity: n.velocity })
+    const keep = new Set(left.map((n) => n.id))
+    for (const n of notes) {
+      if (!keep.has(n.id)) notesMap(doc).delete(n.id)
+      else { const l = left.find((x) => x.id === n.id)!; if (l.durTicks !== n.durTicks) notesMap(doc).get(n.id)?.set('durTicks', l.durTicks) }
+    }
+    updateClip(doc, c.id, { lengthTicks: split, ...(loop && loop >= split ? { loopTicks: 0 } : {}), ...(c.forever ? { forever: false } : {}) })
+  })
+  return id
 }
 
 // --- notes

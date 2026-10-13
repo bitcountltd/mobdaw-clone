@@ -91,27 +91,51 @@ export function setLoop(doc: Y.Doc, l: LoopRegion | null) {
  * clips keep their length (audio is not stretched). One transaction, so one undo step.
  */
 export function setProjectTempo(doc: Y.Doc, bpm: number) {
-  const next = Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round(bpm * 100) / 100))
-  const prev = getTempo(doc).bpm
-  if (next === prev && metaMap(doc).get('bpm') != null) return
-  const k = prev / next
-  doc.transact(() => {
-    const clips = clipsMap(doc)
-    for (const c of getClips(doc)) {
-      const m = clips.get(c.id)!
-      m.set('start', Math.round(c.start * k))
-      if (c.kind === 'midi') m.set('bpm', next)
-    }
-    for (const p of getPads(doc)) {
-      const m = padsMap(doc).get(p.id)!
-      m.set('start', Math.round(p.start * k))
-      m.set('length', Math.max(1, Math.round(p.length * k)))
-    }
-    for (const p of getPoints(doc)) pointsMap(doc).get(p.id)!.set('pos', Math.round(p.pos * k))
-    const loop = getLoop(doc)
-    if (loop) setLoop(doc, { ...loop, start: loop.start * k, end: loop.end * k })
-    metaMap(doc).set('bpm', next)
-  })
+  beginTempoChange(doc).set(bpm)
+}
+
+/** Clamp and round a bpm the way the project stores it. */
+export const clampBpm = (bpm: number) => Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round(bpm * 100) / 100))
+
+/**
+ * A tempo change in steps (a drag on the tempo field): the positions are captured once, when it begins, and every
+ * `set(bpm)` scales them from that snapshot, so going back and forth never drifts (each step rounding the last one's
+ * rounded values would). `end()` lets go of the snapshot; things added meanwhile are left alone until the next change.
+ */
+export function beginTempoChange(doc: Y.Doc): { set(bpm: number): void; end(): void } {
+  const base = getTempo(doc).bpm
+  const clips = getClips(doc).map((c) => ({ id: c.id, start: c.start, midi: c.kind === 'midi' }))
+  const pads = getPads(doc).map((p) => ({ id: p.id, start: p.start, length: p.length }))
+  const points = getPoints(doc).map((p) => ({ id: p.id, pos: p.pos }))
+  const loop = getLoop(doc)
+  let done = false
+  return {
+    set(bpm: number) {
+      if (done) return
+      const next = clampBpm(bpm)
+      if (next === getTempo(doc).bpm && metaMap(doc).get('bpm') != null) return
+      const k = base / next
+      doc.transact(() => {
+        for (const c of clips) {
+          const m = clipsMap(doc).get(c.id)
+          if (!m) continue
+          const start = Math.round(c.start * k)
+          if (m.get('start') !== start) m.set('start', start)
+          if (c.midi && m.get('bpm') !== next) m.set('bpm', next)
+        }
+        for (const p of pads) {
+          const m = padsMap(doc).get(p.id)
+          if (!m) continue
+          m.set('start', Math.round(p.start * k))
+          m.set('length', Math.max(1, Math.round(p.length * k)))
+        }
+        for (const p of points) pointsMap(doc).get(p.id)?.set('pos', Math.round(p.pos * k))
+        if (loop && getLoop(doc)) setLoop(doc, { ...getLoop(doc)!, start: loop.start * k, end: loop.end * k })
+        metaMap(doc).set('bpm', next)
+      })
+    },
+    end() { done = true },
+  }
 }
 export function setBeatsPerBar(doc: Y.Doc, n: number) {
   doc.transact(() => {

@@ -82,12 +82,22 @@ export class MidiRec {
     return this.isMidi(t) ? t! : null
   }
 
-  /** Whether the record button means a MIDI take: an armed MIDI track, or no armed track and a focused MIDI track. */
+  /** A MIDI track notes can be recorded on (not the click track). */
+  private recordable = (id: string | null | undefined) => this.isMidi(id) && tracksMap(this.st.doc).get(id!)?.get('role') !== 'click'
+  /**
+   * The track a MIDI take goes on (D4): the focused instrument track, else the armed one unless an audio track is
+   * focused (then it is an audio take). Null: the record button records audio.
+   */
+  recordTarget(): string | null {
+    const { ui, doc } = this.st
+    if (this.take) return this.take.trackId
+    if (this.recordable(ui.focusTrack)) return ui.focusTrack
+    if (ui.focusTrack && tracksMap(doc).get(ui.focusTrack)?.get('kind') === 'audio') return null
+    return this.recordable(ui.armedTrack) ? ui.armedTrack : null
+  }
+  /** Whether the record button means a MIDI take. */
   wants(): boolean {
-    const { ui } = this.st
-    if (this.take) return true
-    if (ui.armedTrack && tracksMap(this.st.doc).has(ui.armedTrack)) return this.isMidi(ui.armedTrack)
-    return this.isMidi(ui.focusTrack)
+    return this.take != null || this.recordTarget() != null
   }
 
   /** Arm (or disarm) a MIDI track: no microphone, it just picks where notes go and are recorded. */
@@ -114,15 +124,17 @@ export class MidiRec {
       if (t == null) return false
       this.sounding.delete(pitch)
       pb.noteLive(t, pitch, 0, false)
+      this.st.emit('liveNote', { trackId: t, pitch, on: false })
       this.record(pitch, 0, false, perfTime)
       return true
     }
     const t = this.target()
     if (!t) return false
     const prev = this.sounding.get(pitch)
-    if (prev != null) pb.noteLive(prev, pitch, 0, false), this.record(pitch, 0, false, perfTime)
+    if (prev != null) pb.noteLive(prev, pitch, 0, false), this.record(pitch, 0, false, perfTime), this.st.emit('liveNote', { trackId: prev, pitch, on: false })
     this.sounding.set(pitch, t)
     pb.noteLive(t, pitch, velocity, true)
+    this.st.emit('liveNote', { trackId: t, pitch, on: true })
     this.record(pitch, velocity, true, perfTime)
     return true
   }
@@ -149,9 +161,13 @@ export class MidiRec {
     const st = this.st
     if (!st.pb || st.readOnly || this.take || st.rec.take) return
     if (st.pedal.active) return st.status('record: the loop pedal is recording')
-    const trackId = this.target()
+    const trackId = this.recordTarget()
     if (!trackId) return
     if (st.locks.has(trackId)) return st.status(`${st.locks.get(trackId)} is recording on that track`)
+    if (st.ui.armedTrack !== trackId) { // the take's track is armed (a microphone armed elsewhere is let go)
+      if (st.ui.armedTrack && !this.isMidi(st.ui.armedTrack)) st.pb.recorder.disarm()
+      st.setUi({ armedTrack: trackId })
+    }
     const from = Math.round(st.position())
     this.take = { trackId, from, start: barStart(from, this.opts(from, from)), events: [], held: new Map(), live: null, offTick: st.on('tick', () => this.grow()) }
     st.s.setLocal({ recording: { trackId, start: from } })

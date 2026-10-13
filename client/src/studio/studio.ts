@@ -4,7 +4,7 @@
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, MASTER_TRACK, addAudioClip, addLane, addMidiClip, addPad, addPoint, addTrack, clipLength, clipsMap,
   deleteLane, devicesMap, getClips, getPads, getPoints, getSampleRate, getTempo, getTracks, laneOf, lanesMap, loopersMap, metaMap,
-  migrateToV2, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, setLaneEnabled, setLaneState, stashLaneRanges,
+  beginTempoChange, migrateToV2, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, setLaneEnabled, setLaneState, stashLaneRanges,
   sweepOrphans, tracksMap, type AwarenessState, type GridSize, type ParamTarget, type Tempo, type TrackKind,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
@@ -14,6 +14,7 @@ import type { Session } from '../project/session'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
 import { recoverTakes, sweepUnusedTakes, type TakeCtx } from '../takes'
 import { automateMenu } from '../ui/automation'
+import { numberedName } from './arrange/kinds'
 import { AutoState } from './autoState'
 import { PedalCtl } from './pedalCtl'
 import { MidiRec } from './midiRecord'
@@ -37,6 +38,7 @@ export type UiState = {
   pad: string | null // the selected soundscape region
   looperArm: string | null // the looper whose region is being drawn
   autoOpen: string[] // scopes (track ids, or MASTER_TRACK) with their automation lanes shown
+  narrow: boolean // the studio is under 600px wide: slim track headers (set by the shell)
 }
 export type Meters = { master: [number, number]; tracks: Map<string, [number, number]> }
 export type StudioEvents = {
@@ -55,21 +57,36 @@ export type StudioEvents = {
   cpu: { load: number; peak: number }
   /** The armed input's level changed (linear peak and whether it has hit full scale). */
   level: { level: number; clipped: boolean }
+  /** Recording couldn't start (no microphone, access refused): a plain message for the record button to show. */
+  recordError: string
+  /** A note played by hand (computer or MIDI keyboard) started or stopped sounding on a track. */
+  liveNote: { trackId: string; pitch: number; on: boolean }
 }
 export type StudioEvent = keyof StudioEvents
 
-/** The layout bits of UiState that are remembered on this device. */
+/** The layout bits of UiState that are remembered on this device. The zoom is remembered per project (PPS_KEY). */
 const LAYOUT_KEY = 'mobdaw.studio.layout'
-type Layout = Pick<UiState, 'pps' | 'grid' | 'browserOpen' | 'dock'>
+type Layout = Pick<UiState, 'grid' | 'browserOpen' | 'dock'>
 function loadLayout(): Partial<Layout> {
   try {
-    return JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}') as Partial<Layout>
+    const { grid, browserOpen, dock } = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}') as Partial<Layout>
+    return { ...(grid !== undefined ? { grid } : {}), ...(browserOpen !== undefined ? { browserOpen } : {}), ...(dock ? { dock } : {}) }
   } catch {
     return {}
   }
 }
+const PPS_KEY = (projectId: string) => `mobdaw.studio.pps.${projectId}`
+function loadPps(projectId: string): number | null {
+  try {
+    const v = Number(localStorage.getItem(PPS_KEY(projectId)))
+    return Number.isFinite(v) && v > 0 ? v : null
+  } catch {
+    return null
+  }
+}
 
-const WATCHED = [tracksMap, clipsMap, notesMap, devicesMap, loopersMap, padsMap, lanesMap, pointsMap, samplesMap]
+// (meta: tempo, meter and loop changes redraw the views too)
+const WATCHED = [metaMap, tracksMap, clipsMap, notesMap, devicesMap, loopersMap, padsMap, lanesMap, pointsMap, samplesMap]
 
 export class Studio {
   readonly s: Session
@@ -95,6 +112,8 @@ export class Studio {
   /** Device id -> param id -> a collaborator's in-progress drag value. */
   remoteDrags = new Map<string, Map<number, number>>()
   statusText = ''
+  /** Whether this project's zoom was remembered on this device; when not, the arrangement zooms to fit on first open. */
+  readonly zoomRemembered: boolean
 
   private subs = new Map<StudioEvent, Set<(arg: never) => void>>()
   private raf = 0
@@ -109,9 +128,12 @@ export class Studio {
     this.readOnly = readOnly
     const layout = loadLayout()
     const narrow = typeof innerWidth === 'number' && innerWidth < 900
+    const pps = loadPps(s.projectId)
+    this.zoomRemembered = pps != null
     this.ui = {
-      pps: 80, selection: [], focusTrack: null, editing: null, dock: { open: !narrow, tab: 'clip', height: 300 }, browserOpen: !narrow,
+      pps: pps ?? 80, selection: [], focusTrack: null, editing: null, dock: { open: !narrow, tab: 'clip', height: 300 }, browserOpen: !narrow,
       view: 'arrange', grid: 0.25, follow: true, armedTrack: null, note: null, pad: null, looperArm: null, autoOpen: [],
+      narrow: typeof innerWidth === 'number' && innerWidth < 600,
       ...layout,
     }
     if (narrow) this.ui.browserOpen = false
@@ -157,11 +179,14 @@ export class Studio {
   /** Merge into the UI state, remember the layout bits on this device, and announce it. */
   setUi(patch: Partial<UiState>) {
     Object.assign(this.ui, patch)
-    if ('pps' in patch || 'grid' in patch || 'browserOpen' in patch || 'dock' in patch) {
-      const { pps, grid, browserOpen, dock } = this.ui
+    if ('grid' in patch || 'browserOpen' in patch || 'dock' in patch) {
+      const { grid, browserOpen, dock } = this.ui
       try {
-        localStorage.setItem(LAYOUT_KEY, JSON.stringify({ pps, grid, browserOpen, dock } satisfies Layout))
+        localStorage.setItem(LAYOUT_KEY, JSON.stringify({ grid, browserOpen, dock } satisfies Layout))
       } catch { /* private mode: the layout is just not remembered */ }
+    }
+    if ('pps' in patch) {
+      try { localStorage.setItem(PPS_KEY(this.s.projectId), String(this.ui.pps)) } catch { /* not remembered */ }
     }
     if ('selection' in patch) this.s.setLocal({ selection: this.ui.selection })
     if ('armedTrack' in patch) this.rec.sync()
@@ -254,8 +279,13 @@ export class Studio {
   }
 
   // --- selection
-  select(ids: string[]) {
+  /** Select clips. A single clip also opens in the dock's clip tab (`open`: false leaves the dock alone, e.g. on a press that may become a drag). */
+  select(ids: string[], open = true) {
     const first = ids.length ? clipsMap(this.doc).get(ids[0])?.get('trackId') as string | undefined : undefined
+    if (open && ids.length === 1 && first) {
+      if (this.ui.editing === ids[0] && this.ui.dock.open && this.ui.dock.tab === 'clip') return this.setUi({ selection: ids, focusTrack: first })
+      return this.setUi({ selection: ids, editing: ids[0], note: null, dock: { ...this.ui.dock, open: true, tab: 'clip' }, focusTrack: first })
+    }
     this.setUi({ selection: ids, ...(first ? { focusTrack: first } : {}) })
   }
   /** Open a clip in the dock's clip tab (null: close it). */
@@ -276,11 +306,21 @@ export class Studio {
     const { s } = this
     return { doc: this.doc, projectId: s.projectId, me: s.userId == null ? null : { id: s.userId, name: s.user.username }, rate: this.rate }
   }
-  /** A new track with the next colour. */
+  /** A name for a new track, numbered per kind ("drums 3"). */
+  trackName(base: string) { return numberedName(getTracks(this.doc).map((t) => t.name), base) }
+  /** A new track with the next colour (unnamed: "audio 2", "instrument 1"…). */
   addTrack(kind: TrackKind = 'audio', name?: string) {
     const tracks = getTracks(this.doc)
-    const n = tracks.length + 1
-    return addTrack(this.doc, name ?? `${kind === 'audio' ? 'track' : kind} ${n}`, kind, undefined, undefined, tracks.length % 8)
+    return addTrack(this.doc, name ?? this.trackName(kind === 'midi' ? 'instrument' : kind), kind, undefined, undefined, tracks.length % 8)
+  }
+  /**
+   * A tempo change in steps (the top bar's tempo drag): positions scale from where they were when it began, so a
+   * drag back and forth doesn't drift, and the whole change is one undo step. Call `end()` when the drag ends.
+   */
+  beginTempoChange(): { set(bpm: number): void; end(): void } {
+    this.undo.stopCapturing()
+    const ch = beginTempoChange(this.doc)
+    return { set: (bpm) => { if (!this.readOnly) ch.set(bpm) }, end: () => { ch.end(); this.undo.stopCapturing() } }
   }
   /** A MIDI clip at the project tempo, four bars long; a drum grid clip is a one-bar pattern looped across them. Opened in the dock. */
   newMidiClip(trackId: string, at: number, drums = false) {
@@ -370,9 +410,10 @@ export class Studio {
     if (ui.note && !notesMap(doc).has(ui.note)) ui.note = null
     if (ui.pad && !padsMap(doc).has(ui.pad)) ui.pad = null
     if (ui.focusTrack && ui.focusTrack !== MASTER_TRACK && !tracks.has(ui.focusTrack)) ui.focusTrack = null
-    if (ui.armedTrack && !tracks.has(ui.armedTrack)) { // the armed track was deleted
-      ui.armedTrack = null
+    if (ui.armedTrack && !tracks.has(ui.armedTrack)) { // the armed track was deleted (setUi: the record button hears of it)
       if (!this.rec.take) this.pb?.recorder.disarm()
+      this.setUi({ armedTrack: null })
+      this.emit('transport')
     }
     this.rec.sync()
     this.auto.load(doc, this.position())

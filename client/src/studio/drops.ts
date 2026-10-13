@@ -1,7 +1,9 @@
 // Drag-and-drop between studio views (browser → lanes, track headers, the dock's rack, the mixer).
 // The payload travels as JSON under DND_MIME. During dragover only the type list is readable, so use `hasPayload`.
-import { DEVICES, MASTER_TRACK, addAudioClip, addDevice, getDevices, getSamples, getTracks, isDrum, type TrackKind } from '@mobdaw/shared'
+import { DEVICES, MASTER_TRACK, addAudioClip, addDevice, getClips, getDevices, getSamples, getTracks, isDrum, type TrackKind } from '@mobdaw/shared'
+import type * as Y from 'yjs'
 import { addDrumKit, addEffectPreset, addInstrument, applyInstrumentPreset, drumKit, effectPreset, instrumentPreset } from '../content/presets'
+import { hasFullRangeInstrument, isDrumTrack } from './arrange/kinds'
 import type { Studio } from './studio'
 
 export const DND_MIME = 'application/x-mobdaw'
@@ -37,15 +39,35 @@ export function payloadTrackKind(p: DropPayload): TrackKind | null {
   return null
 }
 
-/** Whether the payload can go on that track (or the master). */
+/**
+ * Whether the payload goes onto that track itself (pure). Not when the track is of the wrong kind (an instrument on an
+ * audio track), nor a drum kit onto a track whose synth plays every key, nor an instrument onto a drum track: those make
+ * a new track instead (see applyDrop).
+ */
+export function landsOn(doc: Y.Doc, p: DropPayload, trackId: string): boolean {
+  if (trackId === MASTER_TRACK) return p.kind === 'effect' || p.kind === 'chain'
+  const t = getTracks(doc).find((x) => x.id === trackId)
+  if (!t) return false
+  const need = payloadTrackKind(p)
+  if (need && need !== t.kind) return false
+  if (t.role === 'click' && (p.kind === 'instrument' || p.kind === 'kit')) return false
+  const devices = getDevices(doc)
+  if (p.kind === 'kit') return !hasFullRangeInstrument(trackId, devices)
+  if (p.kind === 'instrument') {
+    const pre = instrumentPreset(p.id)
+    // the same synth already there changes its sound; a drum track gets a track of its own for the synth
+    if (pre && devices.some((d) => d.trackId === trackId && d.type === pre.type && !isDrum(d))) return true
+    return !isDrumTrack(trackId, devices, getClips(doc)) || hasFullRangeInstrument(trackId, devices)
+  }
+  return true
+}
+
+/** Whether the payload can be dropped there: on the master only effects; on any track anything (a new track when it doesn't fit). */
 export function canDrop(st: Studio, p: DropPayload, trackId: string | null | undefined): boolean {
   if (st.readOnly) return false
   if (!trackId) return true
   if (trackId === MASTER_TRACK) return p.kind === 'effect' || p.kind === 'chain'
-  const t = getTracks(st.doc).find((x) => x.id === trackId)
-  if (!t) return false
-  const need = payloadTrackKind(p)
-  return !need || need === t.kind
+  return getTracks(st.doc).some((x) => x.id === trackId)
 }
 
 /**
@@ -56,7 +78,7 @@ export function applyDrop(st: Studio, p: DropPayload, target: DropTarget = {}): 
   if (st.readOnly) return null
   const doc = st.doc
   let trackId = target.trackId ?? null
-  if (trackId && !canDrop(st, p, trackId)) trackId = null
+  if (trackId && (!canDrop(st, p, trackId) || !landsOn(doc, p, trackId))) trackId = null
   let landed: string | null = null
   doc.transact(() => {
     const need = payloadTrackKind(p)
@@ -75,7 +97,7 @@ export function applyDrop(st: Studio, p: DropPayload, target: DropTarget = {}): 
       case 'kit': {
         const kit = drumKit(p.id)
         if (!kit) return
-        addDrumKit(doc, make('drums'), kit)
+        addDrumKit(doc, make(st.trackName('drums')), kit)
         break
       }
       case 'effect': {

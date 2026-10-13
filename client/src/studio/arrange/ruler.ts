@@ -39,7 +39,9 @@ export function selectionRange(st: Studio): { start: number; end: number } | nul
 export function toggleLoop(st: Studio) {
   if (st.readOnly) return
   const t = st.tempo()
+  st.undo.stopCapturing()
   setLoop(st.doc, toggledLoop(getLoop(st.doc), st.position(), t, st.rate, selectionRange(st), stepSamples(st.ui.grid, t, st.rate)))
+  st.undo.stopCapturing()
 }
 
 export function mountRuler(st: Studio, scroll: HTMLElement) {
@@ -59,7 +61,9 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
   const at = (clientX: number) => st.fromX(clientX - body.getBoundingClientRect().left)
   const drag = (e: PointerEvent, move: (m: PointerEvent) => void, up?: () => void) => {
     e.preventDefault()
+    st.undo.stopCapturing() // each drag is its own undo step (a resize then a move are two)
     const done = () => {
+      st.undo.stopCapturing()
       removeEventListener('pointermove', move)
       removeEventListener('pointerup', done)
       removeEventListener('pointercancel', done)
@@ -73,6 +77,8 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
   }
   const minLen = () => stepSamples(st.ui.grid, st.tempo(), st.rate)
   const write = (l: LoopRegion | null) => setLoop(doc, l)
+  /** A one-off loop change (menu, double-click): its own undo step. */
+  const writeOnce = (l: LoopRegion | null) => { st.undo.stopCapturing(); write(l); st.undo.stopCapturing() }
 
   el.onpointerdown = (e) => {
     if (e.button !== 0) return
@@ -108,8 +114,8 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     if (st.readOnly) return
     const y = e.clientY - body.getBoundingClientRect().top
     const loop = getLoop(doc)
-    if (loop && (e.target === brace || e.target === hl || e.target === hr || y < STRIP + 1)) write({ ...loop, on: !loop.on })
-    else if (!loop && y < STRIP + 1) write(loopAround(at(e.clientX), st.tempo(), st.rate))
+    if (loop && (e.target === brace || e.target === hl || e.target === hr || y < STRIP + 1)) writeOnce({ ...loop, on: !loop.on })
+    else if (!loop && y < STRIP + 1) writeOnce(loopAround(at(e.clientX), st.tempo(), st.rate))
   }
   el.oncontextmenu = (e) => {
     e.preventDefault()
@@ -120,11 +126,11 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     const step = stepSamples(st.ui.grid, t, st.rate)
     const here = at(e.clientX)
     popover(el, [
-      { label: 'loop selection', disabled: !sel, run: () => write(toggledLoop(null, 0, t, st.rate, sel, step)) },
-      { label: 'loop these 4 bars', run: () => write(loopAround(here, t, st.rate)) },
+      { label: 'loop selection', disabled: !sel, run: () => writeOnce(toggledLoop(null, 0, t, st.rate, sel, step)) },
+      { label: 'loop these 4 bars', run: () => writeOnce(loopAround(here, t, st.rate)) },
       'sep',
-      { label: loop?.on ? 'loop off' : 'loop on', hint: 'L', disabled: !loop, run: () => loop && write({ ...loop, on: !loop.on }) },
-      { label: 'clear loop', disabled: !loop, run: () => write(null) },
+      { label: loop?.on ? 'loop off' : 'loop on', hint: 'L', disabled: !loop, run: () => loop && writeOnce({ ...loop, on: !loop.on }) },
+      { label: 'clear loop', disabled: !loop, run: () => writeOnce(null) },
     ], [e.clientX, e.clientY])
   }
 

@@ -6,7 +6,7 @@ import { MASTER_TRACK, clipsMap, getTracks, gridSamples, samplesPerBar, tracksMa
 import {
   clipboard, copyClips, cutClips, duplicateClips, nudgeClips, pasteClips, timelineClips,
 } from '../clipboard'
-import { registerKeys } from '../keys'
+import { pressedInDock, registerKeys } from '../keys'
 import type { Studio } from '../studio'
 
 export function registerArrangeKeys(st: Studio) {
@@ -45,8 +45,8 @@ export function registerArrangeKeys(st: Studio) {
   }
   function toggleTrack(field: 'muted' | 'soloed') {
     const id = focused()
-    if (!id) return st.status('click a track header first')
-    updateTrack(doc, id, { [field]: !tracksMap(doc).get(id)?.get(field) })
+    if (!id) return st.status('Click a track header first.')
+    step(() => updateTrack(doc, id, { [field]: !tracksMap(doc).get(id)?.get(field) }))
   }
 
   return registerKeys(st, [
@@ -69,9 +69,9 @@ export function registerArrangeKeys(st: Studio) {
     { key: 'a', mods: { mod: true }, run: () => st.select(timelineClips(doc)), label: 'select all clips', group: 'Editing', readOnly: true },
     { key: 'escape', when: () => hasSel() && !(st.ui.editing || st.ui.looperArm || st.ui.pad || st.ui.note),
       run: () => st.select([]), label: 'select nothing', group: 'Editing', readOnly: true },
-    { key: ['arrowleft', 'arrowright'], when: () => hasSel() && !st.ui.note, repeat: true,
+    { key: ['arrowleft', 'arrowright'], when: () => hasSel() && !(st.ui.note && pressedInDock(st)), repeat: true,
       run: (e) => nudge(e.key === 'ArrowLeft' ? -1 : 1, false), label: 'nudge clips by a grid step', group: 'Editing', display: '← →' },
-    { key: ['arrowleft', 'arrowright'], mods: { shift: true }, when: () => hasSel() && !st.ui.note, repeat: true,
+    { key: ['arrowleft', 'arrowright'], mods: { shift: true }, when: () => hasSel() && !(st.ui.note && pressedInDock(st)), repeat: true,
       run: (e) => nudge(e.key === 'ArrowLeft' ? -1 : 1, true), label: 'nudge clips by a bar', group: 'Editing', display: '← →' },
     { key: 'm', run: () => toggleTrack('muted'), label: 'mute the selected track', group: 'Editing' },
     { key: 's', mods: { shift: true }, run: () => toggleTrack('soloed'), label: 'solo the selected track', group: 'Editing' },

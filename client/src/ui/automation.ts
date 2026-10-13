@@ -69,6 +69,8 @@ export type RowDeps = {
   /** Timeline sample <-> surface pixel, at the current zoom. */
   x(smp: number): number
   fromX(px: number): number
+  /** A timeline sample on the snap grid (alt / ctrl held: free). Absent: no snapping. */
+  snap?(smp: number, ev: { altKey: boolean; ctrlKey: boolean; metaKey?: boolean }): number
   /** Samples per second (an LFO's phase is `position / rate * hz`). */
   rate: number
 }
@@ -126,12 +128,14 @@ export function autoRow(deps: RowDeps) {
   body.append(surface)
   const el = h('div', { className: 'lane-row auto-row' }, head, body)
 
-  // pointer -> (timeline sample, normalised value)
-  const at = (e: { clientX: number; clientY: number }) => {
+  // pointer -> (timeline sample, on the snap grid unless `free`; normalised value)
+  const at = (e: { clientX: number; clientY: number; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }, free = false) => {
     const r = body.getBoundingClientRect()
     const v = clamp(1 - (e.clientY - r.top - PAD) / (AUTO_H - 2 * PAD), 0, 1)
     const n = view.def.max - view.def.min
-    return { pos: Math.max(0, deps.fromX(e.clientX - r.left)), value: view.def.options && n > 0 ? Math.round(v * n) / n : v }
+    const raw = Math.max(0, deps.fromX(e.clientX - r.left))
+    const pos = !free && deps.snap ? deps.snap(raw, { altKey: !!e.altKey, ctrlKey: !!e.ctrlKey, metaKey: !!e.metaKey }) : raw
+    return { pos, value: view.def.options && n > 0 ? Math.round(v * n) / n : v }
   }
   const newCurve = (): AutoCurve => (view.def.options ? 'hold' : 'linear')
   const livePoints = () => [...pointsMap(doc).values()].map((p) => p.toJSON() as Point).filter((p) => p.laneId === lane.id)
@@ -141,13 +145,13 @@ export function autoRow(deps: RowDeps) {
     if (readOnly || e.button !== 0 || e.target !== surface || laneState(lane) === 'lfo') return
     e.preventDefault()
     deps.grab()
-    const first = at(e)
+    const first = at(e, e.shiftKey)
     if (e.shiftKey) {
       let prev = first
       addPoint(doc, lane.id, first.pos, first.value, 'linear')
       dragPointer(e, {
         onDrag: (m) => {
-          const q = at(m)
+          const q = at(m, true) // (freehand: no grid)
           if (Math.abs(deps.x(q.pos) - deps.x(prev.pos)) < FREEHAND_PX) return
           const [lo, hi] = [Math.min(prev.pos, q.pos), Math.max(prev.pos, q.pos)]
           doc.transact(() => {

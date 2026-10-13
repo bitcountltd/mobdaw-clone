@@ -29,6 +29,15 @@ export function stepVelocity(v: number, dir: 1 | -1): number {
 
 const PREFS = 'mobdaw.qwerty'
 
+/**
+ * The physical keys the instrument takes while it is on: the note keys, Z / X / C / V, and M (it sits among them on the
+ * bottom row). With or without shift they do nothing else then (⇧S doesn't solo, M doesn't mute), except ⇧K, which
+ * turns the instrument off. Keys with ⌘ / ctrl / alt keep their shortcuts.
+ */
+export const TAKEN_CODES = new Set([...Object.keys(QWERTY_KEYS), 'KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyM'])
+export const takenByKeys = (e: Pick<KeyboardEvent, 'code' | 'shiftKey' | 'ctrlKey' | 'metaKey' | 'altKey'>) =>
+  TAKEN_CODES.has(e.code) && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.shiftKey && e.code === 'KeyK')
+
 export class Qwerty {
   on = false
   octave = 0
@@ -115,10 +124,10 @@ export function mountQwerty(st: Studio) {
   const early = (e: KeyboardEvent) => {
     if (!q.on || e.defaultPrevented || e.isComposing || isTyping(e.target) || (e.target as Element | null)?.closest?.('dialog')) return
     const b = pick(mine, e, IS_MAC, true)
-    if (!b) return
+    if (!b && !takenByKeys(e)) return
     e.preventDefault()
     e.stopImmediatePropagation()
-    if (!e.repeat) b.run(e)
+    if (b && !e.repeat) b.run(e)
   }
   addEventListener('keydown', early, true)
   const up = (e: KeyboardEvent) => q.release(e.code, e.timeStamp || performance.now())

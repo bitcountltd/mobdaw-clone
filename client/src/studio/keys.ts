@@ -139,6 +139,19 @@ export function isTyping(target: EventTarget | null): boolean {
 
 export const ZOOM_MIN = 10, ZOOM_MAX = 800
 
+/** A focused control that Enter activates (a button, a link, a menu item). */
+export function activates(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  return !!el?.closest?.('button, a[href], summary, [role="button"], [role="menuitem"], [role="tab"], [role="option"]')
+}
+
+/**
+ * Whether the last press (pointer or focus) was in the dock: note edits (Delete, arrows) only act on the open clip's
+ * notes then. After a press in the arrangement, the same keys act on the selected clips, even with a note selected.
+ */
+const lastInDock = new WeakMap<Studio, () => boolean>()
+export const pressedInDock = (st: Studio) => lastInDock.get(st)?.() ?? false
+
 /** The studio's own shortcuts and the dispatcher. */
 export function mountKeys(st: Studio) {
   const { doc, undo } = st
@@ -148,6 +161,11 @@ export function mountKeys(st: Studio) {
   const onSource = (id: string) => tracksMap(doc).get(String(clipsMap(doc).get(id)?.get('trackId')))?.get('kind') === 'soundscape'
   const zoom = (f: number) => st.setUi({ pps: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, st.ui.pps * f)) })
   const help = () => window.dispatchEvent(new Event('mobdaw:help'))
+  let inDock = false
+  const press = (e: Event) => { const t = e.target as Element | null; inDock = !!t?.closest?.('.dock') }
+  addEventListener('pointerdown', press, true)
+  addEventListener('focusin', press, true)
+  lastInDock.set(st, () => inDock || !!document.activeElement?.closest('.dock'))
 
   const off = registerKeys(st, [
     // transport
@@ -165,7 +183,7 @@ export function mountKeys(st: Studio) {
     }, label: 'split at the playhead', group: 'Editing' },
     { key: ['delete', 'backspace'], run: () => {
       const { ui } = st
-      if (ui.note) {
+      if (ui.note && (pressedInDock(st) || !ui.selection.length)) {
         deleteNote(doc, ui.note)
         st.setUi({ note: null })
       } else if (ui.pad) {
@@ -189,6 +207,7 @@ export function mountKeys(st: Studio) {
 
   const key = (e: KeyboardEvent) => {
     if (e.defaultPrevented || e.isComposing || isTyping(e.target)) return
+    if (e.key === 'Enter' && activates(e.target)) return // Enter presses a focused button or link (not "back to the start")
     const b = pick(reg(st).entries, e, IS_MAC, st.readOnly)
     if (!b) return
     if (!b.passive) e.preventDefault()
@@ -196,5 +215,5 @@ export function mountKeys(st: Studio) {
     b.run(e)
   }
   addEventListener('keydown', key)
-  return { destroy: () => (off(), removeEventListener('keydown', key)) }
+  return { destroy: () => (off(), removeEventListener('keydown', key), removeEventListener('pointerdown', press, true), removeEventListener('focusin', press, true)) }
 }

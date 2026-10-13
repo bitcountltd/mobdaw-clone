@@ -53,7 +53,9 @@ export function mountArrange(st: Studio) {
     if (!(e.ctrlKey || e.metaKey)) return
     e.preventDefault()
     anchor = e.clientX
-    st.setUi({ pps: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, st.ui.pps * Math.exp(-e.deltaY * 0.01))) })
+    // gentle steps: a mouse wheel notch (deltaY ±100…200) is at most about ×1.35
+    const f = Math.exp(Math.max(-0.3, Math.min(0.3, -e.deltaY * 0.0025)))
+    st.setUi({ pps: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, st.ui.pps * f)) })
   }, { passive: false })
 
   /** Keep the playhead in view: while playing it pages right when it runs off the edge; a jump back (rewind) follows too. */
@@ -83,12 +85,25 @@ export function mountArrange(st: Studio) {
     scroll.scrollLeft = 0
   }
   addEventListener(ZOOM_FIT, zoomFit)
+  // A project's first open on this device (no zoom remembered for it) shows the whole song (D3).
+  let fitRaf = 0
+  if (!st.zoomRemembered) void st.s.synced.then(() => {
+    let tries = 0
+    const fit = () => {
+      fitRaf = 0
+      if (st.destroyed) return
+      if (scroll.clientWidth - HEADER - 24 > 0) return zoomFit()
+      if (++tries < 60) fitRaf = requestAnimationFrame(fit) // (not laid out yet)
+    }
+    fitRaf = requestAnimationFrame(() => (fitRaf = requestAnimationFrame(fit)))
+  })
 
   /** The scroll area spans the whole timeline (the ruler and the lanes inside it are as wide). */
   const size = () => (content.style.width = `${HEADER + st.x(st.extent())}px`)
   const offs = [
     st.on('doc', size),
     st.on('ui', (p) => {
+      if ('narrow' in p) size()
       if (!('pps' in p)) return
       size()
       if (st.ui.pps !== lastPps) zoomed()
@@ -101,6 +116,7 @@ export function mountArrange(st: Studio) {
     destroy() {
       offs.forEach((f) => f())
       removeEventListener(ZOOM_FIT, zoomFit)
+      cancelAnimationFrame(fitRaf)
       grid.destroy()
       lanes.destroy()
       headers.destroy()
