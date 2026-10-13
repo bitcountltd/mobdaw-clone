@@ -1,7 +1,7 @@
 // The dock's clip tab: the open clip's editor. A MIDI clip gets the piano roll (or the drum grid for a `view: 'drums'`
 // clip) at its own horizontal zoom; an audio clip gets a small panel (gain, fades, fade shape, loop).
 import {
-  DEVICES, clipsMap, getClips, getDevices, getNotes, getSamples, getTracks, isDrum, isLooping, updateClip,
+  DEVICES, clipsMap, getClips, getDevices, getNotes, getSamples, getTracks, isLooping, updateClip,
   type AudioClip, type Clip, type FadeShape, type MidiClip,
 } from '@mobdaw/shared'
 import { h } from '../../dom'
@@ -75,7 +75,6 @@ export function mountClipEditor(st: Studio) {
     if (editor === dg) {
       const instruments = getDevices(doc).filter((d) => d.trackId === c.trackId && DEVICES[d.type]?.instrument)
       dg.update(c, notes, instruments, zoom, c.lengthTicks)
-      editor.el.style.setProperty('--dg-rows', String(instruments.filter(isDrum).length))
     } else ne.update(c, notes, st.ui.note, zoom, c.lengthTicks)
   }
 

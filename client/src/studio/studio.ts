@@ -4,7 +4,7 @@
 import {
   DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, MASTER_TRACK, addAudioClip, addLane, addMidiClip, addPad, addPoint, addTrack, clipLength, clipsMap,
   deleteLane, devicesMap, getClips, getPads, getPoints, getSampleRate, getTempo, getTracks, laneOf, lanesMap, loopersMap, metaMap,
-  migrateToV2, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, setLaneEnabled, setLaneState, snapToGrid, stashLaneRanges,
+  migrateToV2, notesMap, padsMap, paramToPos, pointsMap, resolveTarget, samplesMap, setLaneEnabled, setLaneState, stashLaneRanges,
   sweepOrphans, tracksMap, type AwarenessState, type GridSize, type ParamTarget, type Tempo, type TrackKind,
 } from '@mobdaw/shared'
 import type * as Y from 'yjs'
@@ -17,6 +17,7 @@ import { automateMenu } from '../ui/automation'
 import { AutoState } from './autoState'
 import { PedalCtl } from './pedalCtl'
 import { RecordingCtl } from './recordingCtl'
+import { snapPosition, type SnapMods } from './snap'
 
 export type DockTab = 'clip' | 'devices'
 export type UiState = {
@@ -168,9 +169,8 @@ export class Studio {
   x(smp: number) { return (smp / this.rate) * this.ui.pps }
   fromX(px: number) { return Math.max(0, Math.round((px / this.ui.pps) * this.rate)) }
   /** Timeline sample `smp` on the snap grid; held alt or ctrl (`ev`) means no snap. */
-  snap(smp: number, ev?: { altKey: boolean; ctrlKey: boolean }) {
-    if (ev && (ev.altKey || ev.ctrlKey)) return Math.max(0, Math.round(smp))
-    return snapToGrid(smp, this.ui.grid, this.tempo(), this.rate)
+  snap(smp: number, ev?: SnapMods) {
+    return snapPosition(smp, this.ui.grid, this.tempo(), this.rate, ev)
   }
   /** Where the main timeline's scroll area ends (samples): past the last clip or region, at least a minute. */
   extent() {
