@@ -9,7 +9,9 @@
 .studio .ce-tools input.numfield[hidden] { display: none; }
 .studio .ce-loop { display: inline-flex; gap: 4px; align-items: center; }
 .studio .ce-sep { flex: none; width: 1px; height: 18px; background: var(--line); }
-.studio .ce-grid { height: 24px; padding: 0 6px; font-size: var(--fs-sm); }
+.studio .ce-grid { height: 24px; padding: 0 22px 0 6px; font-size: var(--fs-sm); }
+.studio .toggle.ce-loop-t { width: auto; height: 24px; padding: 0 8px 0 6px; border-radius: var(--r-sm); }
+.studio .ce-loop-in { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); }
 .studio .dock .btn.sm { min-height: 24px; padding: 2px 10px; gap: 4px; font-size: var(--fs-sm); font-weight: 500; }
 .studio .dock .btn.sm svg { margin-left: -3px; }
 .studio .dock .seg > button { padding: 2px 8px; }
@@ -120,9 +122,9 @@
 .studio .dg-row:hover { --cell: #2b2e33; }
 .studio .dg-cells.fine .dg-row { background-size: var(--bar) 100%, var(--step) calc(100% - 6px), calc(var(--beat) * 2) 100%; background-image: linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to right, var(--cell) calc(var(--step) - 1px), transparent calc(var(--step) - 1px)), linear-gradient(to right, rgba(235, 230, 220, .03) var(--beat), transparent var(--beat)); }
 .studio .dg-hit { position: absolute; top: 3px; bottom: 3px; overflow: hidden; border-radius: 3px; pointer-events: none;
-  background: color-mix(in srgb, var(--tc) calc(40% + var(--v, 1) * 60%), #1d1e22);
+  /* velocity is how strongly it takes the colour: a soft hit is still plainly on (at least 58%), a hard one full */
+  background: color-mix(in srgb, var(--tc) calc(58% + var(--v, 1) * 42%), #1d1e22);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 1px 2px rgba(0, 0, 0, .35); }
-.studio .dg-hit::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: calc((1 - var(--v, 1)) * 100%); background: rgba(12, 12, 14, .32); }
 .studio .dg-hit.rep { opacity: .38; }
 .studio .dg-rep { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(10, 10, 12, .38); border-left: 1px solid var(--line-strong); pointer-events: none; }
 .studio .dg-cells .pr-playhead { z-index: 2; }

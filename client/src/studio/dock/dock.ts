@@ -42,7 +42,7 @@ export function mountDock(st: Studio) {
 
   // A fresh session starts shut (an empty dock on first load is just in the way) until there is something to show.
   let touched = false
-  if (!(st.ui.dock.height >= MIN_H)) st.ui.dock.height = DEFAULT_H
+  if (!(st.ui.dock.height >= MIN_H)) st.ui.dock.height = Math.max(MIN_H, Math.min(DEFAULT_H, Math.round(innerHeight * 0.36))) // (less on a short screen)
   st.ui.dock.height = Math.min(st.ui.dock.height, dockMax(innerHeight))
   st.ui.dock = { ...st.ui.dock, open: false }
   const offFirst = st.on('ui', (p) => {

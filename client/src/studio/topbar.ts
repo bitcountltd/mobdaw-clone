@@ -297,7 +297,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     const row = (label: string, ...kids: (Node | null)[]) => h('div', { className: 'mp-row' }, h('span', { className: 'mp-label' }, label), ...kids)
     const act = (ic: Parameters<typeof icon>[0], label: string, run: () => void, hint?: string, disabled = false, on?: boolean) =>
       h('button', { className: 'mp-act', type: 'button', disabled, 'aria-pressed': on == null ? undefined : String(on), onclick: () => { close(); run() } },
-        icon(ic), h('span', {}, label), on == null ? null : h('span', { className: `mp-state${on ? ' on' : ''}` }, on ? 'on' : 'off'), hint ? h('span', { className: 'kbd-hint' }, hint) : null)
+        icon(ic), h('span', {}, label), on == null ? h('span', {}) : h('span', { className: `mp-state${on ? ' on' : ''}` }, on ? 'on' : 'off'), h('span', { className: 'kbd-hint' }, hint ?? ''))
     const q = qwertyOf(st)
     const tempo = numberField({ value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, onChange: (v) => !readOnly && setProjectTempo(doc, v) })
     const meter = segmented(['2', '3', '4', '5', '6', '7'], String(st.tempo().beatsPerBar), (v) => !readOnly && setBeatsPerBar(doc, Number(v)))
@@ -313,7 +313,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       shown(undoBtn) ? null : act('undo', 'undo', () => undo.undo(), `${MOD}Z`, readOnly || !undo.undoStack.length),
       shown(redoBtn) ? null : act('redo', 'redo', () => undo.redo(), MAC ? '⇧⌘Z' : 'ctrl+shift+Z', readOnly || !undo.redoStack.length),
       shown(metro.el) ? null : act('metronome', 'metronome', toggleClick, undefined, readOnly, metro.get()),
-      shown(countBtn.el) || readOnly ? null : act('metronome', 'count-in: one bar before recording', () => countBtn.el.click(), undefined, false, countInOn),
+      shown(countBtn.el) || readOnly ? null : act('metronome', 'count-in (one bar)', () => countBtn.el.click(), undefined, false, countInOn),
       shown(keysBtn.el) || !q ? null : act('keyboard', 'computer keyboard', () => keysBtn.el.click(), '⇧K', false, !!q?.on),
       shown(pedalBtn.el) || readOnly ? null : act('power', 'loop pedal', () => void st.pedal.set(!st.pedal.on), '', !!st.pedal.why() && !st.pedal.on, st.pedal.on),
       shown(browserBtn.el) ? null : act('browser', 'browser', () => st.setUi({ browserOpen: !st.ui.browserOpen }), 'B', false, st.ui.browserOpen),

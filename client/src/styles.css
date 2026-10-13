@@ -382,7 +382,7 @@ button.danger:hover { color: var(--danger); }
 .fcurve .node.on { r: 5; }
 .fcurve .node.off { fill: var(--dim); opacity: .5; }
 .fcurve .node.stuck { opacity: .6; }
-.fcurve .ticks text { fill: var(--dim); font-size: 8px; pointer-events: none; opacity: .7; }
+.fcurve .ticks text { fill: var(--muted); font-size: 11px; pointer-events: none; }
 .fcurve .read { fill: var(--muted); font-size: 11px; pointer-events: none; }
 .dev .prm[hidden] { display: none; }
 .dev.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); background: var(--panel); }

@@ -57,7 +57,7 @@ export function filterCurve(opts: CurveOpts) {
   const resp = svg('path', { class: 'resp' })
   const nodes = svg('g', { class: 'nodes' })
   const ticks = svg('g', { class: 'ticks' })
-  const read = svg('text', { class: 'read', y: 10, 'text-anchor': 'end' })
+  const read = svg('text', { class: 'read', y: 12, 'text-anchor': 'end' })
   const el = svg('svg', { class: 'fcurve', height: opts.height ?? 112 })
   el.append(grid, ticks, bands, resp, nodes, read)
 

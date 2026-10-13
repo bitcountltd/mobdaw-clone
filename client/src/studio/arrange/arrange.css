@@ -204,7 +204,7 @@
 .studio .master-chip { height: 20px; padding: 0 8px 0 6px; gap: 4px; font-size: var(--fs-xs); color: var(--dim); background: var(--raise); border-color: var(--line); }
 .studio .master-chip svg { color: var(--dim); }
 .studio .master-body:hover .master-chip { color: var(--fg); border-color: var(--line-strong); }
-.studio .master-chip.off { text-decoration: line-through; text-decoration-color: var(--faint); opacity: .6; }
+.studio .master-chip.off { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
 
 /* --- the empty arrangement, and the add-track button below the tracks */
 .studio .arr-lanes.empty .lane.master { flex: none; }

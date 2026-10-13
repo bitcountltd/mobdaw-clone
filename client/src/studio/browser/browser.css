@@ -61,10 +61,10 @@
 .brow-wave { flex: none; width: 40px; height: 16px; opacity: .85; }
 .brow-play {
   flex: none; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; margin-right: -2px;
-  border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer;
+  border: 0; border-radius: 50%; background: none; color: var(--dim); opacity: .6; cursor: pointer;
 }
 /* at rest a quiet glyph (so it can be found), a round button under the pointer */
-.brow:hover .brow-play, .brow:focus .brow-play { background: var(--line); color: var(--fg); }
+.brow:hover .brow-play, .brow:focus .brow-play { opacity: 1; background: var(--line); color: var(--fg); }
 .brow-play:hover { background: var(--line-strong); }
 .brow-play.on { opacity: 1; background: var(--accent); color: var(--on-accent); }
 
