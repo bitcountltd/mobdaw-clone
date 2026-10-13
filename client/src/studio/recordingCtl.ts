@@ -22,6 +22,7 @@ export class RecordingCtl {
   async arm(id: string) {
     const { pb } = this.st
     if (!pb || this.take) return
+    if (tracksMap(this.st.doc).get(id)?.get('kind') === 'midi') return this.st.midi.arm(id) // (no microphone for a MIDI track)
     if (this.st.ui.armedTrack === id) {
       pb.recorder.disarm()
       this.st.setUi({ armedTrack: null })

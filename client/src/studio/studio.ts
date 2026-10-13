@@ -16,6 +16,7 @@ import { recoverTakes, sweepUnusedTakes, type TakeCtx } from '../takes'
 import { automateMenu } from '../ui/automation'
 import { AutoState } from './autoState'
 import { PedalCtl } from './pedalCtl'
+import { MidiRec } from './midiRecord'
 import { RecordingCtl } from './recordingCtl'
 import { snapPosition, type SnapMods } from './snap'
 
@@ -83,6 +84,8 @@ export class Studio {
 
   readonly rec: RecordingCtl
   readonly pedal: PedalCtl
+  /** Live notes (computer / MIDI keyboard) and MIDI takes. */
+  readonly midi: MidiRec
   /** The automation lanes and what they drive at the playhead. */
   readonly auto = new AutoState()
   /** Collaborators' awareness states, as of the last 'doc'. */
@@ -114,6 +117,7 @@ export class Studio {
     if (narrow) this.ui.browserOpen = false
     this.rec = new RecordingCtl(this)
     this.pedal = new PedalCtl(this)
+    this.midi = new MidiRec(this)
 
     WATCHED.forEach((m) => m(this.doc).observeDeep(this.schedule))
     s.awareness.on('change', this.schedule)
@@ -197,21 +201,26 @@ export class Studio {
   }
   stop() {
     const saveTake = this.rec.end()
+    const saveNotes = this.midi.end()
     void this.pedal.end() // (the take must end before the engine stops)
     this.pb?.stop()
     this.s.setLocal({ playhead: null })
     this.emit('transport')
     this.emit('tick', this.position())
     saveTake?.()
+    saveNotes?.()
   }
   seek(smp: number) {
-    if (this.rec.take || this.pedal.active) return // a take is one continuous stretch of the timeline
+    if (this.rec.take || this.pedal.active || this.midi.active) return // a take is one continuous stretch of the timeline
     this.pb?.seek(smp)
     this.auto.read(this.doc, this.position())
     this.emit('tick', this.position())
   }
   rewind() { this.seek(0) }
-  toggleRecord() { return this.rec.toggle() }
+  toggleRecord() {
+    if (this.midi.active) return this.stop()
+    return !this.rec.take && this.midi.wants() ? this.midi.start() : this.rec.toggle()
+  }
 
   private startTicking() {
     if (!this.tickRaf) this.tickRaf = requestAnimationFrame(this.tick)
@@ -403,6 +412,7 @@ export class Studio {
     cancelAnimationFrame(this.tickRaf)
     this.pedal.destroy()
     this.rec.abandon()
+    this.midi.abandon()
     WATCHED.forEach((m) => m(this.doc).unobserveDeep(this.schedule))
     this.s.awareness.off('change', this.schedule)
     metaMap(this.doc).unobserve(this.rateChanged)
