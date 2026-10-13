@@ -72,12 +72,12 @@ export function noteEditor({ doc, undo, readOnly, selectNote, noteLive }: NoteEd
   layoutRows()
   grid.prepend(tint)
   grid.append(keys)
-  /** The keys hug the left edge of what is visible: the clip scrolls under the timeline's sticky track header. */
+  /** The keys hug the left edge of what is visible: the editor scrolls sideways in the dock (or under a sticky track header). */
   function stickKeys() {
-    const scroller = grid.closest<HTMLElement>('.scroll')
+    const scroller = grid.closest<HTMLElement>('.dock-scroll, .scroll')
     if (!scroller) return
     const head = scroller.querySelector<HTMLElement>('.head')
-    const visible = head ? head.getBoundingClientRect().right : scroller.getBoundingClientRect().left + 146
+    const visible = head ? head.getBoundingClientRect().right : scroller.getBoundingClientRect().left
     keys.style.transform = `translateX(${Math.max(0, visible - grid.getBoundingClientRect().left)}px)`
   }
   const loopEnd = h('div', { className: 'ne-loop', hidden: true }) // the pattern's end: the notes past it are ignored

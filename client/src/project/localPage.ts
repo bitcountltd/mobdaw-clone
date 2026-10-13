@@ -2,7 +2,7 @@ import { h, mount } from '../dom'
 import { homeLink } from '../router'
 import { getLocal, renameLocal } from '../local/projects'
 import { openLocalSession } from '../local/session'
-import { mountTimeline } from '../ui/timeline'
+import { mountStudio } from '../studio/shell'
 
 /** The editor for a project on this device. */
 export function localProjectPage(id: string) {
@@ -12,7 +12,7 @@ export function localProjectPage(id: string) {
     return
   }
   const session = openLocalSession(id)
-  const tl = mountTimeline(session, project.name, false, (n) => renameLocal(id, n))
+  const tl = mountStudio(session, project.name, false, (n) => renameLocal(id, n))
   mount(tl.el)
   return () => {
     tl.destroy()

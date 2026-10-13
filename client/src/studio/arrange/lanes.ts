@@ -1,0 +1,1049 @@
+// The arrangement's lanes: one row per track (its header from tracks.ts, then a body holding clips, soundscape regions and
+// takes in progress), a soundscape's source lane and loopers, the automation sections, and the master row. This is the old
+// timeline core: plain absolutely-positioned DOM, keyed reuse, redrawn from the Studio's events.
+// Positions in the doc are integer samples; the zoom is the Studio's pixels per second.
+import {
+  DEVICES, FINNWAVE, MASTER_TRACK, addDevice, addNextLooper, clipLength, clipsMap, deleteClip, deleteLooper, deletePad, getClips, getDevices, getLoopers, getNotes, getPads,
+  getSamples, getTracks, isForever, isLooping, padsMap, passLength, resolveTarget, trackColor, tracksMap, updateClip, updateLooper, updatePad,
+  type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget, type SampleMeta, type Track,
+} from '@mobdaw/shared'
+import { drawWave, peaksFor, storedPeaks } from '../../audio/peaks'
+import type { PreviewMode } from '../../audio/bridge'
+import { h } from '../../dom'
+import { playable } from '../../samples'
+import { discardTake, hasStaged, isMine, myTakes, uploadAll, uploadTake } from '../../takes'
+import { autoRow } from '../../ui/automation'
+import { clamp, dragPointer, grabAt, passBoundaries, snapTracker, trimBlock, type Grab } from '../../ui/blocks'
+import { LOOP_COLORS, looperCard } from '../../ui/loopers'
+import { closedBy, deleteMenu, popover } from '../../ui/popover'
+import { transportControls, type TransportControls } from '../../ui/transport'
+import type { Studio } from '../studio'
+import { MIN_SEC, loopClip, passClip, setLoopOff, setLoopOn, sourceFrames, trimClip } from './clipOps'
+import { drawTicks } from './ruler'
+import type { mountTrackHeaders } from './tracks'
+
+export const HEADER = 146 // the track header (140) plus the gutter to its left; keep in step with --head / --gutter in arrange.css
+const SNAP_PX = 8 // a dragged clip snaps to an edge within this many px...
+const REARM_PX = 24 // ...and, once pulled free, only snaps to it again after moving this far away
+const LANE_H = 72
+
+const accepts = (trackKind: string, clipKind: string) => trackKind === clipKind
+export const audioFiles = (list: FileList | null | undefined) =>
+  [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name))
+
+/** A scope's automation: one collapsible section holding a lane per automated param (hidden when there are none). */
+type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
+type Lane = {
+  el: HTMLElement; row: HTMLElement; body: HTMLElement
+  loopMore: HTMLButtonElement; loopRow: HTMLElement; loops: HTMLElement
+  loopCards: Map<string, ReturnType<typeof looperCard>>; boxes: Map<string, HTMLElement>; heads: Map<string, HTMLElement>
+  pads: Map<string, HTMLElement>
+  auto: AutoSec
+  loopTc: TransportControls // loops preview transport
+  /** Soundscape tracks only: the source lane, which has its own time axis, scroll and zoom. */
+  src: Src | null
+}
+type Src = {
+  row: HTMLElement; view: HTMLElement; body: HTMLElement; ticks: HTMLElement; pps: number
+  more: HTMLButtonElement // collapse toggle in the header cell
+  tc: TransportControls // source preview transport
+  playhead: HTMLElement // the preview's own playhead, in source time
+  end: number // where the source audio ends (samples)
+}
+type Wave = { cv: HTMLCanvasElement; seams: HTMLElement; first: HTMLElement; label: HTMLElement; sig: string; pk?: Float32Array; v0: number; v1: number }
+
+export type LanesFrame = {
+  /** The arrangement's scroller (both axes): the lanes' horizontal scroll and the visible window for waveforms. */
+  scroll: HTMLElement
+}
+
+export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<typeof mountTrackHeaders>) {
+  const { doc, undo, readOnly, s } = st
+  const { scroll } = frame
+  const lanes = new Map<string, Lane>()
+  const clipEls = new Map<string, HTMLElement>()
+  const waves = new Map<string, Wave>()
+  const recRegions = new Map<string, HTMLElement>()
+  const pedalEls = new Map<string, HTMLElement>() // the pedal's layer being recorded and its live loops
+  const staged = new Map<string, boolean>() // incoming take hash -> whether this device still has its audio
+  const srcShown = new Set<string>() // soundscapes with the source lane expanded (collapsed by default)
+  const loopShown = new Set<string>() // soundscape tracks with the loopers row expanded (collapsed by default)
+  let autoShownBefore = new Set<string>()
+  let destroyed = false
+  let raf = 0
+
+  // --- static structure
+  const laneBox = h('div', { className: 'lanes' })
+  // Background menu "Upload": files go into the clicked track at the clicked position.
+  let bgTarget: { trackId: string; at: number } | null = null
+  const bgPicker = h('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true })
+  bgPicker.onchange = () => {
+    const files = audioFiles(bgPicker.files)
+    bgPicker.value = ''
+    if (bgTarget && files.length) void st.dropFiles(files, bgTarget.trackId, bgTarget.at)
+  }
+  const addLink = h('button', { className: 'add-track', title: 'new track', onclick: () => {
+    popover(addLink, [
+      ['audio', () => st.addTrack('audio')],
+      ['midi', () => { doc.transact(() => { addDevice(doc, st.addTrack('midi'), FINNWAVE) }) }],
+      ['soundscape', () => st.addTrack('soundscape')],
+    ])
+  } }, '+')
+  const overlay = h('div', { className: 'overlay' })
+  const playhead = h('div', { className: 'playhead' })
+  const snapLine = h('div', { className: 'snap-line', hidden: true }) // where a dragged clip just snapped to
+  overlay.append(playhead, snapLine)
+  const hint = h('div', { className: 'hint dim' }, readOnly ? 'nothing here yet.' : 'drop audio files here, or use + track.')
+  const masterAuto = makeAutoSection(MASTER_TRACK, 'global automation')
+  // The master row: its header focuses the master bus (the dock shows its effects); the body names them.
+  const masterHead = headers.master()
+  const masterBody = h('div', { className: 'lane-body master-body dim' })
+  masterBody.onclick = () => masterHead.click()
+  const master = h('div', { className: 'lane master' }, h('div', { className: 'lane-row master-row' }, masterHead, masterBody))
+  const el = h('div', { className: 'arr-lanes' }, master, laneBox, masterAuto.el, hint, readOnly ? null : addLink, bgPicker, overlay)
+
+  const x = (smp: number) => st.x(smp)
+  const rate = () => st.rate
+  const position = () => st.position()
+
+  // --- takes in progress and the loop pedal, drawn into their lanes
+  /** The take so far, drawn into its growing region (the visible part only). */
+  function drawLiveWave(region: HTMLElement, startPx: number, widthPx: number) {
+    const pb = st.pb
+    if (!pb) return
+    let cv = region.querySelector('canvas')
+    if (!cv) region.prepend((cv = h('canvas', { className: 'wave' })))
+    const viewW = scroll.clientWidth || innerWidth
+    const left = HEADER + startPx // region's left edge in scroller-content px
+    const v0 = Math.max(0, Math.floor(scroll.scrollLeft + HEADER - left)), v1 = Math.min(Math.ceil(widthPx), Math.ceil(scroll.scrollLeft + viewW - left))
+    if (v1 <= v0) { cv.style.display = 'none'; return }
+    const dpr = window.devicePixelRatio || 1
+    cv.style.display = ''
+    cv.style.left = `${v0}px`
+    cv.style.width = `${v1 - v0}px`
+    cv.width = Math.max(1, Math.round((v1 - v0) * dpr))
+    cv.height = Math.round(LANE_H * dpr)
+    const fpp = rate() / st.ui.pps // frames per css px
+    drawWave(cv, pb.recorder.peaks, v0 * fpp, (v1 - v0) * fpp)
+  }
+
+  /** The growing regions of takes in progress: ours, and other people's (from their awareness). */
+  function drawRecRegions() {
+    const want = new Map<string, { trackId: string; start: number; end: number; label: string }>()
+    const take = st.rec.take
+    if (take) want.set('me', { trackId: take.trackId, start: take.start, end: position(), label: 'recording' })
+    for (const r of st.remote) {
+      if (r.recording) want.set(`${r.user.username}:${r.recording.trackId}`, { ...r.recording, end: r.playhead ?? r.recording.start, label: `${r.user.username} is recording` })
+    }
+    for (const [k, e] of recRegions) if (!want.has(k)) { e.remove(); recRegions.delete(k) }
+    for (const [k, w] of want) {
+      const body = lanes.get(w.trackId)?.body
+      if (!body) continue
+      let e = recRegions.get(k)
+      if (!e) recRegions.set(k, (e = h('div', { className: 'clip recording' }, w.label)))
+      if (e.parentElement !== body) body.append(e)
+      e.style.left = `${x(w.start)}px`
+      const width = Math.max(2, x(Math.max(w.start, w.end) - w.start))
+      e.style.width = `${width}px`
+      if (k === 'me') drawLiveWave(e, x(w.start), width)
+    }
+  }
+
+  /** The pedal's layer and loops, drawn into their lanes like the take in progress. */
+  function drawPedal() {
+    const v = st.pedal.view()
+    const want = new Map<string, { trackId: string; start: number; end: number; pass: number; cls: string; label: string }>()
+    const now = position()
+    if (v?.layer) want.set('layer', { trackId: v.layer.trackId, start: v.layer.start, end: now, pass: 0, cls: 'clip recording', label: 'recording' })
+    for (const l of v?.loops ?? []) {
+      // a loop with no end is drawn to the seam after the playhead, so its leading edge stays ahead of it
+      const end = l.stopAt ?? l.start + Math.max(1, Math.ceil((now - l.start) / l.pass)) * l.pass
+      want.set(`loop:${l.id}`, { trackId: l.trackId, start: l.start, end, pass: l.pass, cls: `clip live-loop${l.stopAt == null ? ' forever' : ''}`, label: `loop ${l.id}` })
+    }
+    for (const [k, e] of pedalEls) if (!want.has(k)) { e.remove(); pedalEls.delete(k) }
+    for (const [k, w] of want) {
+      const body = lanes.get(w.trackId)?.body
+      if (!body) continue
+      let e = pedalEls.get(k)
+      if (!e) pedalEls.set(k, (e = h('div', { className: w.cls }, h('i', { className: 'seams' }), h('span', { className: 'label' }, w.label))))
+      if (e.parentElement !== body) body.append(e)
+      const width = x(Math.max(0, w.end - w.start))
+      e.hidden = width < 1
+      e.style.left = `${x(w.start)}px`
+      e.style.width = `${width}px`
+      const seams = e.firstElementChild as HTMLElement
+      const pass = x(w.pass)
+      seams.style.display = w.pass && width > pass ? '' : 'none'
+      seams.style.left = `${pass}px`
+      seams.style.width = `${Math.max(0, width - pass)}px`
+      seams.style.backgroundSize = `${pass}px 100%`
+    }
+  }
+
+  function drawPlayhead(p = position()) {
+    playhead.style.left = `${HEADER + x(p)}px`
+    drawRecRegions()
+    drawPedal()
+    // what the automation drives, on the looper cards
+    for (const l of lanes.values()) for (const [id, c] of l.loopCards) if (st.auto.infos.has(id)) c.refresh(st.auto.info(id))
+  }
+
+  // --- automation: lanes (one per automated param) live in a collapsible section per track, and one for the global fx
+  const rowDeps = { doc, readOnly, grab: () => undo.stopCapturing(), x, fromX: (px: number) => st.fromX(px), get rate() { return st.rate } }
+
+  function makeAutoSection(scope: string, title = 'automation'): AutoSec {
+    const toggle = h('button', { className: 'fx-toggle', title: 'automation lanes', onclick: () => {
+      const open = st.ui.autoOpen
+      st.setUi({ autoOpen: open.includes(scope) ? open.filter((x) => x !== scope) : [...open, scope] })
+    } }, title)
+    const box = h('div', { className: 'auto-box' })
+    const el = h('div', { className: 'auto-section', hidden: true }, h('div', { className: 'fx-row' }, toggle), box)
+    el.dataset.title = title
+    return { el, toggle, box, rows: new Map() }
+  }
+
+  /** The owner's name for a lane header: the device's, numbered when its chain has several of a kind. */
+  function ownerLabel(l: AutoLane, base: string, devices: Device[]) {
+    if (l.kind === 'looper') return base
+    const same = devices.filter((d) => d.trackId === l.scope && DEVICES[d.type]?.name === base)
+    return same.length > 1 ? `${base} ${same.findIndex((d) => d.id === l.owner) + 1}` : base
+  }
+
+  /** Sync every scope's section with the lanes in the doc. */
+  function drawAutomation(devices: Device[], loopers: Looper[], width: number) {
+    const byScope = new Map<string, AutoLane[]>()
+    for (const l of st.auto.lanes) (byScope.get(l.scope) ?? byScope.set(l.scope, []).get(l.scope)!).push(l)
+    const sections: [string, AutoSec][] = [[MASTER_TRACK, masterAuto], ...[...lanes].map(([id, l]) => [id, l.auto] as [string, AutoSec])]
+    const shown = new Set(st.ui.autoOpen)
+    for (const [scope, sec] of sections) {
+      const mine = (byScope.get(scope) ?? []).flatMap((l) => {
+        const r = resolveTarget(doc, l)
+        return r ? [{ l, r }] : []
+      })
+      sec.el.hidden = mine.length === 0
+      const open = shown.has(scope)
+      sec.toggle.classList.toggle('on', open)
+      sec.toggle.textContent = `${sec.el.dataset.title} (${mine.length})`
+      sec.box.hidden = !open
+      const ids = new Set(mine.map((m) => m.l.id))
+      for (const [id, row] of sec.rows) if (!ids.has(id)) { row.el.remove(); sec.rows.delete(id) }
+      if (!open) continue
+      mine.forEach(({ l, r }, i) => {
+        let row = sec.rows.get(l.id)
+        if (!row) sec.rows.set(l.id, (row = autoRow(rowDeps)))
+        if (sec.box.children[i] !== row.el) sec.box.insertBefore(row.el, sec.box.children[i] ?? null)
+        const slot = l.kind === 'looper' ? loopers.find((x) => x.id === l.owner)?.slot : undefined
+        row.update(l, st.auto.points.get(l.id) ?? [], {
+          def: r.def, label: `${ownerLabel(l, r.owner, devices)} · ${r.label}`, value: r.value, width,
+          color: slot != null ? LOOP_COLORS[slot % LOOP_COLORS.length] : 'var(--accent)',
+        })
+      })
+      if (open && !autoShownBefore.has(scope)) sec.el.scrollIntoView({ block: 'nearest' }) // just revealed
+    }
+    autoShownBefore = shown
+  }
+
+  // --- lanes
+  function laneFor(t: Track): Lane {
+    let l = lanes.get(t.id)
+    if (l) return l
+    const body = h('div', { className: 'lane-body', 'data-track': t.id })
+    body.onpointerdown = (e) => {
+      if (e.target !== body) return
+      st.setUi({ selection: [], pad: null })
+    }
+    const atX = (e: MouseEvent) => st.snap(st.fromX(e.clientX - body.getBoundingClientRect().left), e)
+    body.ondblclick = (e) => { // empty space on a MIDI lane: a new clip, opened in the dock
+      if (readOnly || e.target !== body || t.kind !== 'midi') return
+      st.newMidiClip(t.id, atX(e))
+    }
+    body.ondragover = (e) => e.preventDefault()
+    body.ondrop = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (readOnly) return
+      const audio = tracksMap(doc).get(t.id)?.get('kind') === 'audio'
+      void st.dropFiles(audioFiles(e.dataTransfer?.files), audio ? t.id : null, st.fromX(e.clientX - body.getBoundingClientRect().left))
+    }
+    // background menu: audio lanes take uploads; MIDI lanes and soundscapes make a new region
+    if (t.kind === 'audio') bgMenu(body, (e) => [['upload', () => pickInto(t.id, st.fromX(e.clientX - body.getBoundingClientRect().left))]])
+    else if (t.kind === 'midi') bgMenu(body, (e) => [['new piano roll', () => st.newMidiClip(t.id, atX(e))], ['new drum grid', () => st.newMidiClip(t.id, atX(e), true)]])
+    else if (t.kind === 'soundscape') bgMenu(body, (e) => [['new region', () => st.newPad(t.id, atX(e))]])
+    // soundscape tracks: the main lane is blank like an empty track (regions turn the loopers on); the source audio gets its own lane
+    const src: Src | null = t.kind === 'soundscape' ? sourceLane(t.id) : null
+    // the loopers row: speed and region per slot
+    const loopMore = h('button', { className: 'fx-toggle', title: 'loopers', onclick: () => {
+      if (loopShown.delete(t.id)) {
+        const pv = st.pb?.preview(t.id, 'loops') // the transport is about to be hidden: don't leave it playing
+        if (pv?.playing) pv.stop()
+      } else loopShown.add(t.id)
+      draw()
+    } }, 'loopers')
+    const loops = h('div', { className: 'fx' })
+    loops.append(h('button', { className: 'add-fx', title: 'add looper', disabled: readOnly, onclick: () => addNextLooper(doc, t.id) }, '+'))
+    const loopTc = transportControls({ title: 'play / stop the loops', small: true, onToggle: () => togglePreview(t.id, 'loops') })
+    const loopRow = h('div', { className: 'fx-row', hidden: true }, h('div', { className: 'fx-head' }, loopMore, loopTc.el), loops)
+    const row = h('div', { className: 'lane-row' }, headers.headFor(t), body)
+    const auto = makeAutoSection(t.id)
+    l = {
+      el: h('div', { className: 'lane' }, row, src?.row ?? null, loopRow, auto.el), row, body,
+      loopMore, loopRow, loops, loopCards: new Map(), boxes: new Map(), heads: new Map(), pads: new Map(), auto, loopTc, src,
+    }
+    lanes.set(t.id, l)
+    return l
+  }
+
+  // --- soundscape previews: each soundscape's source and loops have a private transport/playhead
+  function togglePreview(trackId: string, mode: PreviewMode) {
+    const pv = st.pb?.preview(trackId, mode)
+    if (!pv) return
+    if (pv.playing) pv.stop()
+    else {
+      const end = lanes.get(trackId)?.src?.end ?? 0
+      // loops always start from their beginning; the source resumes unless it already ran out
+      pv.play(mode === 'loops' || pv.position() >= end ? 0 : undefined)
+    }
+    refreshPreviews()
+    ensurePreviewTick()
+  }
+
+  /** One thin playhead per sounding looper, in source time over the source audio. */
+  function drawLoopHeads(): boolean {
+    let shown = false
+    for (const [trackId, l] of lanes) {
+      if (!l.src) continue
+      const live = new Set<string>()
+      for (const lp of getLoopers(doc)) {
+        const pos = lp.trackId === trackId ? st.pb?.looperHead(lp.id) : null
+        if (pos == null) continue
+        shown = true
+        live.add(lp.id)
+        let e = l.heads.get(lp.id)
+        if (!e) {
+          e = h('div', { className: 'loop-head' })
+          e.style.setProperty('--c', LOOP_COLORS[lp.slot % LOOP_COLORS.length])
+          l.heads.set(lp.id, e)
+          l.src.body.append(e)
+        }
+        e.style.left = `${(pos / rate()) * l.src.pps}px`
+      }
+      for (const [id, e] of l.heads) if (!live.has(id)) { e.remove(); l.heads.delete(id) }
+    }
+    return shown
+  }
+  /** Sync transport buttons, times and playheads with the previews; true while any is playing. */
+  function refreshPreviews(): boolean {
+    const pb = st.pb
+    if (!pb) return false
+    let any = false
+    for (const [id, l] of lanes) {
+      if (!l.src) continue
+      const src = pb.preview(id, 'source'), loops = pb.preview(id, 'loops')
+      if (src.playing && src.position() > l.src.end) src.stop() // ran off the end of the audio
+      const sp = src.position(), lp = loops.position()
+      l.src.tc.setPlaying(src.playing)
+      l.src.tc.setTime(sp / rate())
+      l.src.playhead.hidden = !src.playing && sp === 0
+      l.src.playhead.style.left = `${(sp / rate()) * l.src.pps}px`
+      l.loopTc.setPlaying(loops.playing)
+      l.loopTc.setTime(lp / rate())
+      any ||= src.playing || loops.playing
+    }
+    return drawLoopHeads() || any || pb.playing // (the heads keep drawing until the engine reports them gone)
+  }
+  let previewRaf = 0
+  function ensurePreviewTick() {
+    if (!previewRaf) previewRaf = requestAnimationFrame(previewTick)
+  }
+  function previewTick() {
+    previewRaf = 0
+    if (!destroyed && refreshPreviews()) ensurePreviewTick()
+  }
+
+  // --- soundscape: source lane (own time world) and region blocks (timeline-anchored gates)
+  const srcEnd = (trackId: string) =>
+    Math.max(0, ...getClips(doc).filter((c) => c.trackId === trackId).map((c) => c.start + clipLength(c, rate())))
+
+  /**
+   * Left or right click on a lane's empty background opens a menu of `entries(event)` at the cursor.
+   * (Upload for lanes that hold audio, "new region" for MIDI lanes and soundscapes.)
+   */
+  function bgMenu(body: HTMLElement, entries: (e: MouseEvent) => [string, () => void][]) {
+    let down: { x: number; y: number; armed: boolean; closed: boolean } | null = null
+    // (the popover's own capture listener runs first, so `closedBy` says whether this press closed a menu)
+    body.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, armed: !!st.ui.looperArm, closed: closedBy(e) }), true)
+    const open = (e: MouseEvent) => {
+      if (!readOnly && e.target === body) popover(body, entries(e), [e.clientX, e.clientY])
+    }
+    let later = 0 // a left click waits out a double-click (which makes a clip) before it opens the menu
+    body.addEventListener('contextmenu', (e) => { e.preventDefault(); open(e) })
+    body.addEventListener('click', (e) => { // not after a drag (e.g. drawing a region)
+      clearTimeout(later)
+      if (e.detail > 1) return
+      if (down && (down.armed || down.closed || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4)) return
+      later = window.setTimeout(() => body.isConnected && open(e), 250)
+    })
+  }
+
+  /** Pick audio files and import them into `trackId` starting at sample `at` of that lane's time scale. */
+  function pickInto(trackId: string, at: number) {
+    bgTarget = { trackId, at }
+    bgPicker.click()
+  }
+
+  function sourceLane(trackId: string): Src {
+    const ticks = h('div', { className: 'src-ticks' })
+    const body = h('div', { className: 'lane-body src-body', 'data-track': trackId }, ticks)
+    const view = h('div', { className: 'src-view' }, body)
+    const tc = transportControls({ title: 'play / pause the source audio', small: true, onToggle: () => togglePreview(trackId, 'source') })
+    const more = h('button', { className: 'fx-toggle', title: 'source audio', onclick: () => {
+      if (srcShown.delete(trackId)) {
+        const pv = st.pb?.preview(trackId, 'source') // the transport is about to be hidden: don't leave it playing
+        if (pv?.playing) pv.stop()
+      } else srcShown.add(trackId)
+      draw()
+    } }, 'source')
+    const head = h('div', { className: 'head src-head' }, more, tc.el)
+    const playhead = h('div', { className: 'playhead', hidden: true })
+    body.append(playhead)
+    const src: Src = { row: h('div', { className: 'lane-row src-row' }, head, view), view, body, ticks, pps: 80, more, tc, playhead, end: 0 }
+    const srcAt = (cx: number) => Math.max(0, Math.round(((cx - body.getBoundingClientRect().left) / src.pps) * rate()))
+    // click or drag on the source ruler to move its playhead (the main transport is unaffected)
+    ticks.onpointerdown = (e) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const seek = (cx: number) => {
+        st.pb?.preview(trackId, 'source').seek(srcAt(cx))
+        refreshPreviews()
+      }
+      seek(e.clientX)
+      dragPointer(e, { onDrag: (m) => seek(m.clientX), onEnd: () => {} })
+    }
+    body.onpointerdown = (e) => {
+      if (e.target !== body) return
+      st.setUi({ selection: [], pad: null })
+    }
+    body.ondragover = (e) => e.preventDefault()
+    body.ondrop = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (readOnly) return
+      void st.dropFiles(audioFiles(e.dataTransfer?.files), trackId, srcAt(e.clientX))
+    }
+    bgMenu(body, (e) => [['upload', () => pickInto(trackId, srcAt(e.clientX))]])
+    view.addEventListener('scroll', schedule, { passive: true })
+    view.addEventListener('wheel', (e) => { // zoom this lane only
+      if (!(e.ctrlKey || e.metaKey)) return
+      e.preventDefault()
+      e.stopPropagation()
+      const t = (e.clientX - body.getBoundingClientRect().left) / src.pps
+      src.pps = clamp(src.pps * Math.exp(-e.deltaY * 0.01), 10, 800)
+      draw()
+      view.scrollLeft += t * src.pps - (e.clientX - view.getBoundingClientRect().left) - view.scrollLeft
+    }, { passive: false })
+    // while a looper is armed, a drag here draws its region (capture: clips must not start a drag)
+    body.addEventListener('pointerdown', (e) => {
+      const lp = st.ui.looperArm ? getLoopers(doc).find((x) => x.id === st.ui.looperArm && x.trackId === trackId) : undefined
+      if (!lp || readOnly || e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      drawRegion(e, lp, src)
+    }, true)
+    return src
+  }
+
+  /** Move, or trim either edge of, a soundscape region (the same controls as an audio clip). */
+  function padDown(ev: PointerEvent, id: string) {
+    if (ev.button !== 0) return
+    const pad = getPads(doc).find((p) => p.id === id)
+    if (!pad) return
+    const mode = grabAt(ev.clientX, (ev.currentTarget as HTMLElement).getBoundingClientRect())
+    st.setUi({ pad: id, selection: [], note: null })
+    if (readOnly) return
+    undo.stopCapturing()
+    ev.preventDefault()
+    dragPointer(ev, {
+      onDrag: (m) => {
+        if (!padsMap(doc).has(id)) return
+        const dSmp = Math.round(((m.clientX - ev.clientX) / st.ui.pps) * rate())
+        if (mode === 'move') updatePad(doc, id, { start: st.snap(Math.max(0, pad.start + dSmp), m) })
+        else {
+          const t = trimBlock(mode, pad, dSmp, { minLength: MIN_SEC * rate(), slackLeft: pad.start })
+          updatePad(doc, id, { start: t.start, length: t.length })
+        }
+      },
+      onEnd: () => undo.stopCapturing(),
+    })
+  }
+
+  function drawPads(l: Lane, t: Track, pads: Pad[]) {
+    const mine = t.kind === 'soundscape' ? pads.filter((p) => p.trackId === t.id) : []
+    const ids = new Set(mine.map((p) => p.id))
+    for (const [id, e] of l.pads) if (!ids.has(id)) { e.remove(); l.pads.delete(id) }
+    for (const p of mine) {
+      let e = l.pads.get(p.id)
+      if (!e) {
+        e = h('div', { className: 'clip region' }, 'loopers on') // a clip-styled block: same edges, same hover
+        e.onpointerdown = (ev) => padDown(ev, p.id)
+        deleteMenu(e, 'delete region', () => { deletePad(doc, p.id); if (st.ui.pad === p.id) st.setUi({ pad: null }) }, () => !readOnly)
+        l.pads.set(p.id, e)
+        l.body.append(e)
+      }
+      e.style.left = `${x(p.start)}px`
+      e.style.width = `${Math.max(2, x(p.length))}px`
+      e.classList.toggle('sel', p.id === st.ui.pad)
+    }
+  }
+
+  const loopDeps = {
+    readOnly,
+    grab: () => undo.stopCapturing(),
+    commit: (id: string, speed: number) => updateLooper(doc, id, { speed }),
+    setMuted: (id: string, muted: boolean) => updateLooper(doc, id, { muted }),
+    setGain: (id: string, gain: number) => updateLooper(doc, id, { gain }),
+    setTape: (id: string, patch: { sat?: number; cutoff?: number; warble?: number }) => updateLooper(doc, id, patch),
+    autoMenu: (label: HTMLElement, t: ParamTarget) => st.autoMenu(label, t),
+    toggleArm: (id: string) => st.setUi({ looperArm: st.ui.looperArm === id ? null : id }),
+    clear: (id: string) => updateLooper(doc, id, { start: 0, length: 0 }),
+    remove: (id: string) => { if (st.ui.looperArm === id) st.setUi({ looperArm: null }); deleteLooper(doc, id) },
+  }
+
+  /** Looper rows (cards) and the coloured region boxes drawn over the track's audio. */
+  function drawLoopers(l: Lane, t: Track, loopers: Looper[]) {
+    const armed = st.ui.looperArm
+    const isLoop = t.kind === 'soundscape' && !!l.src
+    l.loopRow.hidden = !isLoop
+    const open = isLoop && loopShown.has(t.id)
+    const mine = isLoop ? loopers.filter((x) => x.trackId === t.id) : []
+    const shown = open || mine.length > 0 // shut: the cards stay as title bars
+    l.loops.hidden = !shown
+    l.loops.classList.toggle('collapsed', !open)
+    l.loopMore.classList.toggle('on', open)
+    l.loopTc.el.hidden = !open
+    l.src?.body.classList.toggle('arming', mine.some((x) => x.id === armed))
+    // region boxes
+    const ids = new Set(mine.filter((x) => x.length > 0).map((x) => x.id))
+    for (const [id, b] of l.boxes) if (!ids.has(id)) { b.remove(); l.boxes.delete(id) }
+    for (const lp of mine) {
+      if (lp.length <= 0 || !l.src) continue
+      let b = l.boxes.get(lp.id)
+      if (!b) {
+        b = h('div', { className: 'loop-box' }, h('span', {}, String(lp.slot + 1)))
+        b.style.setProperty('--c', LOOP_COLORS[lp.slot % LOOP_COLORS.length])
+        l.boxes.set(lp.id, b)
+        const id = lp.id
+        b.onpointerdown = (ev) => loopBoxDown(ev, id, b!)
+        l.src.body.append(b) // regions live in source time, over the source audio
+      }
+      b.style.left = `${(lp.start / rate()) * l.src.pps}px`
+      b.style.width = `${Math.max(2, (lp.length / rate()) * l.src.pps)}px`
+      b.classList.toggle('armed', lp.id === armed)
+    }
+    if (!shown) return
+    for (const [id, c] of l.loopCards) if (!mine.some((m) => m.id === id)) { c.el.remove(); l.loopCards.delete(id) }
+    mine.forEach((lp, i) => {
+      let c = l.loopCards.get(lp.id)
+      if (!c) l.loopCards.set(lp.id, (c = looperCard(lp, loopDeps)))
+      if (l.loops.children[i] !== c.el) l.loops.insertBefore(c.el, l.loops.children[i] ?? null)
+      c.update(lp, lp.id === armed, rate(), st.auto.info(lp.id))
+    })
+  }
+
+  /** Drag a loop window to move it, or either edge to resize it (live in the doc, one undo step). */
+  function loopBoxDown(ev: PointerEvent, id: string, box: HTMLElement) {
+    if (ev.button !== 0) return
+    ev.stopPropagation()
+    const lp = getLoopers(doc).find((x) => x.id === id)
+    const l = lp && lanes.get(lp.trackId)
+    if (!lp || !l?.src || readOnly || st.ui.looperArm) return
+    ev.preventDefault()
+    const mode = grabAt(ev.clientX, box.getBoundingClientRect())
+    const pps = l.src.pps
+    const min = Math.round(MIN_SEC * rate())
+    const end = lp.start + lp.length
+    undo.stopCapturing()
+    dragPointer(ev, {
+      onDrag: (m) => {
+        const d = Math.round(((m.clientX - ev.clientX) / pps) * rate())
+        if (mode === 'move') updateLooper(doc, id, { start: Math.max(0, lp.start + d) })
+        else if (mode === 'l') {
+          const start = clamp(lp.start + d, 0, end - min)
+          updateLooper(doc, id, { start, length: end - start })
+        } else updateLooper(doc, id, { length: Math.max(min, lp.length + d) })
+      },
+      onEnd: () => undo.stopCapturing(),
+    })
+  }
+
+  /** Drag across a lane to set a looper's region (live in the doc, one undo step). */
+  function drawRegion(ev: PointerEvent, lp: Looper, src: Src) {
+    const at = (cx: number) => Math.max(0, Math.round(((cx - src.body.getBoundingClientRect().left) / src.pps) * rate()))
+    let drew = false
+    undo.stopCapturing()
+    dragPointer(ev, {
+      onDrag: (m) => {
+        if (Math.abs(m.clientX - ev.clientX) < 4) return // a click doesn't erase the old region
+        drew = true
+        const a = at(ev.clientX), b = at(m.clientX)
+        updateLooper(doc, lp.id, { start: Math.min(a, b), length: Math.abs(b - a) })
+      },
+      onEnd: () => {
+        undo.stopCapturing()
+        if (drew) st.setUi({ looperArm: null })
+      },
+    })
+  }
+
+  // --- drawing (keyed reuse)
+  function schedule() {
+    if (!raf && !destroyed) raf = requestAnimationFrame(() => ((raf = 0), draw()))
+  }
+
+  function draw() {
+    if (destroyed) return
+    const rt = rate()
+    const tracks = getTracks(doc)
+    const clips = getClips(doc)
+    const devices = getDevices(doc)
+    const loopers = getLoopers(doc)
+    const pads = getPads(doc)
+    const notes = getNotes(doc)
+    const samples = getSamples(doc)
+    const total = st.extent()
+    const { selection, editing } = st.ui
+    scroll.style.setProperty('--view', `${scroll.clientWidth}px`)
+    el.style.width = `${HEADER + x(total)}px`
+
+    // the master row
+    const fx = devices.filter((d) => d.trackId === MASTER_TRACK)
+    masterHead.classList.toggle('focus', st.ui.focusTrack === MASTER_TRACK)
+    const masterText = fx.length ? fx.map((d) => d.name ?? DEVICES[d.type]?.name ?? '').join(' · ') : 'no effects on the mix'
+    if (masterBody.textContent !== masterText) masterBody.textContent = masterText
+
+    // lanes
+    hint.hidden = tracks.length > 0
+    const ids = new Set(tracks.map((t) => t.id))
+    for (const [id, l] of lanes) if (!ids.has(id)) { l.el.remove(); lanes.delete(id) }
+    tracks.forEach((t, i) => {
+      const l = laneFor(t)
+      if (laneBox.children[i] !== l.el) laneBox.insertBefore(l.el, laneBox.children[i] ?? null)
+      l.body.style.width = `${x(total)}px`
+      l.el.dataset.kind = t.kind
+      l.el.style.setProperty('--tc', trackColor(t, i))
+      l.el.classList.toggle('focus', st.ui.focusTrack === t.id)
+      l.el.classList.toggle('locked', st.locks.has(t.id))
+      l.el.classList.toggle('muted', t.muted)
+      drawLoopers(l, t, loopers)
+      drawPads(l, t, pads)
+      if (l.src) {
+        const srcOpen = srcShown.has(t.id)
+        l.src.row.classList.toggle('collapsed', !srcOpen) // collapsed: just the clip names
+        l.src.more.classList.toggle('on', srcOpen)
+        l.src.tc.el.hidden = !srcOpen
+        l.src.end = srcEnd(t.id)
+        const end = Math.max(60 * rt, l.src.end + 30 * rt)
+        l.src.body.style.width = `${(end / rt) * l.src.pps}px`
+        drawTicks(l.src.ticks, end / rt, l.src.pps)
+      }
+    })
+
+    drawAutomation(devices, loopers, x(total))
+
+    // clips
+    const outline = new Map<string, string>()
+    for (const r of st.remote) for (const id of r.selection ?? []) outline.set(id, r.user.color)
+    const cids = new Set(clips.map((c) => c.id))
+    for (const [id, e] of clipEls) if (!cids.has(id)) { e.remove(); clipEls.delete(id); waves.delete(id) }
+    for (const c of clips) {
+      const lane = lanes.get(c.trackId)
+      if (!lane) continue
+      let e = clipEls.get(c.id)
+      if (!e) e = makeClip(c)
+      const host = lane.src ? lane.src.body : lane.body // source clips are drawn in the source lane's own scale
+      const cpps = lane.src ? lane.src.pps : st.ui.pps
+      if (e.parentElement !== host) host.append(e)
+      e.style.left = `${(c.start / rt) * cpps}px`
+      // a `forever` clip is drawn out to the end of the scroll area, which its finite part alone decides
+      const forever = isForever(c)
+      const width = Math.max(2, ((forever ? Math.max(clipLength(c, rt), total - c.start) : clipLength(c, rt)) / rt) * cpps)
+      e.style.width = `${width}px`
+      e.classList.toggle('forever', forever)
+      e.classList.toggle('looping', isLooping(c))
+      e.classList.toggle('loopable', !readOnly && !lane.src && !st.locks.has(c.trackId))
+      let canPlay = true
+      if (c.kind === 'audio') {
+        const meta = samples[c.sourceHash]
+        canPlay = !!meta && playable(meta)
+        const status = meta?.status // incoming and missing audio is drawn from the stored peaks (docs/engine.md §9.3)
+        let label = meta ? (canPlay ? meta.name : `${meta.name} · too long to play yet`) : '…'
+        if (status === 'incoming') label = `${meta.name} · ${incomingLabel(meta)}`
+        else if (status === 'missing') label = `${meta.name} · audio deleted`
+        e.classList.toggle('incoming', status === 'incoming')
+        e.classList.toggle('missing', status === 'missing')
+        const w = waves.get(c.id)!
+        if (w.label.textContent !== label) w.label.textContent = label
+        drawSeams(c, w, width, cpps)
+        const pk = !st.pb || !canPlay ? undefined : status ? storedPeaks(meta, rt) : peaksFor(s.projectId, c.sourceHash, rt)
+        if (pk) drawVisibleWave(c, w, pk, width, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps: cpps, scroller: scroll, off: HEADER })
+        else w.cv.style.display = 'none'
+      } else drawMidiClip(e, c, notes.filter((n) => n.clipId === c.id), forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks)
+      e.classList.toggle('midi', c.kind === 'midi')
+      e.classList.toggle('editing', c.id === editing)
+      e.classList.toggle('sel', selection.includes(c.id))
+      e.classList.toggle('unplayable', !canPlay)
+      const o = outline.get(c.id)
+      e.style.outline = o ? `2px solid ${o}` : ''
+    }
+
+    // collaborators' playheads
+    for (const e of overlay.querySelectorAll('.remote-head')) e.remove()
+    for (const r of st.remote) {
+      if (r.playhead == null) continue
+      overlay.append(h('div', { className: 'remote-head', style: `left:${HEADER + x(r.playhead)}px;background:${r.user.color}` }))
+    }
+    // The playhead lines run through the lanes and the master automation, not the empty space below them.
+    const last = masterAuto.el.offsetHeight ? masterAuto.el : laneBox
+    overlay.style.height = `${last.offsetTop + last.offsetHeight}px`
+    drawPlayhead()
+    if (refreshPreviews()) ensurePreviewTick()
+  }
+
+  function makeClip(c: Clip) {
+    const e = h('div', { className: 'clip' })
+    if (c.kind === 'audio') {
+      const w: Wave = { cv: h('canvas', { className: 'wave' }), seams: h('i', { className: 'seams' }), first: h('i', { className: 'seam-first' }), label: h('span', { className: 'label' }), sig: '', v0: 0, v1: 0 }
+      waves.set(c.id, w)
+      e.append(w.cv, w.seams, w.first, w.label)
+    }
+    e.onpointerdown = (ev) => clipDown(ev, c.id)
+    e.ondblclick = () => st.openClip(c.id)
+    e.onpointermove = (ev) => { // which handle is under the pointer drives the cursor and the edge highlight (CSS, by data-zone)
+      if (ev.buttons) return
+      const cur = clipsMap(doc).get(c.id)?.toJSON() as Clip | undefined
+      const zone = cur && !readOnly && !lanes.get(cur.trackId)?.src && !st.locks.has(cur.trackId) ? clipZone(ev, e, cur) : 'move'
+      if (e.dataset.zone !== zone) e.dataset.zone = zone
+    }
+    e.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault()
+      ev.stopPropagation() // not the lane's background menu underneath
+      const trackId = String(clipsMap(doc).get(c.id)?.get('trackId'))
+      if (!st.locks.has(trackId)) popover(e, clipMenu(c.id), [ev.clientX, ev.clientY])
+    })
+    clipEls.set(c.id, e)
+    return e
+  }
+
+  /**
+   * Waveforms are drawn for the on-screen part of the clip only (plus a viewport of margin each side),
+   * at device-pixel resolution, so a 16-minute clip costs the same as a 10-second one.
+   */
+  function drawVisibleWave(
+    c: Clip & { kind: 'audio' }, w: Wave, pk: Float32Array, width: number,
+    /** The lane's frame: its scale, its horizontal scroller, and how much of the scroller's left edge is covered. */
+    f: { pps: number; scroller: HTMLElement; off: number },
+  ) {
+    const rt = rate()
+    const dpr = window.devicePixelRatio || 1
+    const viewW = f.scroller.clientWidth || innerWidth
+    const left = f.off + (c.start / rt) * f.pps // clip's left edge in scroller-content px
+    const need0 = Math.max(0, f.scroller.scrollLeft + f.off - left), need1 = Math.min(width, f.scroller.scrollLeft + viewW - left)
+    if (need1 <= need0) { w.cv.style.display = 'none'; return }
+    const pass = isLooping(c) ? c.loopLength! : 0
+    const phase = pass ? c.loopPhase ?? 0 : 0
+    const sig = `${f.pps}|${c.sourceOffset}|${c.length}|${pass}|${phase}|${width}|${dpr}`
+    if (w.sig === sig && w.pk === pk && w.v0 <= need0 && w.v1 >= need1) { w.cv.style.display = ''; return }
+    const v0 = Math.max(0, Math.floor(need0 - viewW)), v1 = Math.min(width, Math.ceil(need1 + viewW))
+    Object.assign(w, { sig, pk, v0, v1 })
+    w.cv.style.display = ''
+    w.cv.style.left = `${v0}px`
+    w.cv.style.width = `${v1 - v0}px`
+    w.cv.width = Math.max(1, Math.round((v1 - v0) * dpr))
+    w.cv.height = Math.round(LANE_H * dpr)
+    const fpp = rt / f.pps // source frames per css px
+    const passPx = pass / fpp
+    if (!pass || passPx < 2) return drawWave(w.cv, pk, c.sourceOffset + v0 * fpp, (v1 - v0) * fpp)
+    // A looping clip draws the pass once per repeat: pass k covers clip px [k * passPx - phasePx, (k + 1) * passPx - phasePx),
+    // the first (cut by the clip's start) from `phase` into the pass, the repeats faded. Each piece is drawn on a scratch
+    // canvas (it must be in the document for drawWave to read the colour) and copied in.
+    const phasePx = phase / fpp
+    const g = w.cv.getContext('2d')!
+    const tmp = h('canvas', { className: 'wave' })
+    w.cv.after(tmp)
+    g.clearRect(0, 0, w.cv.width, w.cv.height)
+    for (let k = Math.max(0, Math.floor((v0 + phasePx) / passPx)); k * passPx - phasePx < v1; k++) {
+      const s0 = Math.max(0, k * passPx - phasePx) // the piece in clip px, cut to the clip's start and to what the canvas holds
+      const a = Math.max(s0, v0), b = Math.min((k + 1) * passPx - phasePx, v1)
+      if (b - a < 1 / dpr) continue
+      tmp.width = Math.max(1, Math.round((b - a) * dpr))
+      tmp.height = w.cv.height
+      drawWave(tmp, pk, c.sourceOffset + (a + phasePx - k * passPx) * fpp, (b - a) * fpp)
+      g.globalAlpha = k ? 0.35 : 1
+      g.drawImage(tmp, Math.round((a - v0) * dpr), 0)
+    }
+    g.globalAlpha = 1
+    tmp.remove()
+  }
+
+  /** A looping audio clip's seams: a faint line where each pass ends, drawn as one repeating background from the first seam on. */
+  function drawSeams(c: Clip & { kind: 'audio' }, w: Wave, width: number, cpps: number) {
+    const rt = rate()
+    const passPx = ((c.loopLength ?? 0) / rt) * cpps
+    const first = (((c.loopLength ?? 0) - (c.loopPhase ?? 0)) / rt) * cpps
+    const on = isLooping(c) && passPx >= 3 && first < width
+    w.seams.style.display = on ? '' : 'none'
+    if (!on) return
+    w.seams.style.left = `${first}px`
+    w.seams.style.width = `${width - first}px`
+    w.seams.style.backgroundSize = `${passPx}px 100%`
+    w.first.style.left = `${first - 1}px`
+  }
+
+  /**
+   * A MIDI clip's preview: its label plus tiny note marks, rebuilt only when the notes change. A looping clip draws its
+   * first pass in full and the repeats faded. (The editors live in the dock.)
+   */
+  function drawMidiClip(e: HTMLElement, c: Clip & { kind: 'midi' }, notes: Note[], extent: number) {
+    const lp = isLooping(c) ? c.loopTicks! : 0
+    const sig = `${extent}|${lp}|${c.view ?? ''}|${notes.map((n) => `${n.tick},${n.durTicks},${n.pitch}`).join(';')}`
+    if (e.dataset.sig === sig) return
+    e.dataset.sig = sig
+    const shown = lp ? notes.filter((n) => n.tick < lp) : notes
+    const lo = Math.min(...shown.map((n) => n.pitch)), hi = Math.max(...shown.map((n) => n.pitch))
+    const passes = lp ? Math.ceil(extent / lp) : 1
+    const marks: HTMLElement[] = []
+    for (let k = 0; k < passes; k++) {
+      if (k) { // where the pattern starts over
+        const edge = h('i', { className: 'loop-edge' })
+        edge.style.left = `${((k * lp) / extent) * 100}%`
+        marks.push(edge)
+        if (k === 1) { // the pass handle lights up here when hovered
+          const first = h('i', { className: 'seam-first' })
+          first.style.left = `calc(${(lp / extent) * 100}% - 1px)`
+          marks.push(first)
+        }
+      }
+      for (const n of shown) {
+        const tick = k * lp + n.tick
+        if (tick >= extent) continue
+        const m = h('i', { className: k ? 'mark rep' : 'mark' })
+        m.style.left = `${(tick / extent) * 100}%`
+        m.style.width = `${(Math.min(n.durTicks, lp || Infinity) / extent) * 100}%` // (min-width in the CSS: a % minimum is huge on a forever clip)
+        m.style.top = `${hi === lo ? 50 : 20 + ((hi - n.pitch) / (hi - lo)) * 60}%`
+        marks.push(m)
+      }
+    }
+    e.replaceChildren(c.view === 'drums' ? 'drums' : 'midi', ...marks)
+  }
+
+  /**
+   * Where each looping clip's pass restarts (samples): one per repeat boundary inside the clip, so a clip
+   * can be trimmed to land on the repeats (a `forever` clip's seams go on for ten minutes past its start).
+   */
+  function repeatSeams(clips: Clip[]): number[] {
+    const rt = rate()
+    const out: number[] = []
+    for (const c of clips) {
+      if (!isLooping(c)) continue
+      const period = passLength(c, rt)
+      const phase = c.kind === 'audio' ? c.loopPhase ?? 0 : 0
+      const end = c.start + (isForever(c) ? Math.max(clipLength(c, rt), 600 * rt) : clipLength(c, rt))
+      out.push(...passBoundaries(c.start, period, phase, end - 1))
+    }
+    return out
+  }
+
+  /**
+   * Which handle of clip `c` (drawn as `el`) is under the pointer. The right edge loops (the whole height once the clip
+   * loops, else its upper half; the lower half trims); a looping clip's first seam has the pass handle on its lower half.
+   */
+  function clipZone(ev: PointerEvent, el: HTMLElement, c: Clip): Grab {
+    const box = el.getBoundingClientRect()
+    const looping = isLooping(c)
+    const cpps = lanes.get(c.trackId)?.src?.pps ?? st.ui.pps
+    const seam = looping ? box.left + ((passLength(c, rate()) - (c.kind === 'audio' ? c.loopPhase ?? 0 : 0)) / rate()) * cpps : undefined
+    return grabAt(ev.clientX, box, { y: ev.clientY, looping, seam })
+  }
+
+  // --- clip dragging (live Yjs updates, one undo step per drag)
+  function clipDown(ev: PointerEvent, id: string) {
+    if (ev.button !== 0) return
+    const clip = getClips(doc).find((c) => c.id === id)
+    if (!clip) return
+    const rt = rate()
+    const pps = st.ui.pps
+    const box = (ev.currentTarget as HTMLElement).getBoundingClientRect()
+    const mode = clipZone(ev, ev.currentTarget as HTMLElement, clip)
+    const lane0 = lanes.get(clip.trackId)
+    const cpps = lane0?.src ? lane0.src.pps : pps // source clips scale with their own lane
+    // a click (no drag) on a clip shows it in the dock's editor, when that is what the dock shows
+    const clicked = () => { if (st.ui.dock.open && st.ui.dock.tab === 'clip' && st.ui.editing !== id) st.openClip(id) }
+    st.setUi({ pad: null, note: null })
+    st.select([id])
+    if (readOnly || lane0?.src || st.locks.has(clip.trackId)) return clicked() // source audio stays anchored: only the loop windows move
+    undo.stopCapturing()
+    ev.preventDefault()
+    const grab = ev.clientX - box.left // where in the clip it was picked up
+    let curTrack = clip.trackId
+    const srcFrames = sourceFrames(doc, clip, rt)
+    const notes0 = clip.kind === 'midi' ? getNotes(doc).filter((n) => n.clipId === id) : []
+    // snap targets: the timeline start, the playhead and the edges of every other clip and pad (source lanes keep their own time)
+    const clips = getClips(doc).filter((c) => c.id !== id && !lanes.get(c.trackId)?.src)
+    const length = clipLength(clip, rt)
+    // a `forever` clip's real extent is off screen: the loop handle at its drawn end sets the extent from there
+    const drawn = isForever(clip) ? (box.width / cpps) * rt : length
+    const pass0 = passLength(clip, rt)
+    const phase0 = clip.kind === 'audio' && isLooping(clip) ? clip.loopPhase ?? 0 : 0
+    const seam0 = clip.start + pass0 - phase0
+    const snapAt = snapTracker([
+      0,
+      Math.round(position()),
+      ...clips.flatMap((c) => [c.start, c.start + clipLength(c, rt)]),
+      ...getPads(doc).flatMap((p) => [p.start, p.start + p.length]),
+      ...repeatSeams(clips),
+      ...(mode === 'loop' ? passBoundaries(clip.start, pass0, phase0, clip.start + drawn + 600 * rt) : []), // whole passes of this clip
+    ], (REARM_PX / pps) * rt)
+    const showSnap = (at: number | null) => {
+      snapLine.hidden = at == null
+      if (at != null) snapLine.style.left = `${HEADER + x(at)}px`
+    }
+    const snapTo = (m: PointerEvent, at: number, d: number) => { // soft-snap the handle at sample `at` (moved `d`), with the snap line
+      const snap = m.altKey ? null : snapAt(at + d, 0, (SNAP_PX / pps) * rt)
+      showSnap(snap ? snap.at : null)
+      return snap ? snap.at - at : d
+    }
+    dragPointer(ev, {
+      onDrag: (m) => {
+        if (!clipsMap(doc).has(id)) return
+        if (mode === 'loop') return loopClip(doc, rt, clip, drawn + snapTo(m, clip.start + drawn, Math.round(((m.clientX - ev.clientX) / cpps) * rt)), srcFrames)
+        if (mode === 'pass') {
+          const d = Math.round(((m.clientX - ev.clientX) / cpps) * rt)
+          return passClip(doc, rt, clip, pass0 + (clip.kind === 'audio' ? snapTo(m, seam0, d) : d), srcFrames)
+        }
+        if (mode !== 'move') {
+          let d = Math.round(((m.clientX - ev.clientX) / cpps) * rt)
+          // an audio clip's edge snaps to the same targets, repeat seams included, so it can be trimmed to land on them
+          const edge = mode === 'l' ? clip.start + d : clip.start + length + d
+          const snap = clip.kind !== 'audio' || m.altKey ? null : snapAt(edge, 0, (SNAP_PX / pps) * rt)
+          if (snap) d += snap.at - edge
+          showSnap(snap ? snap.at : null)
+          return trimClip(doc, rt, clip, mode, d, srcFrames, notes0)
+        }
+        // Absolute position under the pointer, in the target lane's own scale (source lanes differ).
+        const hit = targetAt(m.clientY, clip.kind)
+        if (hit) curTrack = hit
+        const host = hostOf(curTrack)
+        let start = Math.max(0, Math.round(((m.clientX - grab - host.el.getBoundingClientRect().left) / host.pps) * rt))
+        const free = m.altKey || !!lanes.get(curTrack)?.src
+        // an edge within reach wins; otherwise the start lands on the grid
+        const snap = free ? null : snapAt(start, length, (SNAP_PX / host.pps) * rt)
+        if (snap) start = snap.start
+        else if (!free) start = st.snap(start, m)
+        showSnap(snap ? snap.at : null)
+        updateClip(doc, id, { start, ...(curTrack !== clip.trackId ? { trackId: curTrack } : {}) })
+      },
+      onEnd: (moved) => {
+        showSnap(null)
+        undo.stopCapturing()
+        if (!moved) clicked()
+      },
+    })
+  }
+
+  /**
+   * The track a dragged clip would land on: audio clips go to audio lanes or to any soundscape's source
+   * lane; MIDI clips to MIDI lanes. Null when the pointer isn't over a valid lane.
+   */
+  function targetAt(clientY: number, clipKind: string): string | null {
+    const within = (e: HTMLElement) => {
+      const r = e.getBoundingClientRect()
+      return clientY >= r.top && clientY < r.bottom
+    }
+    for (const [id, l] of lanes) {
+      if (clipKind === 'audio' && l.src && within(l.src.row)) return id
+      if (within(l.row) && accepts(String(tracksMap(doc).get(id)?.get('kind')), clipKind)) return id
+    }
+    return null
+  }
+  const hostOf = (trackId: string) => {
+    const l = lanes.get(trackId)
+    return l?.src ? { el: l.src.body, pps: l.src.pps } : { el: l?.body ?? el, pps: st.ui.pps }
+  }
+
+  // --- incoming takes (docs/engine.md §9.3)
+  /** Whether this device still has the audio of an incoming take of ours (assumed while the check runs). */
+  function stagedHere(hash: string) {
+    if (!staged.has(hash)) {
+      staged.set(hash, true)
+      void hasStaged(s.projectId, hash).then((v) => v === staged.get(hash) || (staged.set(hash, v), schedule()))
+    }
+    return staged.get(hash)!
+  }
+  function incomingLabel(m: SampleMeta) {
+    const mine = isMine(st.takeCtx(), m)
+    if (mine && stagedHere(m.hash)) return 'local only · click for options'
+    return `incoming from ${m.byName ?? 'someone'}${mine ? ', not on this device' : ''}`
+  }
+  const failed = (err: unknown) => st.status((err as Error).message)
+  function clipMenu(clipId: string): [string, () => void][] {
+    const open: [string, () => void] = ['open in editor', () => st.openClip(clipId)]
+    if (readOnly) return [open]
+    const items: [string, () => void][] = [open, ['delete clip', () => { // the whole selection if this clip is in it
+      const sel = st.ui.selection
+      const ids = sel.includes(clipId) ? [...sel] : [clipId]
+      doc.transact(() => ids.forEach((id) => deleteClip(doc, id)))
+      st.select([])
+    }]]
+    const clip = getClips(doc).find((c) => c.id === clipId)
+    if (clip) { // looping repeats the pass to the end of the clip (drag its right edge to extend), or past it with forever
+      const looping = isLooping(clip)
+      items.splice(1, 0, [isForever(clip) ? 'loop to end' : 'loop forever', () => setLoopOn(doc, rate(), clip, !clip.forever)])
+      if (looping) items.splice(1, 0, ['no loop', () => setLoopOff(doc, clip)])
+    }
+    const hash = String(clipsMap(doc).get(clipId)?.get('sourceHash'))
+    const meta = getSamples(doc)[hash]
+    if (meta?.status !== 'incoming') return items
+    items.length = 0 // an incoming take is saved or discarded, not just its clip deleted
+    const ctx = st.takeCtx()
+    if (isMine(ctx, meta)) {
+      items.push(['save', () => {
+        st.status('uploading take…')
+        uploadTake(ctx, hash).then(() => st.status(''), failed)
+      }])
+      if (myTakes(ctx).length > 1) items.push(['save all', () => {
+        st.status('uploading takes…')
+        uploadAll(ctx).then((r) => st.status(r.gone ? `${r.up} uploaded, ${r.gone} not on this device` : ''), failed)
+      }])
+    }
+    items.push(['discard', () => {
+      if (!confirm(`discard "${meta.name}" and every clip that plays it?`)) return
+      discardTake(ctx, hash)
+      st.select([])
+    }])
+    return items
+  }
+
+  // --- events
+  scroll.addEventListener('scroll', schedule, { passive: true })
+  addEventListener('resize', schedule)
+  const LANE_UI: (keyof typeof st.ui)[] = ['pps', 'selection', 'editing', 'focusTrack', 'pad', 'looperArm', 'autoOpen']
+  const offs = [
+    st.on('doc', draw),
+    st.on('ui', (p) => { if (LANE_UI.some((k) => k in p)) draw() }),
+    st.on('tick', (p) => drawPlayhead(p)),
+    st.on('transport', () => { drawPlayhead(); ensurePreviewTick() }),
+  ]
+  draw()
+
+  return {
+    el,
+    destroy() {
+      destroyed = true
+      cancelAnimationFrame(raf)
+      cancelAnimationFrame(previewRaf)
+      scroll.removeEventListener('scroll', schedule)
+      removeEventListener('resize', schedule)
+      offs.forEach((f) => f())
+    },
+  }
+}

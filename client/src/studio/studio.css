@@ -1,0 +1,18 @@
+/* The studio layout (docs/redesign.md §3): top bar / browser | arrangement (+ chat) / dock / status bar. */
+.studio {
+  --gutter: 6px; --head: 140px;
+  --clip: color-mix(in srgb, var(--accent) 22%, var(--raise)); --clip-sel: color-mix(in srgb, var(--accent) 36%, var(--raise));
+  --clip-midi: color-mix(in srgb, var(--tc-1) 22%, var(--raise)); --clip-midi-sel: color-mix(in srgb, var(--tc-1) 36%, var(--raise));
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; grid-template-columns: minmax(0, 1fr); height: 100%; min-height: 0; background: var(--bg); color: var(--fg);
+}
+.studio-main { position: relative; display: flex; min-height: 0; }
+.studio-centre { display: flex; flex: 1; min-width: 0; min-height: 0; }
+/* the browser: its own module fills .browser-mount */
+.studio-browser { flex: none; width: 240px; overflow: auto; background: var(--panel); border-right: 1px solid var(--line); }
+.studio-browser[hidden] { display: none; }
+.studio .browser-title { margin: 0; padding: 10px 12px; font-size: var(--fs-h3); font-weight: 500; color: var(--dim); }
+@media (max-width: 899px) { /* narrow: the browser is a drawer over the arrangement */
+  .studio-browser { position: absolute; z-index: 20; top: 0; bottom: 0; left: 0; box-shadow: var(--shadow); }
+}
+.studio-status { display: flex; gap: 12px; align-items: center; height: 22px; padding: 0 12px; font-size: var(--fs-xs); color: var(--dim); background: var(--panel); border-top: 1px solid var(--line); white-space: nowrap; overflow: hidden; }
+.studio-status .status-text { overflow: hidden; text-overflow: ellipsis; }

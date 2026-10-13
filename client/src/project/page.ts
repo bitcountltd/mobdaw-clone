@@ -2,7 +2,7 @@ import type { Me } from '@mobdaw/shared'
 import { api, ApiError } from '../api'
 import { h, mount } from '../dom'
 import { go, homeLink } from '../router'
-import { mountTimeline } from '../ui/timeline'
+import { mountStudio } from '../studio/shell'
 import { openSession } from './session'
 
 /** The editor for a cloud project. `me` is null for a signed-out visitor, who gets a public project read-only. */
@@ -15,7 +15,7 @@ export function projectPage(me: Me | null, id: string) {
     const watching = !me || (p.role === 'viewer' && !p.members.some((m) => m.username === me.username))
     const session = openSession(id, me ?? { id: null, username: 'guest' }, watching)
     // Viewers can't edit; neither can anyone while the account (or the project's owner) is read-only.
-    const tl = mountTimeline(session, p.name, !me || p.role === 'viewer' || p.frozen || me.planStatus !== 'active',
+    const tl = mountStudio(session, p.name, !me || p.role === 'viewer' || p.frozen || me.planStatus !== 'active',
       me && p.role === 'owner' && !p.frozen && me.planStatus === 'active' ? (n) => api.renameProject(id, n) : undefined,
       { projectId: id, me: me?.username ?? '', role: p.role, owner: p.role === 'owner', locked: p.frozen || !me || me.planStatus !== 'active', public: p.public, admin: !!me?.isAdmin, demo: p.demo })
     mount(tl.el)

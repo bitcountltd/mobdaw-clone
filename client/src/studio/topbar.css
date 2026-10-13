@@ -1,0 +1,51 @@
+/* The studio's top bar (studio/topbar.ts). Carried over from the old timeline bar; redesigned in Phase B. */
+.studio .studio-top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.studio .bar-l, .studio .bar-r, .studio .transport { display: flex; gap: 16px; align-items: center; padding: 0 16px; }
+.studio .bar-r { justify-content: flex-end; padding-right: 0; }
+.studio .logo { text-transform: lowercase; font-family: var(--font-logo); font-weight: 400; font-size: 22px; line-height: 1; letter-spacing: 1px; color: var(--rec); text-decoration: none; }
+.studio a.logo:hover { color: color-mix(in srgb, var(--rec) 80%, white); text-decoration: none; }
+.studio h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
+.studio .bar-btns { display: flex; }
+.studio .cpu { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); cursor: default; }
+.studio .cpu.hot { color: var(--danger); }
+.studio .bar-btn, .studio .chat-btn { height: 36px; padding: 0 14px; border: 0; background: none; color: var(--dim); }
+.studio .chat-btn.on { color: var(--fg); background: var(--raise); }
+.studio .bar-btn.zoom { width: 36px; padding: 0; display: grid; place-items: center; }
+.studio .bar-btn.zoom:hover { color: var(--fg); }
+.studio .bar-btn.on { color: var(--bg); background: var(--accent); }
+.studio .transport { gap: 0; padding: 0; }
+.studio .studio-top[data-status="disconnected"] .project-name::after { content: ' (offline)'; color: var(--dim); font-weight: normal; }
+.studio .time { width: 64px; text-align: center; font-variant-numeric: tabular-nums; color: var(--dim); }
+.studio .rewind { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--dim); }
+.studio .rewind:hover { color: var(--fg); }
+.studio .rewind::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%);
+  background: linear-gradient(to right, currentColor 0 2px, transparent 2px); }
+.studio .rewind::after { content: ''; position: absolute; left: calc(50% - 4px); top: 50%; width: 10px; height: 12px; transform: translateY(-50%);
+  background: currentColor; clip-path: polygon(100% 0, 0 50%, 100% 100%); }
+.studio .play { position: relative; width: 36px; height: 36px; padding: 0; border: 0; background: none; color: var(--fg); }
+.studio .play::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 14px; transform: translate(-50%, -50%); background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.studio .play[data-playing]::before { clip-path: none; background: linear-gradient(to right, currentColor 0 35%, transparent 35% 65%, currentColor 65%); }
+.studio .metro { position: relative; width: 36px; height: 36px; padding: 0; border: 0; background: none; color: var(--dim); }
+.studio .metro:hover { color: var(--fg); }
+.studio .metro.on { color: var(--bg); background: var(--accent); }
+.studio .metro:disabled { opacity: .4; }
+/* a metronome: a hollow trapezoid body (even-odd cut-out) and a tilted pendulum arm */
+.studio .metro::before { content: ''; position: absolute; left: 50%; top: 50%; width: 14px; height: 16px; transform: translate(-50%, -50%); background: currentColor;
+  clip-path: polygon(evenodd, 30% 0, 70% 0, 100% 100%, 0 100%, 30% 0, 38% 16%, 18% 86%, 82% 86%, 62% 16%, 38% 16%, 30% 0); }
+.studio .metro::after { content: ''; position: absolute; left: calc(50% - 1px); top: calc(50% - 10px); width: 2px; height: 15px; background: currentColor; transform: rotate(22deg); transform-origin: 50% 100%; }
+.studio .presence { display: flex; }
+.studio .dot { width: 20px; height: 20px; font-size: 10px; color: var(--on-accent); display: grid; place-items: center; }
+.studio .transport[hidden] { display: none; }
+.studio button.rec { position: relative; width: 28px; height: 36px; padding: 0; border: 0; background: none; color: var(--danger); }
+.studio button.rec::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); border-radius: 50%; background: currentColor; }
+.studio button.rec.on { color: var(--fg); }
+.studio button.rec.on::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 40%, transparent); }
+.studio .pedal-btn { height: 36px; padding: 0 10px; border: 0; background: none; color: var(--dim); }
+.studio .pedal-btn:hover { color: var(--fg); }
+.studio .pedal-btn.on { color: var(--bg); background: var(--accent); }
+.studio .pedal-btn:disabled { opacity: .4; }
+.studio .pedal-st { font-size: 11px; color: var(--faint); cursor: default; white-space: nowrap; }
+.studio .pedal-st.rec { color: var(--danger); }
+.studio .studio-top { position: relative; z-index: 4; }
+.studio .project-name { font-weight: 600; border: 0; background: none; padding: 2px 6px; cursor: pointer; border-radius: var(--r-sm); }
+.studio .project-name:hover { background: var(--raise); }

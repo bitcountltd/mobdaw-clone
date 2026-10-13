@@ -1,0 +1,214 @@
+/* The arrangement (studio/arrange): ruler, track rows, clips, soundscape lanes, automation. The rules carried over from
+   the old timeline come first (scoped to .studio so they don't depend on styles.css); the studio's own follow. */
+/* the timeline's horizontal scrollbar stays visible and roomy (a plain mouse has no sideways wheel); the vertical one stays hidden */
+@supports selector(::-webkit-scrollbar) {
+  .studio .scroll::-webkit-scrollbar { height: 12px; width: 0; }
+  .studio .scroll::-webkit-scrollbar-track { background: var(--panel); }
+  .studio .scroll::-webkit-scrollbar-thumb { border-width: 3px; }
+}
+.studio .hint { padding: 48px 12px; text-align: center; font-size: 13px; }
+.studio .x {
+  position: absolute; top: 0; right: 0; margin: 0; width: 18px; height: 18px; padding: 0; z-index: 1;
+  border: 0; border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0;
+  background: var(--raise); color: var(--dim); font-size: 13px; line-height: 16px;
+}
+.studio .x:hover { background: var(--raise); color: var(--danger); }
+.studio .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
+.studio .content { position: relative; min-width: 100%; }
+.studio .ruler { display: flex; height: 24px; position: sticky; top: 0; z-index: 3; background: var(--panel); cursor: pointer; }
+/* the ruler's bottom line is a pseudo-element under the playhead copies (a real border would draw over them) */
+.studio .ruler::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--line); z-index: 0; pointer-events: none; }
+/* tracks are tiles with a gutter around them: the ruler's corner is the track header plus the gutter, so its line meets the headers' */
+.studio { --gutter: 6px; --head: 140px; }
+.studio .corner, .studio .head { flex: none; position: sticky; z-index: 2; background: var(--panel); }
+.studio .corner { left: 0; width: calc(var(--head) + var(--gutter)); border-bottom: 1px solid var(--line); }
+/* (the shadow keeps the gutter black while clips scroll under the pinned header) */
+.studio .head { left: var(--gutter); width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); }
+.studio .corner { border-right: 1px solid var(--line); }
+.studio .ruler-body { position: relative; height: 100%; overflow: hidden; }
+.studio .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
+.studio .add-track { display: block; position: sticky; left: 0; margin: 12px 16px; width: 64px; height: 40px; padding: 0; font-size: 22px; line-height: 1; color: var(--dim); background: none; border: 1px dashed var(--line); }
+.studio .add-track:hover { color: var(--fg); border-color: var(--dim); background: none; }
+.studio .overlay { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.studio .playhead, .studio .remote-head { position: absolute; top: 0; bottom: 0; width: 1px; }
+.studio .playhead { background: var(--fg); }
+.studio .remote-head { opacity: .8; }
+.studio .snap-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); z-index: 3; }
+.studio .snap-line[hidden] { display: none; }
+
+/* lanes: header, clip row, FX chain */
+.studio .lane { --lane: var(--panel); background: var(--lane); position: relative; margin: var(--gutter) 0 0 var(--gutter); border-radius: var(--r-md); overflow: clip; } /* clip, not hidden: the sticky headers must still stick to the scroller */
+.studio .lane-row { display: flex; height: 72px; }
+.studio .head { background: var(--lane); display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 0 12px; border-right: 1px solid var(--line); }
+.studio .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; padding-right: 14px; }
+.studio .rename { width: 100%; padding: 0 4px; }
+.studio .ctl { display: flex; gap: 1px; align-items: center; background: var(--line); }
+.studio .ctl button { border: 0; padding: 0 6px; font-size: 11px; line-height: 18px; color: var(--dim); }
+.studio .ctl button.on, .studio .dev button.on { color: var(--bg); background: var(--accent); }
+.studio .ctl:has(input[type=range]) { background: none; }
+.studio .ctl input[type=range] { flex: 1; min-width: 0; }
+.studio .lane-body { position: relative; flex: none; height: 100%; }
+
+.studio .clip {
+  position: absolute; top: 0; bottom: 0; padding: 2px 6px; overflow: hidden; white-space: nowrap; font-size: 12px;
+  background: var(--clip); cursor: grab; user-select: none;
+}
+.studio .clip::before, .studio .clip::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; z-index: 1; cursor: inherit; }
+.studio .clip::after { right: 0; }
+.studio .clip::before { left: 0; }
+/* the handle under the pointer (data-zone, set from the timeline) picks the cursor and which part of the edge lights up:
+   trim zones resize, the loop zone (the right edge's upper half, or all of it once the clip loops) and the pass zone
+   (the lower half of the first seam) show the loop cursor */
+.studio .clip[data-zone=l], .studio .clip[data-zone=r], .studio .clip[data-zone=pass] { cursor: ew-resize; }
+.studio .clip[data-zone=loop] { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 10a5 5 0 1 1-1.8-3.8M14.5 3v3.5H11' stroke='%23000' stroke-width='3.5'/%3E%3Cpath d='M15 10a5 5 0 1 1-1.8-3.8M14.5 3v3.5H11' stroke='%23fff' stroke-width='1.5'/%3E%3C/g%3E%3C/svg%3E") 10 10, ew-resize; }
+.studio .clip:not(.editing):hover[data-zone=l]::before, .studio .clip:hover[data-zone=r]::after, .studio .clip:hover[data-zone=loop]::after { background: linear-gradient(var(--accent), var(--accent)) no-repeat; background-size: 2px 100%; }
+.studio .clip:hover[data-zone=r]::after { background-position: right bottom; background-size: 2px 50%; }
+.studio .clip:hover[data-zone=loop]::after { background-position: right top; background-size: 2px 50%; }
+.studio .clip.looping:hover[data-zone=loop]::after, .studio .clip.editing:hover[data-zone=loop]::after { background-size: 2px 100%; }
+/* a dim loop glyph in the top-right corner while hovered says the upper right edge loops */
+.studio .clip.loopable:not(.editing):not(.looping):not(.forever):hover { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M8.5 5a3.5 3.5 0 1 1-1.3-2.7M8 .8v2H6' fill='none' stroke='%238f8b84' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px top 3px; }
+.studio .clip.sel { background: var(--clip-sel); box-shadow: inset 0 0 0 1px var(--accent); }
+.studio .clip.unplayable { opacity: 0.55; }
+.studio .clip .wave { position: absolute; top: 0; height: 100%; color: var(--accent); opacity: .75; pointer-events: none; }
+.studio .clip .label { position: relative; }
+.studio .clip.midi { background: var(--clip-midi); }
+.studio .clip.midi.sel { background: var(--clip-midi-sel); box-shadow: inset 0 0 0 1px var(--tc-1); }
+.studio .clip .mark { position: absolute; min-width: 2px; height: 2px; background: var(--tc-1); pointer-events: none; }
+.studio .clip .mark.rep { opacity: .35; }
+.studio .clip .seams { position: absolute; top: 0; bottom: 0; color: var(--accent); opacity: .3; pointer-events: none; background-image: linear-gradient(to right, currentColor 1px, transparent 1px); background-repeat: repeat-x; }
+/* the first seam's lower half lights up when it is the pass handle under the pointer */
+.studio .clip .seam-first { display: none; position: absolute; top: 50%; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; }
+.studio .clip.looping:hover[data-zone=pass] .seam-first { display: block; }
+.studio .clip .loop-edge { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--fg); opacity: .3; pointer-events: none; }
+
+/* bottom bar of every lane: the toggle is its header-width left cell, the chain opens to its right */
+.studio .fx-row { position: relative; z-index: 2; display: flex; background: var(--lane); border-top: 1px solid var(--line); }
+.studio .fx-toggle { position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); min-height: 16px; padding: 0 0 0 12px; border: 0; border-right: 1px solid var(--line); background: var(--lane); color: var(--dim); font-size: 11px; line-height: 16px; text-align: left; display: flex; align-items: flex-start; }
+.studio .fx-toggle.on { color: var(--fg); }
+.studio .fx { position: sticky; left: calc(var(--head) + var(--gutter)); width: calc(100vw - var(--head) - var(--gutter)); display: flex; flex-wrap: wrap; align-items: stretch; min-height: 72px; } /* cards stretch to the row's tallest, so borders line up */
+.studio .fx[hidden] { display: none; }
+/* shut: only each card's title bar */
+.studio .fx.collapsed { min-height: 0; align-items: stretch; }
+.studio .fx.collapsed .dev > :not(.dev-head), .studio .fx.collapsed .add-fx { display: none; }
+.studio .fx.collapsed .dev { cursor: pointer; display: flex; flex-direction: column; } /* the title bar fills the bar's height */
+.studio .fx.collapsed .dev-head { height: auto; flex: 1; color: var(--dim); }
+.studio .fx.collapsed .dev-head strong { opacity: .65; } /* filter colour-coding stays, darkened */
+.studio .fx-row[hidden] { display: none; }
+/* global fx: between the ruler and the first track */
+.studio .lane.master .fx-row { border-top: 0; }
+.studio .lane.master .fx-toggle { min-height: 44px; padding-left: 12px; font-size: 14px; line-height: 44px; align-items: center; color: var(--fg); }
+.studio .lane.master .fx-toggle:not(.on) { min-height: 31px; font-size: 12px; line-height: 31px; } /* shut: ~30% slimmer */
+.studio .lane-body.arming { cursor: crosshair; }
+/* looper regions: coloured outline boxes over the track's audio */
+.studio .loop-box { position: absolute; top: 0; bottom: 0; cursor: grab; z-index: 1; background: color-mix(in srgb, var(--c) 14%, transparent); }
+.studio .loop-box.armed { background: color-mix(in srgb, var(--c) 28%, transparent); }
+.studio .loop-box::before, .studio .loop-box::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; cursor: ew-resize; }
+.studio .loop-box::before { left: 0; }
+.studio .loop-box::after { right: 0; }
+.studio .loop-box span { pointer-events: none; position: absolute; top: 0; left: 0; padding: 0 5px; font-size: 10px; line-height: 14px; color: var(--bg); background: var(--c); }
+/* automation: a collapsible section per track (and one for the global fx) with a drawable lane per automated param */
+.studio .auto-section[hidden], .studio .auto-box[hidden] { display: none; }
+.studio .auto-row { height: 64px; border-top: 1px solid var(--line); }
+.studio .auto-head { gap: 3px; padding: 0 8px; }
+.studio .auto-title { min-width: 0; }
+.studio .auto-head select { min-width: 0; padding: 0 2px; border: 0; background: var(--raise); font-size: 11px; line-height: 18px; height: 18px; }
+.studio .auto-head .auto-mode { flex: 1; }
+.studio .auto-head .lfo-ctl[hidden] { display: none; } /* .ctl is display:flex, which would otherwise win over [hidden] */
+.studio .auto-head .auto-shape { flex: none; width: 52px; }
+.studio .auto-head .auto-shape[hidden] { display: none; }
+.studio .auto-head .lfo-label { flex: none; width: 36px; padding: 0 4px; font-size: 11px; line-height: 18px; color: var(--dim); background: var(--raise); }
+.studio .auto-row.lfo { height: 96px; }
+.studio .auto-row.lfo .auto-body { cursor: default; }
+.studio .auto-body { cursor: crosshair; }
+.studio .auto-svg { display: block; touch-action: none; }
+.studio .auto-line { fill: none; stroke: var(--c); stroke-width: 2; pointer-events: none; }
+.studio .auto-fill { fill: var(--c); opacity: .12; stroke: none; pointer-events: none; }
+.studio .auto-idle { stroke: var(--dim); stroke-dasharray: 4 4; pointer-events: none; }
+.studio .auto-pt { fill: var(--c); stroke: var(--bg); stroke-width: 1.5; cursor: grab; }
+.studio .auto-pt:hover { stroke: var(--fg); }
+.studio .auto-row.off .auto-line, .studio .auto-row.off .auto-pt, .studio .auto-row.off .auto-fill { opacity: .35; }
+.studio .automatable { cursor: pointer; }
+.studio .automatable:hover { color: var(--fg); text-decoration: underline dotted; }
+/* soundscape: pad stripes on the main lane, and a source lane in its own time world below it */
+/* soundscape: the main lane is an ordinary blank lane; regions are clip-styled blocks, and the source lane below has its own time world */
+.studio .clip.region { background: color-mix(in srgb, var(--accent) 20%, var(--bg)); color: var(--dim); }
+.studio .clip.region.sel { background: color-mix(in srgb, var(--accent) 36%, var(--bg)); }
+/* The source lane is opaque and above the playhead overlay: the timeline's playhead means nothing in source time. */
+.studio .src-row { position: relative; z-index: 2; background: var(--lane); border-top: 1px solid var(--line); }
+.studio .src-head { padding: 0; gap: 0; justify-content: flex-start; align-items: stretch; }
+.studio .src-head .fx-toggle { position: relative; left: 0; width: auto; flex: none; border-right: 0; box-shadow: none; }
+.studio .src-head .transport.sm { padding: 3px 0 0 6px; }
+/* collapsed source lane: a thin row showing only the clip names */
+.studio .src-row.collapsed { height: 20px; }
+.studio .src-row.collapsed .src-view { overflow: hidden; }
+.studio .src-row.collapsed .src-body .clip { top: 0; padding: 0 6px; line-height: 20px; }
+.studio .src-row.collapsed .wave, .studio .src-row.collapsed .src-ticks, .studio .src-row.collapsed .loop-box, .studio .src-row.collapsed .playhead { display: none; }
+.studio .transport[hidden] { display: none; }
+.studio .src-view { position: sticky; left: calc(var(--head) + var(--gutter)); flex: none; width: calc(var(--view, 100vw) - var(--head) - var(--gutter)); height: 100%;
+  overflow-x: auto; overflow-y: hidden; }
+.studio .src-body { height: 100%; }
+.studio .src-body .clip { top: 14px; }
+.studio .src-body .loop-box { top: 14px; }
+.studio .src-ticks { position: absolute; top: 0; left: 0; right: 0; height: 14px; cursor: pointer; z-index: 1; background: var(--lane); border-bottom: 1px solid var(--line); }
+.studio .src-body .playhead { z-index: 2; pointer-events: none; }
+.studio .src-body .playhead[hidden] { display: none; }
+.studio .src-ticks .tick { padding: 0 0 0 3px; font-size: 9px; line-height: 14px; }
+
+/* compact transport (soundscape lanes) and the loopers row's header cell */
+.studio .transport.sm { align-self: flex-start; }
+.studio .transport.sm .play { width: 24px; height: 18px; border: 1px solid var(--line); background: var(--raise); }
+.studio .transport.sm .play::before { width: 8px; height: 10px; }
+.studio .transport.sm .time { width: auto; padding: 0 6px; font-size: 11px; text-align: left; line-height: 18px; }
+.studio .fx-head { position: sticky; left: var(--gutter); flex: none; width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); display: flex; flex-direction: column; align-items: stretch; background: var(--lane); border-right: 1px solid var(--line); }
+.studio .fx-head .fx-toggle { position: relative; left: 0; width: auto; flex: none; border-right: 0; box-shadow: none; }
+.studio .fx-head .transport.sm { padding: 3px 0 0 6px; }
+.studio .loop-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--c); pointer-events: none; z-index: 2; }
+.studio .ctl button.record.on { color: var(--on-rec); background: var(--rec); }
+.studio .clip.recording { background: color-mix(in srgb, var(--danger) 30%, var(--bg)); pointer-events: none; z-index: 1; }
+.studio .ctl.track-btns { background: none; } /* the strip beside M S R shows only while the meter is live */
+.studio .ctl button.listen[hidden] { display: none; }
+.studio .ctl .meter { background: var(--line); flex: 1; align-self: stretch; position: relative; overflow: hidden; }
+.studio .ctl .meter::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--lv, 0) * 100%); background: var(--ok); transition: width 60ms linear; }
+.studio .ctl .meter.clipping::before { background: var(--danger); }
+.studio .ctl .meter[hidden] { display: none; }
+.studio .clip.incoming { background: var(--clip); animation: incoming 1.6s ease-in-out infinite; }
+.studio .clip.missing { opacity: 0.55; background: repeating-linear-gradient(135deg, var(--clip) 0 6px, var(--raise) 6px 12px); }
+@keyframes incoming { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .studio .clip.incoming { animation: none; box-shadow: none; outline: 1px dashed var(--dim); outline-offset: -2px; }
+}
+/* a track someone else is recording on is read-only */
+.studio .lane.locked .clip, .studio .lane.locked .fx, .studio .lane.locked .x { pointer-events: none; }
+.studio .lane.locked .fx { opacity: 0.6; }
+/* a muted track is dimmed through its children (dimming the lane itself would fade its background tile too) */
+.studio .lane.muted > * { opacity: .45; }
+/* a `forever` MIDI clip runs on past the right edge: no end edge, no resize handle, a faded tail */
+.studio .clip.forever::after { display: none; }
+.studio .clip.forever:not(.editing) { mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); }
+.studio .clip.live-loop { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); pointer-events: none; z-index: 1; }
+.studio .clip.live-loop.forever { background-image: linear-gradient(to right, transparent calc(100% - 24px), var(--bg)); }
+
+/* --- studio */
+.studio .arrange { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.studio .arr-lanes { position: relative; padding-bottom: var(--gutter); }
+/* the loopers row is as wide as the visible lanes (the browser and chat take some of the window) */
+.studio .fx { width: calc(var(--view, 100vw) - var(--head) - var(--gutter)); }
+/* track colour: a stripe down the header, and the clips tinted with it */
+.studio .track-head { cursor: pointer; box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), inset 3px 0 0 var(--tc, var(--line-strong)); }
+.studio .track-head.focus { background: color-mix(in srgb, var(--tc, var(--accent)) 12%, var(--lane)); }
+.studio .track-head .name { cursor: text; align-self: flex-start; max-width: 100%; }
+.studio .lane {
+  --clip: color-mix(in srgb, var(--tc, var(--accent)) 22%, var(--raise)); --clip-sel: color-mix(in srgb, var(--tc, var(--accent)) 38%, var(--raise));
+  --clip-midi: var(--clip); --clip-midi-sel: var(--clip-sel);
+}
+.studio .lane .clip .wave, .studio .lane .clip .seams { color: var(--tc, var(--accent)); }
+.studio .lane .clip .mark { background: var(--tc, var(--tc-1)); }
+.studio .clip.sel { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tc, var(--accent)) 70%, var(--fg)); }
+/* the clip open in the dock's editor */
+.studio .clip.editing { box-shadow: inset 0 0 0 1px var(--accent); }
+/* the master row: its header focuses the master bus (the dock shows its effects) */
+.studio .lane.master .lane-row { height: 28px; }
+.studio .master-head { cursor: pointer; justify-content: center; box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), inset 3px 0 0 var(--fg); }
+.studio .master-head.focus { background: color-mix(in srgb, var(--accent) 12%, var(--lane)); }
+.studio .master-head .name { cursor: pointer; }
+.studio .master-body { position: sticky; left: calc(var(--head) + var(--gutter)); padding: 0 10px; line-height: 28px; font-size: var(--fs-sm); white-space: nowrap; cursor: pointer; }
