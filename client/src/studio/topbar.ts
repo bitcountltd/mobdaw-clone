@@ -433,7 +433,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     { key: 'l', run: () => toggleLoop(st), label: 'loop on / off', group: 'Transport' },
     { key: 't', run: (e) => tap(e.timeStamp), label: 'tap tempo', group: 'Transport' },
     { key: 'z', run: () => dispatchEvent(new Event(ZOOM_FIT)), label: 'zoom to fit', group: 'View', readOnly: true },
-    { key: 'home', run: () => st.rewind(), label: 'back to start', group: 'Transport', readOnly: true },
+    { key: 'home', run: () => st.rewind(), label: 'back to the start', group: 'Transport', readOnly: true },
   ])
 
   const meta = metaMap(doc)
