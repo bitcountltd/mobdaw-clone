@@ -186,6 +186,8 @@ export function knob(o: KnobOpts): Knob {
   el.addEventListener('pointerleave', () => ((hover = false), reveal()))
   el.addEventListener('pointerdown', (e) => {
     if (disabled || e.button !== 0) return
+    // the label is not a handle: a click on it opens its own menu (automate), so it must keep its click
+    if ((e.target as Element).closest?.('.knob-label')) return
     el.focus({ preventScroll: true })
     const start = paramToPos(p, value)
     const before = value
@@ -563,7 +565,7 @@ export function iconButton(name: IconName, title: string, onclick?: (e: MouseEve
   return el
 }
 
-export type SegOption<T extends string> = T | { value: T; label?: string; icon?: IconName; title?: string }
+export type SegOption<T extends string> = T | { value: T; label?: string | Node; icon?: IconName; title?: string }
 export type Segmented<T extends string> = { el: HTMLElement; set(v: T): void; get(): T }
 
 /** A row of mutually exclusive buttons (arrange / mix, grid sizes). */

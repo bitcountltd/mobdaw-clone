@@ -6,6 +6,7 @@ import { MASTER_TRACK, getTracks, trackColor } from '@mobdaw/shared'
 import { h } from '../../dom'
 import { iconButton, segmented } from '../../theme/controls'
 import { icon } from '../../theme/icons'
+import { kindOf } from '../arrange/tracks'
 import type { DockTab, Studio } from '../studio'
 import { mountClipEditor, type PaneTitle } from './clipEditor'
 import { mountRack } from './rack'
@@ -13,6 +14,10 @@ import './dock.css'
 
 const MIN_H = 140
 const DEFAULT_H = 300
+/** The arrangement keeps at least this much of the window (top bar, ruler and a couple of tracks). */
+const KEEP_ABOVE = 260
+/** The tallest the dock may be in a window `winH` high. */
+export const dockMax = (winH: number) => Math.max(MIN_H, winH - KEEP_ABOVE)
 
 export function mountDock(st: Studio) {
   const clip = mountClipEditor(st)
@@ -38,13 +43,14 @@ export function mountDock(st: Studio) {
   // A fresh session starts shut (an empty dock on first load is just in the way) until there is something to show.
   let touched = false
   if (!(st.ui.dock.height >= MIN_H)) st.ui.dock.height = DEFAULT_H
+  st.ui.dock.height = Math.min(st.ui.dock.height, dockMax(innerHeight))
   st.ui.dock = { ...st.ui.dock, open: false }
   const offFirst = st.on('ui', (p) => {
     if (touched) return
     if ('dock' in p && p.dock?.open) return void (touched = true) // opened by a shortcut or a header click
     if ((('editing' in p) && p.editing) || (('focusTrack' in p) && p.focusTrack)) {
       touched = true
-      st.setUi({ dock: { ...st.ui.dock, open: true, tab: 'editing' in p && p.editing ? 'clip' : st.ui.editing ? st.ui.dock.tab : 'devices' } })
+      st.setUi({ dock: { ...st.ui.dock, open: true, tab: ('editing' in p && p.editing) || st.ui.editing ? 'clip' : 'devices' } })
     }
   })
 
@@ -55,7 +61,7 @@ export function mountDock(st: Studio) {
     touched = true
     const y0 = e.clientY
     const h0 = st.ui.dock.open ? st.ui.dock.height : 0
-    const max = () => Math.max(MIN_H, (el.parentElement?.clientHeight ?? innerHeight) - 200)
+    const max = () => dockMax(innerHeight)
     el.classList.add('resizing')
     const move = (m: PointerEvent) => {
       const want = h0 + (y0 - m.clientY)
@@ -84,7 +90,7 @@ export function mountDock(st: Studio) {
     const i = tracks.findIndex((t) => t.id === id)
     if (i < 0) return null
     const t = tracks[i]
-    return { name: t.name, sub: t.role === 'click' ? 'click track' : `${t.kind} track`, color: trackColor(t, i) }
+    return { name: t.name, sub: kindOf(st.doc, t).label, color: trackColor(t, i) }
   }
   function head() {
     const t = title()
@@ -113,8 +119,15 @@ export function mountDock(st: Studio) {
     head()
   }
 
+  // a smaller window: the dock gives back room so the tracks stay in view
+  const onResize = () => {
+    const m = dockMax(innerHeight)
+    if (st.ui.dock.height > m) st.setUi({ dock: { ...st.ui.dock, height: m } })
+  }
+  addEventListener('resize', onResize)
   const offs = [
     offFirst,
+    () => removeEventListener('resize', onResize),
     st.on('ui', (p) => {
       if ('dock' in p) layout()
       else if ('focusTrack' in p || 'editing' in p) head()

@@ -19,7 +19,7 @@
 }
 .studio .browser .browser-search:focus, .studio .browser .browser-search:focus-visible { outline: none; box-shadow: none; }
 .browser-find:focus-within { border-color: var(--accent); }
-.browser-search::placeholder { color: var(--faint); }
+.browser-search::placeholder { color: var(--muted); }
 .browser-search::-webkit-search-cancel-button { filter: grayscale(1) brightness(1.6); opacity: .5; }
 .browser .browser-kb { flex: none; gap: 3px; width: auto; min-width: 24px; height: 24px; padding: 0 5px; }
 .browser-kb .kb-range { font-size: var(--fs-xs); font-weight: 600; }
@@ -37,12 +37,12 @@
 .bsec-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .bsec-chev { color: var(--faint); transition: transform var(--t-fast) var(--ease); }
 .bsec.folded .bsec-chev { transform: rotate(-90deg); }
-.bsec-count { margin-left: auto; font-size: var(--fs-xs); font-weight: 500; color: var(--faint); }
+.bsec-count { margin-left: auto; font-size: var(--fs-xs); font-weight: 500; color: var(--muted); }
 .bsec.folded .bsec-body { display: none; }
 .browser.searching .bsec.folded .bsec-body { display: block; }
 .browser.searching .bsec-count { visibility: hidden; }
-.bsub { padding: 6px 12px 2px 28px; font-size: var(--fs-xs); color: var(--faint); }
-.bsec-empty, .browser-none { margin: 0; padding: 4px 12px 8px 28px; font-size: var(--fs-sm); color: var(--faint); line-height: 1.4; }
+.bsub { padding: 6px 12px 2px 28px; font-size: var(--fs-xs); color: var(--muted); }
+.bsec-empty, .browser-none { margin: 0; padding: 4px 12px 8px 28px; font-size: var(--fs-sm); color: var(--muted); line-height: 1.4; }
 
 .brow {
   position: relative; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px 0 26px;
@@ -53,16 +53,18 @@
 .browser .brow:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .brow:active { cursor: grabbing; }
 .brow.dragging { opacity: .5; }
-.brow.missing { color: var(--faint); }
-.brow-icon { flex: none; }
+.brow.missing { color: var(--muted); }
+.brow-icon { flex: none; color: var(--dim); }
+.brow:hover .brow-icon, .brow:focus .brow-icon { color: var(--fg); }
 .brow-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.brow-meta { flex: none; font-size: var(--fs-xs); color: var(--dim); }
+.brow-meta { flex: none; font-size: var(--fs-xs); color: var(--muted); }
 .brow-wave { flex: none; width: 40px; height: 16px; opacity: .85; }
 .brow-play {
   flex: none; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; margin-right: -2px;
-  border: 0; border-radius: 50%; background: var(--line); color: var(--fg); cursor: pointer; opacity: 0;
+  border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer;
 }
-.brow:hover .brow-play, .brow:focus .brow-play { opacity: 1; }
+/* at rest a quiet glyph (so it can be found), a round button under the pointer */
+.brow:hover .brow-play, .brow:focus .brow-play { background: var(--line); color: var(--fg); }
 .brow-play:hover { background: var(--line-strong); }
 .brow-play.on { opacity: 1; background: var(--accent); color: var(--on-accent); }
 
@@ -75,3 +77,7 @@
 .browser-act:hover:not(:disabled) { background: var(--line); color: var(--fg); }
 .browser-act:disabled { color: var(--faint); cursor: default; }
 .browser-act[hidden] { display: none; }
+
+/* the drawer's close button: only when the browser is a drawer (narrow screens) */
+.browser .browser-close { display: none; flex: none; }
+@media (max-width: 899px) { .browser .browser-close { display: inline-flex; } }

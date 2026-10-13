@@ -18,18 +18,20 @@
 .studio .mx-cap { flex: none; height: 4px; margin: 0 -6px; background: var(--tc); }
 .studio .mx-strip.muted .mx-cap { background: color-mix(in srgb, var(--tc) 35%, var(--bg)); }
 .studio .mx-top { display: flex; justify-content: space-between; align-items: center; height: 14px; margin-top: -2px; }
-.studio .mx-kind { display: inline-flex; gap: 4px; align-items: center; font-size: var(--fs-xs); color: var(--dim); font-variant-numeric: tabular-nums; }
-.studio .mx-kind svg { color: var(--tc); }
+.studio .mx-kind { display: inline-flex; gap: 4px; align-items: center; font-size: var(--fs-xs); color: var(--dim); }
+.studio .mx-kind svg { color: var(--dim); }
 
 /* inserts: a short list of the chain, like the slots on a console */
 .studio .mx-section { flex: none; display: flex; flex-direction: column; gap: 4px; }
 .studio .mx-label { font-size: var(--fs-xs); color: var(--dim); }
-.studio .mx-inserts { display: flex; flex-direction: column; gap: 2px; height: calc(5 * 18px + 4 * 2px); }
-.studio .mx-insert { justify-content: flex-start; gap: 5px; height: 18px; padding: 0 5px; overflow: hidden; border-radius: 2px; font-size: var(--fs-xs); color: var(--fg); background: rgba(0, 0, 0, .25); }
+.studio .mx-strips { --mx-slots: 2; }
+/* as many slots as the fullest strip needs, the same on every strip so the pan knobs and faders line up */
+.studio .mx-inserts { display: flex; flex-direction: column; gap: 2px; height: calc(var(--mx-slots) * 20px - 2px); }
+.studio .mx-insert { flex: none; justify-content: flex-start; gap: 5px; height: 18px; padding: 0 5px; overflow: hidden; border-radius: 2px; font-size: var(--fs-xs); color: var(--fg); background: rgba(0, 0, 0, .25); }
 .studio .mx-insert span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .studio .mx-insert i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 4px rgba(240, 180, 76, .6); }
 .studio .mx-insert.inst i { background: var(--tc); box-shadow: none; }
-.studio .mx-insert.off { color: var(--faint); }
+.studio .mx-insert.off { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
 .studio .mx-insert.off i { background: var(--faint); box-shadow: none; }
 .studio .mx-insert.add, .studio .mx-insert.more { color: var(--dim); background: none; border: 1px dashed var(--line); }
 .studio .mx-insert.add:hover, .studio .mx-insert.more:hover { color: var(--fg); border-color: var(--line-strong); }
@@ -44,10 +46,14 @@
 .studio .mx-strip .fader { --fader-c: var(--tc); }
 .studio .mx-strip.click .fader.v { width: 30px; }
 .studio .mx-btns { display: flex; justify-content: center; gap: 3px; flex: none; }
-.studio .mx-btn { width: 22px; height: 20px; padding: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--dim); border: 1px solid var(--line); border-radius: var(--r-sm); background: rgba(0, 0, 0, .2); }
+.studio .mx-btn { width: 24px; height: 22px; padding: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--dim); border: 1px solid var(--line); border-radius: var(--r-sm); background: rgba(0, 0, 0, .2); }
 .studio .mx-btn.icon-btn svg { width: 12px; height: 12px; }
 .studio .mx-btn.on { border-color: transparent; }
 .studio .mx-btn[data-kind=solo].on { background: var(--accent); }
+/* arm: quiet at rest, red on hover, a red fill when armed (the same as the track headers) */
+.studio .mx-btn.arm { color: var(--dim); }
+.studio .mx-btn.arm:hover:not(:disabled) { color: var(--rec); }
+.studio .mx-btn.arm.on, .studio .mx-btn.arm.on:hover:not(:disabled) { background: var(--rec); color: var(--on-rec); }
 .studio .mx-strip.click .mx-btn { width: 20px; }
 /* the scribble strip: the track's name on a label in its colour */
 .studio .mx-name { flex: none; display: block; height: 24px; padding: 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 3px;
@@ -59,11 +65,11 @@
 .studio .mx-strip.master { --tc: var(--fg); width: 148px; margin-left: auto; border-color: var(--line-strong); }
 .studio .mx-strip.master .mx-cap { background: linear-gradient(90deg, var(--accent), var(--rec)); }
 .studio .mx-strip.master .mx-section { margin-top: 2px; }
-.studio .mx-strip.master .mx-inserts { height: auto; min-height: calc(5 * 18px + 4 * 2px); }
+.studio .mx-strip.master .mx-inserts { height: auto; min-height: calc(var(--mx-slots, 2) * 20px - 2px); }
 .studio .mx-strip.master .mx-name { color: var(--on-accent); background: linear-gradient(color-mix(in srgb, var(--accent) 88%, white), var(--accent)); }
 .studio .mx-meter-big { position: relative; display: flex; justify-content: center; gap: 6px; flex: 1; min-height: 60px; padding: 4px 0; }
 .studio .mx-meter-big .meter-el.v { width: 22px; height: 100%; }
 .studio .mx-scale { position: relative; width: 22px; height: 100%; }
-.studio .mx-scale span { position: absolute; right: 0; bottom: calc(var(--p) * (100% - 6px)); transform: translateY(50%); font-size: 9px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.studio .mx-scale span { position: absolute; right: 0; bottom: calc(var(--p) * (100% - 6px)); transform: translateY(50%); font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .studio .mx-peaks { display: flex; justify-content: space-around; gap: 4px; height: 22px; padding: 0 4px; font-size: var(--fs-sm); color: var(--fg); font-variant-numeric: tabular-nums; border: 1px solid var(--line); border-radius: var(--r-sm); background: #141517; }
 .studio .mx-peaks.hot { color: var(--rec); border-color: var(--rec); }

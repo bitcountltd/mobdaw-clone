@@ -26,6 +26,9 @@ export async function createFromTemplate(t: Template, name = silliName()) {
   location.hash = `#/local/${p.id}`
 }
 
+/** Names as the home page shows them (the template ids stay). */
+const SHOWN: Record<string, string> = { empty: 'Blank' }
+
 type Built = { rows: PictureRow[]; bpm: number; meter: number; tracks: number }
 
 /** Build a template into a scratch doc just to draw it (and read its tempo). */
@@ -59,7 +62,7 @@ export function startSection(): HTMLElement {
     const el = h('button', { className: `start-card${isDemo ? ' demo' : ''}`, type: 'button' },
       picture(b.rows, isDemo ? 'lg' : ''),
       h('span', { className: 'start-text' },
-        h('span', { className: 'start-name' }, isDemo ? (demoName ?? t.name) : t.name, isDemo ? h('span', { className: 'start-tag' }, 'demo song') : null),
+        h('span', { className: 'start-name' }, isDemo ? (demoName ?? t.name) : SHOWN[t.id] ?? t.name, isDemo ? h('span', { className: 'start-tag' }, 'demo song') : null),
         h('span', { className: 'start-blurb' }, t.blurb),
         facts),
       h('span', { className: 'start-go' }, icon(isDemo ? 'play' : 'plus'), isDemo ? 'open the demo' : 'new project'))

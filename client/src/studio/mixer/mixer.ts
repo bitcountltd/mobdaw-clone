@@ -2,18 +2,18 @@
 // A strip is the track's colour cap, its inserts (click: show the track's devices in the dock), a pan knob, the gain
 // fader beside a stereo meter, mute / solo / arm, and the track's name on a label strip in its colour. The click track
 // gets a narrow strip. The master strip has the master chain, a tall meter with peak hold and the peak readout.
-import { DEVICES, MASTER_TRACK, getDevices, getTracks, isDrum, trackColor, updateTrack, type Device, type Track } from '@mobdaw/shared'
+import { DEVICES, MASTER_TRACK, getClips, getDevices, getTracks, isDrum, trackColor, updateTrack, type Device, type Track } from '@mobdaw/shared'
 import { h } from '../../dom'
 import { fader, knob, meter, toggle, type Fader, type Knob, type Meter, type Toggle } from '../../theme/controls'
-import { icon, type IconName } from '../../theme/icons'
+import { icon } from '../../theme/icons'
+import { kindOf } from '../arrange/tracks'
 import { fmtDb } from '../../ui/slider'
 import { applyDrop, canDrop, hasPayload, readDragPayload } from '../drops'
 import type { Studio } from '../studio'
 import './mixer.css'
 
-const SLOTS = 5 // insert rows on a strip (they line up across the strips)
+const SLOTS = 5 // the most insert rows on a strip (they line up across the strips)
 export const fmtPan = (v: number) => (Math.abs(v) < 0.005 ? 'C' : `${v < 0 ? 'L' : 'R'}${Math.round(Math.abs(v) * 100)}`)
-const KIND_ICON: Record<string, IconName> = { audio: 'wave', midi: 'piano', soundscape: 'loop' }
 
 type Strip = {
   id: string; el: HTMLElement; name: HTMLElement; inserts: HTMLElement; pan: Knob; panOut: HTMLElement; gain: Fader; meter: Meter
@@ -63,7 +63,7 @@ export function mountMixer(st: Studio) {
   function insertList(box: HTMLElement, list: Device[], trackId: string) {
     const drums = list.filter(isDrum)
     const entries: { label: string; off: boolean; inst: boolean }[] = [
-      ...(drums.length ? [{ label: drums.length === 1 ? drums[0].name ?? 'drum' : `${drums.length} drums`, off: drums.every((d) => d.bypass), inst: true }] : []),
+      ...(drums.length ? [{ label: drums.length === 1 ? drums[0].name ?? 'Drum' : `Drum kit (${drums.length})`, off: drums.every((d) => d.bypass), inst: true }] : []),
       ...list.filter((d) => !isDrum(d)).map((d) => ({ label: d.name ?? DEVICES[d.type]?.name ?? 'device', off: !!d.bypass, inst: !!DEVICES[d.type]?.instrument })),
     ]
     const room = SLOTS - (readOnly ? 0 : 1)
@@ -76,6 +76,7 @@ export function mountMixer(st: Studio) {
     if (shown.length < entries.length) items.push(h('button', { className: 'mx-insert more', title: 'show them all in the dock', onclick: () => focus(trackId) }, h('span', {}, `${entries.length - shown.length} more`)))
     if (!readOnly) items.push(h('button', { className: 'mx-insert add', title: 'add an instrument or effect (in the dock)', onclick: () => focus(trackId) }, icon('plus', 12), h('span', {}, entries.length ? '' : 'add')))
     box.replaceChildren(...items)
+    return items.length
   }
 
   function make(t: Track): Strip {
@@ -95,7 +96,7 @@ export function mountMixer(st: Studio) {
     const m = meter({ stereo: true })
     const mute = toggle('m', { title: 'mute', onChange: (on) => updateTrack(doc, id, { muted: on }) })
     const solo = toggle('s', { title: 'solo', onChange: (on) => updateTrack(doc, id, { soloed: on }) })
-    const arm = t.kind === 'audio' || t.kind === 'midi' ? toggle({ icon: 'arm' }, { title: 'arm for recording', tone: 'rec', onChange: () => void st.rec.arm(id) }) : null
+    const arm = !click && (t.kind === 'audio' || t.kind === 'midi') ? toggle({ icon: 'arm' }, { title: 'arm for recording', tone: 'rec', className: 'arm', onChange: () => void st.rec.arm(id) }) : null
     for (const b of [mute, solo, arm]) if (b) (b.el.disabled = readOnly), b.el.classList.add('mx-btn')
     solo.el.dataset.kind = 'solo'
     const el = h('div', { className: `mx-strip${click ? ' click' : ''}` },
@@ -120,7 +121,8 @@ export function mountMixer(st: Studio) {
     const tracks = getTracks(doc)
     const ids = new Set(tracks.map((t) => t.id))
     for (const [id, s] of strips) if (!ids.has(id)) { s.meter.destroy(); s.el.remove(); strips.delete(id) }
-    const devices = getDevices(doc)
+    const devices = getDevices(doc), clips = getClips(doc)
+    let slots = 1
     tracks.forEach((t, i) => {
       const s = strips.get(t.id) ?? make(t)
       if (row.children[i] !== s.el) row.insertBefore(s.el, row.children[i] ?? null)
@@ -128,7 +130,9 @@ export function mountMixer(st: Studio) {
       s.el.classList.toggle('focus', st.ui.focusTrack === t.id)
       s.el.classList.toggle('muted', t.muted)
       if (s.name.textContent !== t.name) (s.name.textContent = t.name), (s.name.title = `${t.name}: show its devices in the dock`)
-      s.kind.replaceChildren(icon(t.role === 'click' ? 'metronome' : KIND_ICON[t.kind] ?? 'wave', 14), h('span', {}, String(i + 1)))
+      const k = kindOf(doc, t, devices, clips)
+      if (s.kind.dataset.k !== k.icon) (s.kind.dataset.k = k.icon), s.kind.replaceChildren(icon(k.icon, 14))
+      s.kind.title = k.label
       const locked = readOnly || st.locks.has(t.id)
       s.gain.set(t.gain)
       s.gain.setDisabled(locked)
@@ -138,8 +142,10 @@ export function mountMixer(st: Studio) {
       s.mute.set(t.muted)
       s.solo.set(t.soloed)
       s.arm?.set(st.ui.armedTrack === t.id)
-      insertList(s.inserts, devices.filter((d) => d.trackId === t.id), t.id)
+      slots = Math.max(slots, insertList(s.inserts, devices.filter((d) => d.trackId === t.id), t.id))
     })
+    row.style.setProperty('--mx-slots', String(slots))
+    master.style.setProperty('--mx-slots', String(slots))
     empty.hidden = tracks.length > 0
     master.classList.toggle('focus', st.ui.focusTrack === MASTER_TRACK)
     insertList(mInserts, devices.filter((d) => d.trackId === MASTER_TRACK), MASTER_TRACK)

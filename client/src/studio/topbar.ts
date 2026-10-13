@@ -4,10 +4,10 @@
 //           lit, the clock dim, click to swap; tempo with drag / type / tap; meter), snap
 //   right   undo / redo, arrange / mix, browser / dock, the master scope, cpu, export, help; presence and chat (cloud)
 // Narrow windows fold the secondary groups into a "more" panel (≤ 900px), down to transport + counter on a phone.
-// It also owns the grid and view shortcuts: L loop, T tap tempo, Z zoom to fit, Tab arrange / mix, ⌘+ / ⌘- zoom.
+// It also owns the grid and view shortcuts: L loop, T tap tempo, Z zoom to fit, X arrange / mix, ⌘+ / ⌘- zoom.
 import {
   BPM_MAX, BPM_MIN, GRID_SIZES, addClickTrack, barsBeats, clipsMap, fitClickTrack, getLoop, getLoopers, getPoints, getTracks,
-  metaMap, setBeatsPerBar, setProjectTempo, tapBpm, updateTrack, type GridSize, type Role,
+  metaMap, setBeatsPerBar, setProjectTempo, tapBpm, tracksMap, updateTrack, type GridSize, type Role,
 } from '@mobdaw/shared'
 import { getCtx } from '../audio/context'
 import { renderProject } from '../audio/render'
@@ -24,6 +24,7 @@ import { fmt } from '../ui/transport'
 import { ZOOM_FIT, ZOOM_MAX, ZOOM_MIN } from './arrange/arrange'
 import { toggleLoop } from './arrange/ruler'
 import { registerKeys } from './keys'
+import { qwertyOf, QWERTY_KEYS } from './qwerty'
 import { mountScope } from './scope'
 import type { Studio } from './studio'
 import './topbar.css'
@@ -44,6 +45,8 @@ const MOD = MAC ? '⌘' : 'ctrl+'
 const initials = (n: string) => n.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()
 const FIGURE = ' ' // a digit-wide space, for the counter's fixed width
 const COUNTER_KEY = 'mobdaw.counter'
+/** "bar 5" or "bars 5 to 8" (both inclusive). */
+const loopBars = (a: number, b: number) => (a >= b ? `bar ${a}` : `bars ${a} to ${b}`)
 const gridLabel = (g: GridSize) => GRID_SIZES.find((s) => s.value === g)?.label ?? '1/16'
 
 /** True when a key press belongs to a text field (or a control that takes keys), not to the studio. */
@@ -91,8 +94,8 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   // ---------------------------------------------------------------- centre: transport
   const rewind = iconButton('rewind', 'go to the start', () => st.rewind(), 'tb-rewind')
   tooltip(rewind, 'go to the start', 'home')
-  const play = iconButton('play', 'play / pause', () => st.toggle(), 'tb-play')
-  tooltip(play, 'play / pause', 'space')
+  const play = iconButton('play', 'play / stop', () => st.toggle(), 'tb-play')
+  tooltip(play, 'play / stop', 'space')
   const rec = toggle({ icon: 'record' }, { tone: 'rec', className: 'tb-rec', onChange: () => { rec.set(!!st.rec.take || st.midi.active); void st.toggleRecord() } })
   tooltip(rec.el, 'record onto the armed track, or a new one · right-click: input offset', 'shift+space')
   rec.el.addEventListener('contextmenu', (e) => { e.preventDefault(); st.rec.offsetMenu(e) })
@@ -115,8 +118,19 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     try { localStorage.setItem('mobdaw.countIn', on ? '1' : '0') } catch { /* (not remembered) */ }
   } })
   tooltip(countBtn.el, 'count-in: one bar of click before recording starts')
+  // The computer keyboard instrument (⇧K): lit while the letter keys play notes, with the octave they start at.
+  const keysLabel = h('span', { className: 'tb-keys-oct num' })
+  const keysBtn = toggle(h('span', { className: 'tb-keys-in' }, icon('keyboard', 16), h('span', { className: 'tb-keys-txt' }, 'keys'), keysLabel), {
+    className: 'tb-keys', onChange: () => { qwertyOf(st)?.toggle(); drawKeys() },
+  })
+  function drawKeys() {
+    const q = qwertyOf(st)
+    keysBtn.set(!!q?.on)
+    keysLabel.textContent = q ? q.range().split('–')[0] : ''
+    tooltip(keysBtn.el, q?.on ? `computer keyboard on: A – ' play ${q.range()} · Z / X octave` : 'play the focused instrument from the computer keyboard', '⇧K')
+  }
   const pedalBtn = toggle('pedal', { className: 'tb-pedal', onChange: () => { pedalBtn.set(st.pedal.on); void st.pedal.set(!st.pedal.on) } })
-  const transport = h('div', { className: 'tb-transport' }, rewind, play, readOnly ? null : rec.el, loopBtn.el, metro.el, readOnly ? null : countBtn.el, readOnly ? null : pedalBtn.el)
+  const transport = h('div', { className: 'tb-transport' }, rewind, play, readOnly ? null : rec.el, loopBtn.el, metro.el, readOnly ? null : countBtn.el, keysBtn.el, readOnly ? null : pedalBtn.el)
   for (const b of [loopBtn.el, metro.el]) b.disabled = readOnly
 
   // ---------------------------------------------------------------- centre: the display (counter, tempo, meter)
@@ -147,16 +161,27 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
 
   const bpm = numberField({
     value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, title: 'tempo: drag to change, click to type',
-    onInput: (v) => setBpmSoon(v), onChange: (v) => setBpmSoon(v),
+    onInput: (v) => setBpmSoon(v), onChange: (v) => (setBpmSoon(v), endTempo()),
   })
   bpm.el.classList.add('tb-bpm')
   bpm.el.disabled = readOnly
   bpm.el.dataset.hint = 'tempo (bpm): drag sideways or up / down, click to type · clips stay on their bars'
   let bpmRaf = 0, bpmWant = 0
+  // a drag scales everything from where it was when the drag began (no drift), as one undo step (Studio.beginTempoChange)
+  let tempoCh: ReturnType<Studio['beginTempoChange']> | null = null, tempoIdle = 0
   function setBpmSoon(v: number) {
     if (readOnly) return
     bpmWant = v
-    if (!bpmRaf) bpmRaf = requestAnimationFrame(() => { bpmRaf = 0; setProjectTempo(doc, bpmWant) })
+    tempoCh ??= st.beginTempoChange()
+    clearTimeout(tempoIdle)
+    tempoIdle = window.setTimeout(endTempo, 1500) // (a drag that ends where it began reports no change)
+    if (!bpmRaf) bpmRaf = requestAnimationFrame(() => { bpmRaf = 0; tempoCh?.set(bpmWant) })
+  }
+  function endTempo() {
+    clearTimeout(tempoIdle)
+    if (bpmRaf) (cancelAnimationFrame(bpmRaf), (bpmRaf = 0), tempoCh?.set(bpmWant))
+    tempoCh?.end()
+    tempoCh = null
   }
   let taps: number[] = []
   const tapBtn = h('button', { className: 'tb-tap', type: 'button', disabled: readOnly, onclick: (e: MouseEvent) => tap(e.timeStamp) }, 'tap')
@@ -191,10 +216,11 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
 
   // ---------------------------------------------------------------- centre: snap
   let lastGrid: GridSize = st.ui.grid || 0.25
-  const snapToggle = iconButton('magnet', 'snap to grid', () => {
+  const snapBtn = toggle({ icon: 'magnet' }, { className: 'tb-magnet', on: !!st.ui.grid, onChange: () => {
     if (st.ui.grid) (lastGrid = st.ui.grid), st.setUi({ grid: 0 })
     else st.setUi({ grid: lastGrid || 0.25 })
-  }, 'tb-magnet')
+  } })
+  const snapToggle = snapBtn.el
   tooltip(snapToggle, 'snap to grid on / off (hold alt while dragging: free)')
   const snapSize = h('button', { className: 'tb-snapsize', type: 'button' }, h('span', {}), icon('chevron-down', 12))
   tooltip(snapSize, 'grid size')
@@ -216,10 +242,11 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   const redoBtn = iconButton('redo', 'redo', () => undo.redo(), 'tb-redo')
   tooltip(redoBtn, 'redo', MAC ? '⇧⌘Z' : 'ctrl+shift+Z')
   const view = segmented<'arrange' | 'mix'>([
-    { value: 'arrange', icon: 'arrange', title: 'arrange (Tab)' },
-    { value: 'mix', icon: 'mixer', title: 'mix (Tab)' },
+    { value: 'arrange', icon: 'arrange', label: h('span', { className: 'tb-view-txt' }, 'arrange'), title: 'arrange (X)' },
+    { value: 'mix', icon: 'mixer', label: h('span', { className: 'tb-view-txt' }, 'mix'), title: 'mix (X)' },
   ], st.ui.view, (v) => st.setUi({ view: v }))
   view.el.classList.add('tb-view')
+  for (const b of view.el.querySelectorAll('button')) tooltip(b, b.title.replace(' (X)', ''), 'X')
   const browserBtn = toggle({ icon: 'browser' }, { on: st.ui.browserOpen, onChange: (on) => st.setUi({ browserOpen: on }) })
   tooltip(browserBtn.el, 'browser', 'B')
   const dockBtn = toggle({ icon: 'dock' }, { on: st.ui.dock.open, onChange: (on) => st.setUi({ dock: { ...st.ui.dock, open: on } }) })
@@ -228,7 +255,10 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   const cpu = h('span', { className: 'tb-cpu', 'data-hint': 'audio engine load: share of the real-time budget used by DSP' }, 'cpu –')
   const doExport = () => {
     if (!st.pb) return // (the project has not synced yet)
-    exportDialog({ name: projectName, render: (o) => renderProject(doc, s.projectId, st.rate, s.userId, o) })
+    const l = getLoop(doc)
+    const bar = (smp: number) => barsBeats(smp, st.tempo(), st.rate)
+    const loop = l && l.end > l.start ? { start: l.start, end: l.end, label: `${loopBars(bar(l.start).bar, bar(l.end - 1).bar)}${l.on ? '' : ' (the loop is off)'}` } : null
+    exportDialog({ name: projectName, loop, render: (o) => renderProject(doc, s.projectId, st.rate, s.userId, o) })
   }
   const exportBtn = iconButton('export', 'export', doExport, 'tb-export')
   tooltip(exportBtn, 'export the song to an audio file')
@@ -256,34 +286,48 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     h('div', { className: 'tb-grp tb-files' }, exportBtn, helpBtn),
     presence, chatBtn, moreBtn)
 
-  const el = h('header', { className: 'studio-top tb' }, left, centre, right)
+  /** Says "recording" / "stopped" to screen readers (the counter itself is not live: it changes every frame). */
+  const live = h('span', { className: 'sr-only', role: 'status', 'aria-live': 'polite' })
+  const el = h('header', { className: 'studio-top tb' }, left, centre, right, live)
 
-  /** ≤ 900px: what the bar hides lives here. */
+  /** What the bar has folded away at this width lives here (and only that, plus the things that never fit the bar). */
   function morePanel() {
+    /** The bar shows `el` now (so the panel leaves it out). */
+    const shown = (...els: (Element | null)[]) => els.every((x) => !!x && x.getClientRects().length > 0)
     const row = (label: string, ...kids: (Node | null)[]) => h('div', { className: 'mp-row' }, h('span', { className: 'mp-label' }, label), ...kids)
-    const act = (ic: Parameters<typeof icon>[0], label: string, run: () => void, hint?: string, disabled = false) =>
-      h('button', { className: 'mp-act', type: 'button', disabled, onclick: () => { close(); run() } }, icon(ic), h('span', {}, label), hint ? h('span', { className: 'kbd-hint' }, hint) : null)
+    const act = (ic: Parameters<typeof icon>[0], label: string, run: () => void, hint?: string, disabled = false, on?: boolean) =>
+      h('button', { className: 'mp-act', type: 'button', disabled, 'aria-pressed': on == null ? undefined : String(on), onclick: () => { close(); run() } },
+        icon(ic), h('span', {}, label), on == null ? null : h('span', { className: `mp-state${on ? ' on' : ''}` }, on ? 'on' : 'off'), hint ? h('span', { className: 'kbd-hint' }, hint) : null)
+    const q = qwertyOf(st)
     const tempo = numberField({ value: st.tempo().bpm, min: BPM_MIN, max: BPM_MAX, step: 1, onChange: (v) => !readOnly && setProjectTempo(doc, v) })
     const meter = segmented(['2', '3', '4', '5', '6', '7'], String(st.tempo().beatsPerBar), (v) => !readOnly && setBeatsPerBar(doc, Number(v)))
     const grid = segmented(GRID_SIZES.map((g) => ({ value: String(g.value), label: g.label })), String(st.ui.grid), (v) => st.setUi({ grid: (v === 'bar' ? 'bar' : Number(v)) as GridSize }))
     const viewSeg = segmented<'arrange' | 'mix'>(['arrange', 'mix'], st.ui.view, (v) => st.setUi({ view: v }))
-    const panel = h('div', { className: 'tb-pop more-panel' },
-      row('Tempo', tempo.el, h('span', { className: 'dim' }, 'bpm'), h('button', { className: 'tb-tap', type: 'button', disabled: readOnly, onclick: (e: MouseEvent) => { tap(e.timeStamp); tempo.set(st.tempo().bpm) } }, 'tap')),
-      row('Beats per bar', meter.el),
-      row('Snap', grid.el),
-      row('View', viewSeg.el),
-      h('div', { className: 'sep' }),
-      act('undo', 'undo', () => undo.undo(), `${MOD}Z`, readOnly || !undo.undoStack.length),
-      act('redo', 'redo', () => undo.redo(), MAC ? '⇧⌘Z' : 'ctrl+shift+Z', readOnly || !undo.redoStack.length),
-      act('metronome', metro.get() ? 'metronome off' : 'metronome on', toggleClick, undefined, readOnly),
-      act('record', countInOn ? 'count-in off' : 'count-in: one bar of click before recording', () => countBtn.el.click(), undefined, readOnly),
-      act('power', st.pedal.on ? 'loop pedal off' : 'loop pedal on', () => void st.pedal.set(!st.pedal.on), '', readOnly || (!!st.pedal.why() && !st.pedal.on)),
-      act('browser', st.ui.browserOpen ? 'hide the browser' : 'show the browser', () => st.setUi({ browserOpen: !st.ui.browserOpen }), 'B'),
-      act('dock', st.ui.dock.open ? 'hide the dock' : 'show the dock', () => st.setUi({ dock: { ...st.ui.dock, open: !st.ui.dock.open } }), 'D'),
+    const rows = [
+      shown(bpm.el, tapBtn) ? null : row('Tempo', tempo.el, h('span', { className: 'dim' }, 'bpm'), h('button', { className: 'tb-tap', type: 'button', disabled: readOnly, onclick: (e: MouseEvent) => { tap(e.timeStamp); tempo.set(st.tempo().bpm) } }, 'tap')),
+      shown(meterBtn) ? null : row('Beats per bar', meter.el),
+      shown(snapSize) ? null : row('Snap', grid.el),
+      shown(view.el) ? null : row('View', viewSeg.el),
+    ].filter(Boolean)
+    const acts = [
+      shown(undoBtn) ? null : act('undo', 'undo', () => undo.undo(), `${MOD}Z`, readOnly || !undo.undoStack.length),
+      shown(redoBtn) ? null : act('redo', 'redo', () => undo.redo(), MAC ? '⇧⌘Z' : 'ctrl+shift+Z', readOnly || !undo.redoStack.length),
+      shown(metro.el) ? null : act('metronome', 'metronome', toggleClick, undefined, readOnly, metro.get()),
+      shown(countBtn.el) || readOnly ? null : act('metronome', 'count-in: one bar before recording', () => countBtn.el.click(), undefined, false, countInOn),
+      shown(keysBtn.el) || !q ? null : act('keyboard', 'computer keyboard', () => keysBtn.el.click(), '⇧K', false, !!q?.on),
+      shown(pedalBtn.el) || readOnly ? null : act('power', 'loop pedal', () => void st.pedal.set(!st.pedal.on), '', !!st.pedal.why() && !st.pedal.on, st.pedal.on),
+      shown(browserBtn.el) ? null : act('browser', 'browser', () => st.setUi({ browserOpen: !st.ui.browserOpen }), 'B', false, st.ui.browserOpen),
+      shown(dockBtn.el) ? null : act('dock', 'editor dock', () => st.setUi({ dock: { ...st.ui.dock, open: !st.ui.dock.open } }), 'D', false, st.ui.dock.open),
+    ].filter(Boolean)
+    const always = [
       act('zoom-in', 'zoom to fit', () => dispatchEvent(new Event(ZOOM_FIT)), 'Z'),
-      act('settings', 'project settings', () => openProject(moreBtn)),
-      act('export', 'export…', doExport),
-      act('help', 'shortcuts and help', help, '?'))
+      shown(title) ? null : act('settings', 'project settings', () => openProject(moreBtn)),
+      shown(exportBtn) ? null : act('export', 'export…', doExport),
+      shown(helpBtn) ? null : act('help', 'shortcuts and help', help, '?'),
+    ].filter(Boolean)
+    const sep = () => h('div', { className: 'sep' })
+    const panel = h('div', { className: 'tb-pop more-panel' },
+      ...rows, rows.length && (acts.length || always.length) ? sep() : null, ...acts, acts.length ? sep() : null, ...always)
     const close = popoverPanel(moreBtn, panel)
   }
 
@@ -349,9 +393,12 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     tooltip(pedalBtn.el, why || 'loop pedal: foot switches record, loop and overdub on the beat (keys 1-4 do the same)')
     pedalBtn.set(st.pedal.on)
     const playing = st.playing
-    play.replaceChildren(icon(playing ? 'pause' : 'play'))
+    play.replaceChildren(icon(playing ? 'stop' : 'play'))
     play.classList.toggle('playing', playing)
-    rec.set(!!st.rec.take || st.midi.active)
+    const recording = !!st.rec.take || st.midi.active
+    rec.set(recording)
+    const said = recording ? 'recording' : playing ? 'playing' : 'stopped'
+    if (live.dataset.said !== said) { live.dataset.said = said; if (said !== 'playing' || live.textContent) live.textContent = said }
     rec.el.classList.toggle('armed', !!st.ui.armedTrack && !st.rec.take && !st.midi.active)
     el.classList.toggle('recording', !!st.rec.take || st.midi.active)
     drawPedalText()
@@ -383,7 +430,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   }
   function drawUi() {
     const g = st.ui.grid
-    snapToggle.classList.toggle('lit', !!g)
+    snapBtn.set(!!g)
     snapSize.firstElementChild!.textContent = g ? gridLabel(g) : 'off'
     snapSize.classList.toggle('off', !g)
     view.set(st.ui.view)
@@ -419,17 +466,12 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   s.provider?.on('unsyncedChanges', onUnsynced)
   s.provider?.on('authenticationFailed', onAuthFail)
 
-  // ---------------------------------------------------------------- keys: L, T, Z, Tab, ⌘+ / ⌘-
+  // ---------------------------------------------------------------- keys: L, T, Z, X, ⌘+ / ⌘-
   const zoom = (f: number) => st.setUi({ pps: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, st.ui.pps * f)) })
   const offKeys = registerKeys(st, [
     { key: ['=', '+'], mods: { mod: true }, repeat: true, run: () => zoom(1.5), label: 'zoom in', group: 'View', readOnly: true },
     { key: '-', mods: { mod: true }, repeat: true, run: () => zoom(1 / 1.5), label: 'zoom out', group: 'View', readOnly: true },
-    {
-      key: 'tab', label: 'arrange / mix', group: 'View', readOnly: true,
-      // (keyboard users moving focus between controls keep Tab)
-      when: () => { const a = document.activeElement as HTMLElement | null; return !(a && a !== document.body && a.matches(':focus-visible')) },
-      run: () => st.setUi({ view: st.ui.view === 'arrange' ? 'mix' : 'arrange' }),
-    },
+    { key: 'x', label: 'arrange / mix', group: 'View', readOnly: true, run: () => st.setUi({ view: st.ui.view === 'arrange' ? 'mix' : 'arrange' }) },
     { key: 'l', run: () => toggleLoop(st), label: 'loop on / off', group: 'Transport' },
     { key: 't', run: (e) => tap(e.timeStamp), label: 'tap tempo', group: 'Transport' },
     { key: 'z', run: () => dispatchEvent(new Event(ZOOM_FIT)), label: 'zoom to fit', group: 'View', readOnly: true },
@@ -444,6 +486,12 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     st.on('transport', syncTransport),
     st.on('ui', (p) => { if ('armedTrack' in p) syncTransport(); drawUi() }),
     st.on('doc', drawDoc),
+    // a recording that could not start says why, on the record button (D4)
+    st.on('recordError', (text) => {
+      const anchor = rec.el.getClientRects().length ? rec.el : moreBtn
+      const close = popoverPanel(anchor, h('div', { className: 'tb-pop tb-hint-pop', role: 'alert' }, text))
+      setTimeout(close, 8000)
+    }),
     st.on('tick', (p) => { drawCounter(p); drawPedalText() }),
     st.on('cpu', (m) => {
       const t = `cpu ${Math.round(m.load * 100)}%`
@@ -451,6 +499,28 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       cpu.classList.toggle('hot', m.peak >= 0.8)
     }),
   ]
+  // The keyboard instrument mounts after the bar: follow it once it exists.
+  let offKeysState: (() => void) | null = null
+  queueMicrotask(() => { offKeysState = qwertyOf(st)?.onChange(drawKeys) ?? null; drawKeys() })
+  /**
+   * Once per device: a note key pressed with the computer keyboard off, while an instrument track is focused, says how to
+   * play it. (The key still does its usual job.)
+   */
+  const KEYS_HINT = 'mobdaw.keysHint'
+  let hinted = false
+  try { hinted = localStorage.getItem(KEYS_HINT) === '1' } catch { /* (not remembered) */ }
+  const onNoteKey = (e: KeyboardEvent) => {
+    if (hinted || e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || typing(e) || !(e.code in QWERTY_KEYS)) return
+    const q = qwertyOf(st)
+    const ft = st.ui.focusTrack
+    if (!q || q.on || !ft || tracksMap(doc).get(ft)?.get('kind') !== 'midi') return
+    hinted = true
+    try { localStorage.setItem(KEYS_HINT, '1') } catch { /* (not remembered) */ }
+    const close = popoverPanel(keysBtn.el.isConnected && keysBtn.el.getClientRects().length ? keysBtn.el : moreBtn,
+      h('div', { className: 'tb-pop tb-hint-pop' }, 'Turn on keys (⇧K) to play this instrument from your keyboard.'))
+    setTimeout(close, 6000)
+  }
+  window.addEventListener('keydown', onNoteKey)
   syncTransport()
   drawDoc()
   drawUi()
@@ -464,6 +534,8 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       cancelCount?.()
       if (st.beforeRecord === countIn) st.beforeRecord = null
       offKeys()
+      offKeysState?.()
+      window.removeEventListener('keydown', onNoteKey)
       meta.unobserve(drawMeta)
       undoEvents.forEach((ev) => undo.off(ev, drawUndo))
       doc.off('update', onUpdate)

@@ -8,7 +8,7 @@
 .studio .sb-zoom .icon-btn.sm svg { width: 14px; height: 14px; }
 .studio .sb-fit { height: 18px; padding: 0 5px; border-radius: var(--r-sm); background: none; font-size: var(--fs-xs); color: var(--dim); }
 .studio .sb-fit:hover { color: var(--fg); background: var(--line); }
-.studio .sb-cpu, .studio .sb-rate { color: var(--faint); }
+.studio .sb-cpu, .studio .sb-rate { color: var(--muted); }
 .studio .sb-cpu { min-width: 6ch; }
 .studio .sb-cpu.hot { color: var(--rec); }
 .studio .sb-where { color: var(--dim); }

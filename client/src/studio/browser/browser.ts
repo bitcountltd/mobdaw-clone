@@ -6,6 +6,7 @@ import { EFFECTS, MASTER_TRACK, getSamples, getTracks, type SampleMeta } from '@
 import { peaksFromBase64 } from '../../audio/probe'
 import { DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, type InstrumentCategory } from '../../content/presets'
 import { h } from '../../dom'
+import { iconButton, tooltip } from '../../theme/controls'
 import { icon, type IconName } from '../../theme/icons'
 import { applyDrop, canDrop, setDragPayload, type DropPayload } from '../drops'
 import { connectMidi, midiOpen, qwertyOf } from '../qwerty'
@@ -85,7 +86,7 @@ export function mountBrowser(st: Studio) {
     { id: 'chains', title: 'Effect chains', items: () => EFFECT_PRESETS.map((p): Item => ({
       key: `c:${p.id}`, name: p.name, meta: p.devices.length > 1 ? `${p.devices.length} effects` : undefined, icon: 'duplicate', color: 'var(--tc-7)', payload: { kind: 'chain', id: p.id },
     })) },
-    { id: 'audio', title: 'Project audio', empty: 'Recordings and imported files show up here.', items: () => Object.values(getSamples(doc) as Record<string, SampleMeta>)
+    { id: 'audio', title: 'Project audio', empty: 'Recordings and imported files appear here.', items: () => Object.values(getSamples(doc) as Record<string, SampleMeta>)
       .filter((m) => m.status !== 'incoming')
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((m): Item => ({ key: `s:${m.hash}`, name: m.name.replace(/\.[^.]+$/, ''), meta: fmtDur(m.duration), icon: 'wave', color: 'var(--tc-5)', payload: { kind: 'sample', hash: m.hash }, peaks: m.peaks, missing: m.status === 'missing' })) },
@@ -94,7 +95,9 @@ export function mountBrowser(st: Studio) {
   // --- header: search and the keyboard toggle
   const search = h('input', { className: 'browser-search', type: 'search', placeholder: 'Search sounds and effects', 'aria-label': 'search the browser', spellcheck: false })
   const kbBtn = h('button', { className: 'icon-btn browser-kb', type: 'button', onclick: () => qwertyOf(st)?.toggle() }, icon('keyboard'), h('span', { className: 'kb-range num' }))
-  const head = h('div', { className: 'browser-head' }, h('label', { className: 'browser-find' }, icon('search', 14), search), kbBtn)
+  // (a drawer on narrow screens: it closes with this, a tap outside it, or esc)
+  const closeBtn = iconButton('close', 'close the browser (B)', () => st.setUi({ browserOpen: false }), 'sm browser-close')
+  const head = h('div', { className: 'browser-head' }, h('label', { className: 'browser-find' }, icon('search', 14), search), kbBtn, closeBtn)
 
   const list = h('div', { className: 'browser-list', role: 'tree', 'aria-label': 'sounds and effects' })
 
@@ -106,7 +109,7 @@ export function mountBrowser(st: Studio) {
     if (files.length) void st.dropFiles(files, null, st.snap(st.position()))
   }
   const importBtn = h('button', { className: 'browser-act', type: 'button', disabled: st.readOnly, onclick: () => picker.click() }, icon('upload', 14), 'Import audio…')
-  const midiBtn = h('button', { className: 'browser-act', type: 'button', title: 'let MIDI keyboards play the selected MIDI track', onclick: () => void connectMidi(st) }, icon('piano', 14), 'Connect MIDI keyboard')
+  const midiBtn = h('button', { className: 'browser-act', type: 'button', title: 'let MIDI keyboards play the selected instrument track', onclick: () => void connectMidi(st) }, icon('piano', 14), 'Connect MIDI keyboard')
   const foot = h('div', { className: 'browser-foot' }, importBtn, midiBtn, picker)
 
   const el = h('div', { className: 'browser' }, head, list, foot)
@@ -122,14 +125,14 @@ export function mountBrowser(st: Studio) {
   function use(item: Item) {
     if (st.readOnly) return
     const p = item.payload
-    if ((p.kind === 'effect' || p.kind === 'chain') && !st.ui.focusTrack) return st.status('select a track (or the master) to add effects to it')
-    if (p.kind === 'sample' && item.missing) return st.status('that recording is missing on this device')
+    if ((p.kind === 'effect' || p.kind === 'chain') && !st.ui.focusTrack) return st.status('Click a track (or the master) first, then add effects to it.')
+    if (p.kind === 'sample' && item.missing) return st.status('That recording is missing on this device.')
     st.undo.stopCapturing()
     const landed = applyDrop(st, p, { trackId: focusTarget(p), at: st.snap(st.position()) })
     st.undo.stopCapturing()
     if (landed) {
       const name = landed === MASTER_TRACK ? 'the master' : getTracks(doc).find((t) => t.id === landed)?.name ?? 'the track'
-      st.status(`${item.name} → ${name}`)
+      st.status(`Added ${item.name} to ${name}.`)
     }
   }
 
@@ -145,11 +148,11 @@ export function mountBrowser(st: Studio) {
   function audition(item: Item) {
     stopAudition()
     const target = st.midi.target()
-    if (!target) return st.status('select a MIDI track to try sounds on it')
+    if (!target) return st.status('Click an instrument track first to try sounds on it.')
     st.undo.stopCapturing()
     applyDrop(st, item.payload, { trackId: target })
     st.undo.stopCapturing()
-    st.status(`trying ${item.name} on ${getTracks(doc).find((t) => t.id === target)?.name ?? 'the track'} (undo to go back)`)
+    st.status(`Trying ${item.name} on ${getTracks(doc).find((t) => t.id === target)?.name ?? 'the track'}. Undo to go back.`)
     // [ms from start, pitch, length ms]
     const phrase: [number, number, number][] = item.audition === 'kit'
       ? [[0, 36, 120], [0, 42, 60], [250, 42, 60], [500, 38, 120], [500, 42, 60], [750, 42, 60], [1000, 36, 120], [1125, 36, 120], [1250, 42, 60], [1500, 38, 120], [1750, 46, 200]]
@@ -169,13 +172,13 @@ export function mountBrowser(st: Studio) {
   }
 
   function row(item: Item, section: string) {
-    const ic = icon(item.icon, 16, 'brow-icon')
-    ic.style.color = item.color
+    const ic = icon(item.icon, 16, 'brow-icon') // (dim: a colour here would read as a track's)
     const kids: (Node | null)[] = [ic, h('span', { className: 'brow-name' }, item.name)]
     if (item.peaks !== undefined || item.payload.kind === 'sample') kids.push(miniWave(item.peaks))
     if (item.meta) kids.push(h('span', { className: 'brow-meta num' }, item.meta))
     if (item.audition && !st.readOnly) {
-      const play = h('button', { className: 'brow-play', type: 'button', tabIndex: -1, title: 'hold to try it on the selected MIDI track' }, icon('play', 12))
+      const play = h('button', { className: 'brow-play', type: 'button', tabIndex: -1, 'aria-label': `try ${item.name}` }, icon('play', 12))
+      tooltip(play, `hold to try ${item.name} on the focused instrument track`)
       play.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); play.setPointerCapture(e.pointerId); play.classList.add('on'); audition(item) })
       const end = () => { play.classList.remove('on'); stopAudition() }
       play.addEventListener('pointerup', end)
@@ -324,6 +327,17 @@ export function mountBrowser(st: Studio) {
     st.on('transport', syncHead),
     st.on('status', syncHead),
   ]
+  // narrow screens: the browser is a drawer over the tracks (studio.css); a press outside it or esc closes it
+  const drawer = () => typeof matchMedia === 'function' && matchMedia('(max-width: 899px)').matches && st.ui.browserOpen
+  const onDown = (e: PointerEvent) => {
+    const t = e.target as Element | null
+    if (!drawer() || !t?.isConnected || el.contains(t) || t.closest('.popover, dialog, .studio-top')) return
+    st.setUi({ browserOpen: false })
+  }
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && drawer() && !e.defaultPrevented) st.setUi({ browserOpen: false }) }
+  addEventListener('pointerdown', onDown, true)
+  addEventListener('keydown', onKey)
+  offs.push(() => removeEventListener('pointerdown', onDown, true), () => removeEventListener('keydown', onKey))
   const q = qwertyOf(st) // (mounted before the browser)
   if (q) offs.push(q.onChange(syncHead))
   render()

@@ -24,9 +24,12 @@ h1.home-mark { margin: 0; font-size: 84px; line-height: .78; letter-spacing: .01
   height: 84px; padding: 12px; overflow: hidden;
   background: var(--bg); border-bottom: 1px solid var(--line);
 }
-.pic-lane { position: relative; flex: 0 1 var(--lane-h); max-height: var(--lane-h); min-height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--c) 9%, transparent); }
+.pic-lane { position: relative; flex: 0 1 var(--lane-h); max-height: var(--lane-h); min-height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--c) 12%, transparent); }
+/* a lane with nothing on it yet (a track ready to record): outlined in its colour, so the picture still shows it */
+.pic-lane:empty { background: color-mix(in srgb, var(--c) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 42%, transparent); }
+.start-card:hover .pic-lane:empty { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 70%, transparent); }
 .pic-lane i { position: absolute; top: 0; bottom: 0; border-radius: 2px; border-right: 1px solid var(--bg); background: color-mix(in srgb, var(--c) 82%, var(--raise)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14); }
-.pic.empty::after { content: 'empty'; align-self: center; font-size: var(--fs-xs); color: var(--faint); }
+.pic.empty::after { content: 'empty'; align-self: center; font-size: var(--fs-xs); color: var(--muted); }
 .pic.lg { --lane-h: 26px; --lane-gap: 6px; flex: 1; height: auto; min-height: 200px; padding: 22px 20px; }
 /* bar lines behind the large picture: a quiet hint of the grid */
 .pic.lg::before {
@@ -52,9 +55,9 @@ h1.home-mark { margin: 0; font-size: 84px; line-height: .78; letter-spacing: .01
 .start-card.demo .start-name { font-size: var(--fs-h2); }
 .start-tag { padding: 0 6px; font-size: var(--fs-xs); font-weight: 500; line-height: 16px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: var(--r-sm); }
 .start-blurb { font-size: var(--fs-sm); color: var(--dim); text-wrap: pretty; }
-.start-facts { display: flex; gap: 12px; margin-top: 2px; font-size: var(--fs-xs); color: var(--faint); font-variant-numeric: tabular-nums; }
-.start-go { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin: auto 14px 14px; padding: 4px 8px 4px 6px; border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 500; color: var(--dim); transition: background-color var(--t-fast) linear, color var(--t-fast) linear; }
-.start-card:hover .start-go { color: var(--fg); background: var(--line); }
+.start-facts { display: flex; gap: 12px; margin-top: 2px; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.start-go { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin: auto 14px 14px; padding: 4px 8px 4px 6px; border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 500; color: var(--fg); background: var(--raise); transition: background-color var(--t-fast) linear, color var(--t-fast) linear; }
+.start-card:hover .start-go { color: var(--fg); background: var(--line-strong); }
 .start-card.demo .start-go, .start-card.demo:hover .start-go { color: var(--on-accent); background: var(--accent); padding: 6px 12px 6px 10px; font-size: var(--fs); }
 .start-card.demo:hover .start-go { background: color-mix(in srgb, var(--accent) 88%, white); }
 .start-card.demo .start-text { padding: 16px 20px 14px; }

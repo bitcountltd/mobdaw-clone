@@ -33,9 +33,14 @@ export function mountScope(st: Studio, w = 120, hgt = 28) {
     colors ??= { accent: css('--accent', '#f0b44c'), faint: css('--faint', '#5d5b57') }
     ctx.setTransform(dpr(), 0, 0, dpr(), 0, 0)
     ctx.clearRect(0, 0, w, hgt)
+    // a dotted graticule, then the trace at rest: a flat line in a dimmed accent (so it reads as a scope, not a field)
     ctx.fillStyle = colors.faint
+    for (let x = w / 8; x < w - 1; x += w / 8) for (let y = 4; y < hgt - 2; y += 4) ctx.fillRect(Math.round(x), y, 1, 1)
+    ctx.globalAlpha = 0.45
+    ctx.fillStyle = colors.accent
     if (mode === 'wave') ctx.fillRect(0, Math.round(hgt / 2), w, 1)
-    else for (let x = 0; x < w; x += 4) ctx.fillRect(x, hgt - 1, 3, 1)
+    else for (let x = 0; x < w; x += 4) ctx.fillRect(x, hgt - 2, 3, 1)
+    ctx.globalAlpha = 1
   }
   const css = (n: string, d: string) => getComputedStyle(el).getPropertyValue(n).trim() || d
 

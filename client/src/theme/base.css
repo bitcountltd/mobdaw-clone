@@ -30,7 +30,8 @@ body {
 :where(small), .small { font-size: var(--fs-sm); }
 .label { font-size: var(--fs-sm); color: var(--dim); }
 .dim { color: var(--dim); }
-.faint { color: var(--faint); }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); } /* (lines and disabled: not for reading) */
 .num, :where(output, progress, time) { font-variant-numeric: tabular-nums; }
 .error { color: var(--rec); }
 .ok { color: var(--ok); }
@@ -93,7 +94,7 @@ button.link.danger, button.danger { color: var(--rec); }
 :where(input, select, textarea):hover:not(:disabled) { border-color: var(--line-strong); }
 :where(input, select, textarea):focus { outline: none; border-color: var(--accent); }
 :where(input[type=number]) { font-variant-numeric: tabular-nums; }
-:where(input::placeholder, textarea::placeholder) { color: var(--faint); }
+:where(input::placeholder, textarea::placeholder) { color: var(--muted); }
 :where(select) {
   appearance: none; -webkit-appearance: none; padding-right: 24px; cursor: pointer;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5' fill='none' stroke='%238f8b84' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -171,7 +172,7 @@ progress::-moz-progress-bar { background: var(--accent); }
   border: 1px solid var(--line-strong); border-radius: var(--r-sm); box-shadow: 0 4px 12px rgba(6, 6, 8, .4);
 }
 .tip { display: flex; gap: 8px; align-items: center; animation: tip-in var(--t-fast) linear; }
-.tip kbd { font-size: 10px; }
+.tip kbd { font-size: var(--fs-xs); }
 .value-tip { transform: translate(-50%, calc(-100% - 6px)); }
 @keyframes tip-in { from { opacity: 0; } }
 
@@ -182,6 +183,10 @@ dialog.modal, dialog.invite-dialog {
   border: 1px solid var(--line-strong); border-radius: var(--r-md); box-shadow: var(--shadow);
 }
 dialog.modal[open], dialog.invite-dialog[open] { animation: dialog-in 200ms var(--ease); }
+/* a tall dialog keeps its title and close button in view: only the body scrolls */
+dialog.modal[open] { display: flex; flex-direction: column; max-height: calc(100dvh - 32px); overflow: hidden; }
+dialog.modal > .modal-head, dialog.modal > .modal-foot { flex: none; }
+dialog.modal > .modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 dialog.modal::backdrop, dialog.invite-dialog::backdrop { background: var(--scrim); backdrop-filter: blur(2px); }
 .modal-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px 0 20px; }
 .modal-head h2 { flex: 1; font-size: var(--fs-h3); font-weight: 600; }

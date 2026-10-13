@@ -9,6 +9,8 @@ import { EngineHost } from './engine-host'
 export type RenderOptions = {
   /** Seconds of silence after the last clip, for reverb and delay tails. */
   tail: number
+  /** Only this stretch of the timeline (samples), e.g. the loop region; absent: from the first audible clip to the last. */
+  range?: { start: number; end: number }
   onProgress?(fraction: number): void
   signal?: AbortSignal
 }
@@ -22,9 +24,9 @@ export class RenderAborted extends Error {
 
 export async function renderProject(doc: Y.Doc, projectId: string, rate: number, me: number | null | undefined, opts: RenderOptions): Promise<Rendered> {
   // Only what is audible: muted (and solo-silenced) tracks neither count nor sound, so a muted count-in is trimmed off.
-  const from = contentStart(doc, rate)
-  const end = contentEnd(doc, rate)
-  if (end <= from) throw new Error('nothing to export: no audible clips')
+  const from = opts.range ? Math.max(0, Math.round(opts.range.start)) : contentStart(doc, rate)
+  const end = opts.range ? Math.round(opts.range.end) : contentEnd(doc, rate)
+  if (end <= from) throw new Error(opts.range ? 'Nothing to export: the loop region is empty.' : 'Nothing to export: there are no audible clips.')
   const frames = Math.ceil(end - from + Math.max(0, opts.tail) * rate)
   const ctx = new OfflineAudioContext(2, frames, rate)
   const host = await EngineHost.create(ctx)
@@ -54,6 +56,8 @@ export async function renderProject(doc: Y.Doc, projectId: string, rate: number,
       undefined,
       me,
     )
+    // an export plays straight through: the transport cycle stays off (a loop region export ends at the region's end)
+    bridge.setRecording(true)
     await Promise.all(loads)
     check()
     host.call('engine_play', [from])

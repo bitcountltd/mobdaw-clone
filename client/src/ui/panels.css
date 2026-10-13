@@ -25,3 +25,15 @@
 .export-progress progress { flex: 1; }
 .export-progress .num { width: 3.5ch; text-align: right; font-size: var(--fs-sm); }
 .export-msg:empty { display: none; }
+.settings .field-note { margin: -4px 0 0; font-size: var(--fs-sm); line-height: 1.4; color: var(--muted); }
+/* a section folded behind its title (the foot pedal) */
+.settings details.settings-more { gap: 0; }
+.settings details.settings-more[open] { gap: 10px; }
+.settings-more > summary { display: flex; flex-direction: column; gap: 2px; padding-left: 16px; margin-left: -16px; list-style: none; cursor: pointer; position: relative; }
+.settings-more > summary::-webkit-details-marker { display: none; }
+.settings-more > summary::before { content: ''; position: absolute; left: 4px; top: 4px; border: 4px solid transparent; border-left-color: var(--dim); transition: transform var(--t-fast) var(--ease); transform-origin: 2px 4px; }
+.settings-more[open] > summary::before { transform: rotate(90deg); }
+.settings-more > summary .dim { font-size: var(--fs-sm); }
+.settings-more > summary:hover h3 { color: var(--accent); }
+.export-range { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.export-note { font-size: var(--fs-sm); }

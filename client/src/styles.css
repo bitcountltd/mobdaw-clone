@@ -72,7 +72,7 @@ main.center { margin: auto; text-align: center; }
 a.logo:hover { color: color-mix(in srgb, var(--rec) 80%, white); text-decoration: none; }
 h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .bar-btns { display: flex; }
-.cpu { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); cursor: default; }
+.cpu { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); cursor: default; }
 .cpu.hot { color: var(--danger); }
 .bar-btn, .chat-btn { height: 36px; padding: 0 14px; border: 0; background: none; color: var(--dim); }
 .chat-btn.on { color: var(--fg); background: var(--raise); }
@@ -100,7 +100,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
   clip-path: polygon(evenodd, 30% 0, 70% 0, 100% 100%, 0 100%, 30% 0, 38% 16%, 18% 86%, 82% 86%, 62% 16%, 38% 16%, 30% 0); }
 .metro::after { content: ''; position: absolute; left: calc(50% - 1px); top: calc(50% - 10px); width: 2px; height: 15px; background: currentColor; transform: rotate(22deg); transform-origin: 50% 100%; }
 .presence { display: flex; }
-.dot { width: 20px; height: 20px; font-size: 10px; color: var(--on-accent); display: grid; place-items: center; }
+.dot { width: 20px; height: 20px; font-size: 11px; color: var(--on-accent); display: grid; place-items: center; }
 .body { display: flex; flex: 1; min-height: 0; }
 .scroll { flex: 1; min-width: 0; overflow: auto; min-height: 0; }
 .content { position: relative; min-width: 100%; }
@@ -115,7 +115,7 @@ h1.logo { font-size: 48px; font-weight: normal; margin: 0; }
 .head { left: var(--gutter); width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); }
 .corner { border-right: 1px solid var(--line); }
 .ruler-body { position: relative; height: 100%; overflow: hidden; }
-.tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
+.tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 11px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
 .add-track { display: block; position: sticky; left: 0; margin: 12px 16px; width: 64px; height: 40px; padding: 0; font-size: 22px; line-height: 1; color: var(--dim); background: none; border: 1px dashed var(--line); }
 .add-track:hover { color: var(--fg); border-color: var(--dim); background: none; }
 .overlay { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
@@ -211,7 +211,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .loop-box::before, .loop-box::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; cursor: ew-resize; }
 .loop-box::before { left: 0; }
 .loop-box::after { right: 0; }
-.loop-box span { pointer-events: none; position: absolute; top: 0; left: 0; padding: 0 5px; font-size: 10px; line-height: 14px; color: var(--bg); background: var(--c); }
+.loop-box span { pointer-events: none; position: absolute; top: 0; left: 0; padding: 0 5px; font-size: 11px; line-height: 14px; color: var(--bg); background: var(--c); }
 .dev { position: relative; width: 280px; font-size: 12px; border-right: 1px solid var(--line); }
 .dev.bypassed { opacity: 0.55; }
 .dev-head { display: flex; gap: 6px; align-items: center; padding: 0 0 0 8px; height: 18px; padding-right: 8px; }
@@ -265,7 +265,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .ne-grid { position: relative; cursor: crosshair; background-color: var(--bg);
   background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-beat) 1px, transparent 1px);
   background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, 100% var(--row, 10px); }
-.ne-c { position: absolute; left: 6px; font-size: 9px; color: var(--dim); pointer-events: none; transform: translateY(-1px); }
+.ne-c { position: absolute; left: 6px; font-size: 11px; color: var(--dim); pointer-events: none; transform: translateY(-1px); }
 .ne-tint { position: absolute; inset: 0; pointer-events: none; }
 .ne-keys { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; z-index: 1; pointer-events: none; }
 .note { position: absolute; height: calc(var(--row, 10px) - 1px); border-radius: 2px; background: var(--tc-1); cursor: grab; }
@@ -280,7 +280,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .dg-row { position: relative; height: 18px; cursor: crosshair; border-bottom: 1px solid var(--line); background-color: var(--bg);
   background-image: linear-gradient(to right, rgba(235, 230, 220, .16) 1px, transparent 1px), linear-gradient(to right, var(--grid-bar) 1px, transparent 1px), linear-gradient(to right, var(--grid-beat) 1px, transparent 1px);
   background-size: calc(var(--beat) * 4) 100%, var(--beat) 100%, calc(var(--beat) / 4) 100%; }
-.dg-label { position: absolute; left: 4px; top: 3px; font-size: 9px; color: var(--dim); pointer-events: none; white-space: nowrap; }
+.dg-label { position: absolute; left: 4px; top: 3px; font-size: 11px; color: var(--dim); pointer-events: none; white-space: nowrap; }
 .dg-hit { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--tc-1); pointer-events: none; }
 .dg-hit.rep { opacity: .35; }
 .dg-rep { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(0, 0, 0, .35); border-left: 1px solid var(--line-strong); pointer-events: none; }
@@ -295,7 +295,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .msg { max-width: 85%; padding: 6px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
 .msg.them { align-self: flex-start; background: var(--raise); }
 .msg.me { align-self: flex-end; background: color-mix(in srgb, var(--accent) 22%, var(--raise)); }
-.msg-meta { padding-top: 8px; font-size: 10px; color: var(--dim); }
+.msg-meta { padding-top: 8px; font-size: 11px; color: var(--dim); }
 .msg-meta.them { align-self: flex-start; }
 .msg-meta.me { align-self: flex-end; }
 .chat-in { display: flex; border-top: 1px solid var(--line); }
@@ -325,7 +325,7 @@ input[type=range]::-moz-range-thumb { width: 4px; height: 16px; border: 0; borde
 .src-ticks { position: absolute; top: 0; left: 0; right: 0; height: 14px; cursor: pointer; z-index: 1; background: var(--lane); border-bottom: 1px solid var(--line); }
 .src-body .playhead { z-index: 2; pointer-events: none; }
 .src-body .playhead[hidden] { display: none; }
-.src-ticks .tick { padding: 0 0 0 3px; font-size: 9px; line-height: 14px; }
+.src-ticks .tick { padding: 0 0 0 3px; font-size: 11px; line-height: 14px; }
 
 /* compact transport (soundscape lanes) and the loopers row's header cell */
 .transport.sm { align-self: flex-start; }
@@ -383,7 +383,7 @@ button.danger:hover { color: var(--danger); }
 .fcurve .node.off { fill: var(--dim); opacity: .5; }
 .fcurve .node.stuck { opacity: .6; }
 .fcurve .ticks text { fill: var(--dim); font-size: 8px; pointer-events: none; opacity: .7; }
-.fcurve .read { fill: var(--dim); font-size: 9px; pointer-events: none; }
+.fcurve .read { fill: var(--muted); font-size: 11px; pointer-events: none; }
 .dev .prm[hidden] { display: none; }
 .dev.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); background: var(--panel); }
 .dev.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
@@ -397,7 +397,7 @@ button.danger:hover { color: var(--danger); }
 .pedal-btn:hover { color: var(--fg); }
 .pedal-btn.on { color: var(--bg); background: var(--accent); }
 .pedal-btn:disabled { opacity: .4; }
-.pedal-st { font-size: 11px; color: var(--faint); cursor: default; white-space: nowrap; }
+.pedal-st { font-size: 11px; color: var(--muted); cursor: default; white-space: nowrap; }
 .pedal-st.rec { color: var(--danger); }
 .pedal-row { margin-bottom: 6px; }
 .clip.live-loop { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); pointer-events: none; z-index: 1; }

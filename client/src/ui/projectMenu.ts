@@ -41,6 +41,13 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
     if (e.key === 'Enter') name.blur()
     if (e.key === 'Escape') (name.value = o.name), name.blur()
   }
+  // Escape cancels: the popover closes on it too (and closing would blur the field and save it), so put the old name
+  // back before anyone else sees the key
+  const onEsc = (e: KeyboardEvent) => {
+    if (!name.isConnected) return removeEventListener('keydown', onEsc, true)
+    if (e.key === 'Escape' && document.activeElement === name) name.value = o.name
+  }
+  addEventListener('keydown', onEsc, true)
   name.onchange = () => {
     const n = name.value.trim()
     if (!n || n === o.name || !o.rename) return void (name.value = o.name)
@@ -86,7 +93,7 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   // Microphone: the choice is remembered in this browser. Names only show once the page has been given microphone access.
   const mic = h('select', {})
   const offset = h('input', { type: 'number', step: 1, title: 'extra input delay for this microphone, in ms: positive if takes land late, negative if early' })
-  const offsetField = field('input delay (ms)', offset)
+  const offsetField = field('Input delay (ms)', offset)
   const grant = h('button', { hidden: true, onclick: () => void ask() }, 'allow access to show device names')
   async function listMics() {
     const devs = ((await navigator.mediaDevices?.enumerateDevices?.().catch(() => [])) ?? []).filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications')
@@ -124,11 +131,16 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   ...SAMPLE_RATES.map((r) => h('option', { value: String(r) }, `${+(r / 1000).toFixed(1)} kHz`)))
   rate.value = String(sr.value)
   rate.onchange = () => sr.set(Number(rate.value))
-  const audio = section('Audio', field('sample rate', rate), field('microphone', mic), grant, offsetField)
+  const why = sr.locked === 'tracks' ? 'Fixed once a project has tracks. Start a blank project to pick another rate.'
+    : sr.locked === 'readonly' ? 'Only people who can edit the project can change it.' : null
+  const audio = section('Audio', field('Sample rate', rate), why ? h('p', { className: 'field-note' }, why) : null, field('Microphone', mic), grant, offsetField)
   void listMics()
 
-  const pedal = o.onPedalChanged && section('Foot pedal', pedalSettings(o.onPedalChanged))
-  const panel = h('div', { className: 'settings' }, section('Project', field('name', name)), sharing, audio, pedal, msg)
+  // the foot pedal is for a few people: folded away until opened
+  const pedal = o.onPedalChanged && h('details', { className: 'settings-sec settings-more' },
+    h('summary', {}, h('h3', {}, 'Foot pedal'), h('span', { className: 'dim' }, 'MIDI foot switch for record, loop and overdub')),
+    pedalSettings(o.onPedalChanged))
+  const panel = h('div', { className: 'settings' }, section('Project', field('Name', name)), sharing, audio, pedal, msg)
   popoverPanel(anchor, panel)
 }
 

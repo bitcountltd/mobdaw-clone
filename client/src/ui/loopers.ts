@@ -1,12 +1,15 @@
-// One looper slot's card: on/off switch (mute), volume, speed (0.1x-4x, log slider), tape controls (saturation, filter, warble), a "draw region" arm button and clear.
+// One looper slot's card, a small unit in the soundscape's loopers row: a lamp (on / muted), its name in the slot colour,
+// knobs for volume, speed (0.1x-4x, log), and the tape controls (saturation, low-pass filter, warble), and the region
+// buttons (draw / redraw, clear). A knob's label is its automation menu, as in the device rack.
 import { LOOP_CUTOFF_MAX, LOOP_CUTOFF_MIN, LOOP_SPEED_MAX, LOOP_SPEED_MIN, type Looper, type ParamTarget } from '@mobdaw/shared'
 import { h } from '../dom'
 import { NO_AUTO, type AutoInfo } from './automation'
-import { cardMenu, onOffSwitch, setSwitch } from './cardHead'
+import { knob, type Knob } from '../theme/controls'
+import { cardMenu } from './cardHead'
 import { fmtDb } from './slider'
-import { valueTip } from './valueTip'
 
-export const LOOP_COLORS = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0']
+/** Slot colours (the cards and their region boxes): from the track palette, so they sit with the rest of the console. */
+export const LOOP_COLORS = ['#e0896a', '#d9a648', '#58b4a8', '#6c9bd6']
 
 export type LooperDeps = {
   readOnly: boolean
@@ -43,114 +46,73 @@ const fmtSpeed = (s: number) => `${s.toFixed(2)}×`
 export function looperCard(lp: Looper, deps: LooperDeps) {
   const id = lp.id
   const color = LOOP_COLORS[lp.slot % LOOP_COLORS.length]
-  const draw = h('button', { title: 'draw the loop region on the track', onclick: () => deps.toggleArm(id) }, 'draw')
-  const clear = h('button', { title: 'clear region', onclick: () => deps.clear(id) }, 'clear')
-  const power = onOffSwitch('mute', () => deps.setMuted(id, !muted))
-  draw.disabled = clear.disabled = power.disabled = deps.readOnly
+  const draw = h('button', { className: 'btn sm', title: 'draw the loop region on the track', onclick: () => deps.toggleArm(id) }, 'draw')
+  const clear = h('button', { className: 'btn sm', title: 'clear the region', onclick: () => deps.clear(id) }, 'clear')
   let muted = false
-  const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.01, disabled: deps.readOnly, title: 'volume' })
-  valueTip(vol, () => fmtDb(Number(vol.value)))
-  vol.onpointerdown = () => deps.grab()
-  vol.oninput = () => deps.setGain(id, Number(vol.value))
-  const speed = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly, title: 'speed' })
-  const out = h('span', { className: 'dim out' })
-  valueTip(speed, out)
-  speed.onpointerdown = () => deps.grab()
-  speed.oninput = () => {
-    const v = toSpeed(Number(speed.value))
-    out.textContent = fmtSpeed(v)
-    deps.commit(id, v)
+  const power = h('button', { className: 'unit-power sm', role: 'switch', title: 'loop on / off', disabled: deps.readOnly, onclick: () => deps.setMuted(id, !muted) }, h('i', { className: 'lamp' }))
+  draw.disabled = clear.disabled = deps.readOnly
+
+  // knobs: the doc is written as they move (the engine smooths), one undo step per drag
+  type Ctl = { k: Knob; out: HTMLElement; el: HTMLElement; label: HTMLElement; fmt: (v: number) => string; to: (v: number) => number; from: (p: number) => number; active: boolean }
+  const ctls: Record<string, Ctl> = {}
+  const ctl = (key: string, label: string, title: string, fmt: (v: number) => string, write: (v: number) => void,
+    to: (v: number) => number = (v) => v, from: (p: number) => number = (p) => p, def = 0) => {
+    const out = h('span', { className: 'pc-value' })
+    const c: Ctl = { k: null as unknown as Knob, out, el: null as unknown as HTMLElement, label: null as unknown as HTMLElement, fmt, to, from, active: false }
+    // the knob works in 0..1 positions (speed and cutoff are logarithmic); `from` maps a position to the value
+    c.k = knob({
+      value: def, min: 0, max: 1, def, label, size: 30, title, color, disabled: deps.readOnly, format: (p) => fmt(from(p)),
+      onInput: (p) => { c.active = true; const v = from(p); out.textContent = fmt(v); write(v) },
+      onChange: (p) => { c.active = false; out.textContent = fmt(from(p)) },
+    })
+    c.k.el.addEventListener('pointerdown', () => deps.grab(), true)
+    c.label = c.k.el.querySelector<HTMLElement>('.knob-label')!
+    deps.autoMenu(c.label, { scope: lp.trackId, kind: 'looper', owner: id, param: key })
+    c.el = h('div', { className: 'pc' }, c.k.el, out)
+    return (ctls[key] = c)
   }
-  const tapeSlider = (title: string) => {
-    const el = h('input', { type: 'range', min: 0, max: 1, step: 'any', disabled: deps.readOnly, title })
-    el.onpointerdown = () => deps.grab()
-    return el
-  }
-  const sat = tapeSlider('saturation')
-  const satOut = h('span', { className: 'dim out' })
-  valueTip(sat, satOut)
-  sat.oninput = () => {
-    satOut.textContent = fmtPct(Number(sat.value))
-    deps.setTape(id, { sat: Number(sat.value) })
-  }
-  const filter = tapeSlider('low-pass filter')
-  const filterOut = h('span', { className: 'dim out' })
-  valueTip(filter, filterOut)
-  filter.oninput = () => {
-    const hz = toCutoff(Number(filter.value))
-    filterOut.textContent = fmtCutoff(hz)
-    deps.setTape(id, { cutoff: hz })
-  }
-  const warble = tapeSlider('tape wow & flutter')
-  const warbleOut = h('span', { className: 'dim out' })
-  valueTip(warble, warbleOut)
-  warble.oninput = () => {
-    warbleOut.textContent = fmtPct(Number(warble.value))
-    deps.setTape(id, { warble: Number(warble.value) })
-  }
-  // a param's name is its automation menu; `names` lets update() mark the ones a lane drives
-  const names: Record<string, HTMLElement> = {}
-  const name = (key: string, text: string) => {
-    const label = (names[key] = h('span', { className: 'dim' }, text))
-    deps.autoMenu(label, { scope: lp.trackId, kind: 'looper', owner: id, param: key })
-    return label
-  }
-  const title = h('strong', {}, `loop ${lp.slot + 1}`)
-  title.style.color = color // the slot's colour, as on its region box
-  const head = h('div', { className: 'dev-head' }, title, h('span', { className: 'grow' }), power)
-  const el = h('div', { className: 'dev looper' },
+  ctl('gain', 'volume', 'volume', fmtDb, (v) => deps.setGain(id, v), (v) => v, (p) => p, 1)
+  ctl('speed', 'speed', 'playback speed (double-click: 1×)', fmtSpeed, (v) => deps.commit(id, v), toPos, toSpeed, toPos(1))
+  ctl('sat', 'saturate', 'tape saturation', fmtPct, (v) => deps.setTape(id, { sat: v }))
+  ctl('cutoff', 'filter', 'low-pass filter', fmtCutoff, (v) => deps.setTape(id, { cutoff: v }), toCutPos, toCutoff, 1)
+  ctl('warble', 'warble', 'tape wow and flutter', fmtPct, (v) => deps.setTape(id, { warble: v }))
+
+  const title = h('strong', { className: 'lp-name' }, `Loop ${lp.slot + 1}`)
+  const head = h('div', { className: 'dev-head lp-head' }, power, title, h('span', { className: 'grow' }), h('span', { className: 'lp-region' }, draw, clear))
+  const el = h('div', { className: 'dev looper lp-card' },
     head,
-    h('label', { className: 'prm' }, name('gain', 'volume'), vol),
-    h('label', { className: 'prm' }, name('speed', 'speed'), speed),
-    h('label', { className: 'prm' }, name('sat', 'saturate'), sat),
-    h('label', { className: 'prm' }, name('cutoff', 'filter'), filter),
-    h('label', { className: 'prm' }, name('warble', 'warble'), warble),
-    h('div', { className: 'prm' }, h('span', { className: 'dim' }, 'region'), h('div', { className: 'btns' }, draw, clear)))
+    h('div', { className: 'lp-knobs' }, ...Object.values(ctls).map((c) => c.el)))
+  el.style.setProperty('--c', color)
+  el.style.setProperty('--knob-c', color)
   cardMenu(el, head, title, 'delete looper', () => deps.remove(id), () => !deps.readOnly)
 
   let current = lp
   let lastArmed = false
   /** `auto`: the params a lane drives, keyed by `Looper` field; those show the lane's value and can't be dragged. */
-  function update(l: Looper, armed: boolean, rate: number, auto: Map<string, AutoInfo> = NO_AUTO) {
+  function update(l: Looper, armed: boolean, _rate: number, auto: Map<string, AutoInfo> = NO_AUTO) {
     current = l
     lastArmed = armed
-    // a driven slider follows its lane (and is locked); a free one follows the doc unless it is being dragged
-    const val = (key: string, input: HTMLInputElement, stat: number) => {
+    const stat: Record<string, number> = { gain: l.gain ?? 1, speed: l.speed, sat: l.sat ?? 0, cutoff: l.cutoff ?? LOOP_CUTOFF_MAX, warble: l.warble ?? 0 }
+    // a driven knob follows its lane (and is locked); a free one follows the doc unless it is being turned
+    for (const [key, c] of Object.entries(ctls)) {
       const a = auto.get(key)
       const driven = !!a?.on && a.value != null
-      names[key].classList.toggle('auto', !!a)
-      names[key].classList.toggle('driven', driven)
-      input.disabled = deps.readOnly || driven
-      return { v: driven ? a!.value! : stat, show: driven || document.activeElement !== input }
-    }
-    const sp = val('speed', speed, l.speed)
-    if (sp.show) {
-      speed.value = String(toPos(sp.v))
-      out.textContent = fmtSpeed(sp.v)
+      c.label.classList.toggle('auto', !!a)
+      c.el.classList.toggle('driven', driven)
+      c.k.setDisabled(deps.readOnly || driven)
+      if (driven || !c.active) {
+        const v = driven ? a!.value! : stat[key]
+        c.k.set(c.to(v))
+        c.out.textContent = c.fmt(v)
+      }
     }
     muted = l.muted ?? false
-    setSwitch(power, el, !muted)
-    const vo = val('gain', vol, l.gain ?? 1)
-    if (vo.show) vol.value = String(vo.v)
-    const sa = val('sat', sat, l.sat ?? 0)
-    if (sa.show) {
-      sat.value = String(sa.v)
-      satOut.textContent = fmtPct(sa.v)
-    }
-    const fi = val('cutoff', filter, l.cutoff ?? LOOP_CUTOFF_MAX)
-    if (fi.show) {
-      filter.value = String(toCutPos(fi.v))
-      filterOut.textContent = fmtCutoff(fi.v)
-    }
-    const wa = val('warble', warble, l.warble ?? 0)
-    if (wa.show) {
-      warble.value = String(wa.v)
-      warbleOut.textContent = fmtPct(wa.v)
-    }
+    power.setAttribute('aria-checked', String(!muted))
+    el.classList.toggle('bypassed', muted)
     const has = l.length > 0
     clear.hidden = !has
     draw.classList.toggle('on', armed)
-    draw.textContent = armed ? 'drag on track…' : has ? 'redraw' : 'draw'
+    draw.textContent = armed ? 'drag on the track…' : has ? 'redraw' : 'draw'
   }
   update(lp, false, 48000)
   /** Repaint with new automation values only (the playhead moved). */

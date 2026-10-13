@@ -1,7 +1,8 @@
-dialog.modal.help-modal { width: min(780px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+dialog.modal.help-modal { width: min(780px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); }
 .help-modal .modal-body { gap: 18px; padding: 14px 20px 20px; overflow: auto; }
 .help-grid { columns: 2 300px; column-gap: 32px; }
 .help-group { break-inside: avoid; padding-bottom: 16px; }
+.help-note { margin: 0 0 6px; font-size: var(--fs-sm); line-height: 1.4; color: var(--dim); }
 .help-group h3 { margin: 0 0 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--accent); }
 .help-group dl { display: grid; grid-template-columns: 1fr auto; margin: 0; }
 .help-group dt, .help-group dd { margin: 0; padding: 4px 0; border-bottom: 1px solid var(--line); line-height: 18px; }
@@ -9,7 +10,7 @@ dialog.modal.help-modal { width: min(780px, calc(100vw - 32px)); max-height: cal
 .help-group dd { display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex-wrap: wrap; }
 .help-chord { display: inline-flex; align-items: center; gap: 3px; }
 .help-chord kbd { color: var(--fg); }
-.help-or { font-size: var(--fs-xs); color: var(--faint); }
+.help-or { font-size: var(--fs-xs); color: var(--muted); }
 .help-tips { margin: 0; padding: 12px 0 0 16px; border-top: 1px solid var(--line-strong); color: var(--dim); line-height: 1.5; font-size: var(--fs-sm); }
 .help-modal .modal-body:focus { outline: 0; }
 .help-tips li { padding: 2px 0; max-width: 72ch; list-style: disc; }

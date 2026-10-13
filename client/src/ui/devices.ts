@@ -187,16 +187,20 @@ function compDrawing() {
 }
 
 /** The header shared by the panels: grip, power, name (click: its menu), preset menu, collapse, remove. */
-function unitHead(dev: Device, deps: CardDeps, el: HTMLElement) {
+/** What kind of device a renamed panel is, in dim text after its name ("synth", "Reverb"). */
+const typeLabel = (type: number) => (type === FINNWAVE ? 'synth' : type === LOFI_DRUM ? 'drum' : DEVICES[type]?.name ?? '')
+
+function unitHead(dev: Device, deps: CardDeps, el: HTMLElement, more: () => MenuItem[] = () => []) {
   const def = DEVICES[dev.type]
   const kind = def?.instrument ? 'instrument' : 'effect'
+  const typeEl = h('span', { className: 'unit-type' })
   const grip = h('span', { className: 'unit-grip', title: 'drag to move' }, icon('grip', 14))
   const power = h('button', { className: 'unit-power', title: `${kind} on / off (bypass)`, role: 'switch', disabled: deps.readOnly }, h('i', { className: 'lamp' }))
   const name = h('button', { className: 'unit-name', title: `${def?.name ?? 'device'}: click for its menu` })
   const preset = h('button', { className: 'unit-preset', title: 'presets' }, h('span', {}), icon('chevron-down', 12))
   const collapse = h('button', { className: 'unit-fold icon-btn sm', title: 'collapse' }, icon('chevron-down', 14))
   const remove = h('button', { className: 'unit-remove icon-btn sm', title: `remove this ${kind}`, disabled: deps.readOnly }, icon('close', 14))
-  const head = h('div', { className: 'unit-head' }, grip, power, name, preset, h('span', { className: 'grow' }), collapse, remove)
+  const head = h('div', { className: 'unit-head' }, grip, power, name, typeEl, preset, h('span', { className: 'grow' }), collapse, remove)
   let current = dev
   power.onclick = () => deps.bypass(dev.id, !current.bypass)
   remove.onclick = () => deps.remove(dev.id)
@@ -207,6 +211,7 @@ function unitHead(dev: Device, deps: CardDeps, el: HTMLElement) {
       { label: 'rename', run: () => deps.rename(dev.id), icon: 'edit' },
       { label: current.bypass ? 'turn on' : 'turn off (bypass)', run: () => deps.bypass(dev.id, !current.bypass), icon: 'power' },
       { label: deps.collapsed(dev.id) ? 'expand' : 'collapse', run: () => deps.setCollapsed(dev.id, !deps.collapsed(dev.id)) },
+      ...more(),
       'sep',
       { label: `remove ${kind}`, run: () => deps.remove(dev.id), icon: 'trash', danger: true },
     ]
@@ -235,10 +240,17 @@ function unitHead(dev: Device, deps: CardDeps, el: HTMLElement) {
       el.classList.toggle('bypassed', !!d.bypass)
       const p = deps.presets(d)
       preset.hidden = !p.menu || deps.readOnly
-      const label = p.current ?? 'preset'
+      // the name already says which preset it is: the menu button shrinks to its chevron, and the type follows the name
+      const same = !!p.current && p.current === text
+      const label = same ? '' : p.current ?? 'preset'
       const span = preset.firstElementChild as HTMLElement
       if (span.textContent !== label) span.textContent = label
       preset.classList.toggle('none', !p.current)
+      preset.classList.toggle('only-chev', same)
+      preset.title = same ? `presets (now: ${text})` : 'presets'
+      const type = d.name && d.name !== def?.name ? typeLabel(d.type) : ''
+      if (typeEl.textContent !== type) typeEl.textContent = type
+      typeEl.hidden = !type
       const shut = deps.collapsed(d.id)
       el.classList.toggle('collapsed', shut)
       collapse.title = shut ? 'expand' : 'collapse'
@@ -252,7 +264,8 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   const def = DEVICES[dev.type]
   const id = dev.id
   const el = h('div', { className: `unit t${dev.type}`, 'data-device': id })
-  const head = unitHead(dev, deps, el)
+  let rangeOpen = false // the key range shows when it is set, or when asked for from the panel's menu
+  const head = unitHead(dev, deps, el, () => def?.instrument && !deps.readOnly ? [{ label: rangeOpen ? 'hide the key range' : 'key range…', run: () => { rangeOpen = !rangeOpen; drawRange() } }] : [])
   let current = dev
 
   /** What each param currently shows (doc, automation, a remote drag or this panel's own drag). */
@@ -377,7 +390,12 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   // Instruments take the notes inside their range: lo and hi note names (c2, f#3, or a pitch number).
   const keyIn = (tip: string) => h('input', { className: 'key', title: tip, spellcheck: false, disabled: deps.readOnly })
   const lo = keyIn('lowest note'), hi = keyIn('highest note')
-  const range = def?.instrument ? h('div', { className: 'unit-foot' }, h('span', { className: 'dim' }, 'notes'), lo, h('span', { className: 'faint' }, 'to'), hi) : null
+  const range = def?.instrument ? h('div', { className: 'unit-foot' }, h('span', { className: 'dim' }, 'Plays notes'), lo, h('span', { className: 'muted' }, 'to'), hi) : null
+  const drawRange = () => {
+    if (!range) return
+    const full = (current.keyLo ?? KEY_MIN) <= KEY_MIN && (current.keyHi ?? KEY_MAX) >= KEY_MAX
+    range.hidden = full && !rangeOpen && !range.contains(document.activeElement)
+  }
   const setKeys = (which: 'lo' | 'hi') => {
     const p = parseNote((which === 'lo' ? lo : hi).value)
     const [kl, kh] = [current.keyLo ?? KEY_MIN, current.keyHi ?? KEY_MAX]
@@ -405,6 +423,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     lastRemote = remote
     head.update(d)
     showKeys(d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
+    drawRange()
     driven.clear()
     for (const p of def?.params ?? []) {
       const c = ctls.get(p.id)

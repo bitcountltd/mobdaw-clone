@@ -1,33 +1,31 @@
 /* The dock (studio/dock): the bar (tabs, what is shown, the tab's tools), the resize edge and the empty states.
    The editors are styled in editors.css, the rack in rack.css. */
 
-/* The old card rules, kept for the soundscape looper cards in the lanes (ui/loopers.ts). */
-.studio .dev { position: relative; width: 280px; font-size: 12px; border-right: 1px solid var(--line); }
-.studio .dev.bypassed { opacity: 0.55; }
-.studio .dev-head { display: flex; gap: 6px; align-items: center; padding: 0 8px; height: 18px; }
-.studio .dev button { border: 0; padding: 0 6px; font-size: 11px; line-height: 18px; }
-.studio .dev .sw { position: relative; flex: none; width: 24px; height: 12px; padding: 0; background: var(--line); }
-.studio .dev .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: var(--dim); }
-.studio .dev .sw:hover { background: color-mix(in srgb, var(--line) 70%, var(--dim)); }
-.studio .dev .sw[aria-checked=true] { background: var(--switch-track); }
-.studio .dev .sw[aria-checked=true]::after { left: 14px; background: var(--switch); }
-.studio .dev .prm { display: grid; grid-template-columns: 1fr 2fr; gap: 6px; align-items: center; padding: 3px 8px; }
-.studio .dev .prm input, .studio .dev .prm select { padding: 0; border: 0; min-width: 0; accent-color: var(--accent); }
-.studio .dev .prm select { grid-column: 2; padding: 1px 4px; }
-.studio .dev .prm .auto { color: var(--accent); }
-.studio .dev .prm .driven + input { opacity: .6; }
-.studio .dev .prm[hidden] { display: none; }
-.studio .dev.looper .prm > .btns { grid-column: 2; }
-.studio .dev.looper .btns { display: flex; gap: 6px; }
-.studio .dev.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); background: var(--panel); }
-.studio .dev.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
-.studio .dev.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+/* The soundscape's looper cards (ui/loopers.ts, in a lane's loopers row): small units in the rack's style, in the slot
+   colour (--c). The .dev / .dev-head names are what the lane uses to fold the row down to the title bars. */
+.studio .lp-card { position: relative; display: flex; flex-direction: column; margin: 6px 0 6px 8px; min-width: 264px;
+  background: linear-gradient(#26282d, #212327); border: 1px solid #353940; border-radius: var(--r-md);
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--c) 75%, transparent), 0 3px 10px rgba(0, 0, 0, .25); font-size: var(--fs-sm); }
+.studio .lp-card.bypassed .lp-knobs { opacity: .42; filter: saturate(.4); }
+.studio .lp-card.bypassed .lp-name { color: var(--dim); }
+.studio .lp-head { display: flex; align-items: center; gap: 6px; height: 30px; padding: 2px 6px 0 6px; border-bottom: 1px solid rgba(0, 0, 0, .32); }
+.studio .lp-name { font-size: var(--fs); font-weight: 600; color: var(--c); cursor: default; }
+.studio .lp-region { display: flex; gap: 4px; }
+.studio .lp-region .btn { height: 22px; padding: 0 8px; }
+.studio .lp-region [hidden] { display: none; }
+.studio .lp-knobs { display: flex; gap: 2px; padding: 6px 8px 6px; }
+.studio .lp-knobs .pc { display: flex; flex-direction: column; align-items: center; min-width: 48px; }
+.studio .lp-knobs .pc.driven .knob-fill { stroke: var(--accent); }
+.studio .lp-card.reordering { z-index: 5; opacity: .9; box-shadow: var(--shadow); }
+.studio .fx.collapsed .lp-card { min-width: 0; margin: 4px 0 4px 8px; }
+.studio .fx.collapsed .lp-head { border-bottom: 0; height: 26px; padding-top: 0; }
+.studio .fx.collapsed .lp-region { display: none; }
 
 /* --- dock */
 .studio .dock { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-top: 1px solid var(--line); }
 .studio .dock-edge { position: absolute; z-index: 5; top: -4px; left: 0; right: 0; height: 7px; cursor: ns-resize; }
 .studio .dock-edge:hover, .studio .dock.resizing .dock-edge { background: linear-gradient(transparent 3px, var(--accent) 3px 4px, transparent 4px); }
-.studio .dock-bar { display: flex; flex: none; gap: 12px; align-items: center; height: 36px; padding: 0 6px 0 8px; min-width: 0; }
+.studio .dock-bar { display: flex; flex: none; gap: 12px; align-items: center; min-height: 36px; padding: 0 6px 0 8px; min-width: 0; container-type: inline-size; }
 .studio .dock.open .dock-bar { border-bottom: 1px solid var(--line); }
 .studio .dock-tabs > button { gap: 5px; padding: 2px 10px 2px 8px; }
 .studio .dock-what { display: flex; flex: 0 1 auto; gap: 8px; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
@@ -40,6 +38,9 @@
 .studio .dock-toggle { flex: none; transition: transform var(--t) var(--ease), color var(--t-fast) linear; }
 .studio .dock-toggle.shut { transform: rotate(-90deg); }
 .studio .dock:not(.open) .dock-what, .studio .dock:not(.open) .dock-tools { opacity: .7; }
+/* collapsed: no tab is lit (nothing is showing); the remembered tab is still the one that opens */
+.studio .dock:not(.open) .dock-tabs > button.on, .studio .dock:not(.open) .dock-tabs > button.on:hover:not(:disabled) { background: none; color: var(--dim); box-shadow: none; }
+.studio .dock:not(.open) .dock-tabs > button:hover:not(:disabled) { color: var(--fg); background: var(--line); }
 .studio .dock:not(.open) .dock-tools { visibility: hidden; }
 
 .studio .dock-body { flex: none; min-height: 0; overflow: hidden; transition: height var(--t) var(--ease); }
@@ -53,6 +54,17 @@
 .studio .dock-empty p { margin: 0; font-size: var(--fs); color: var(--fg); }
 .studio .dock-empty p.dim { font-size: var(--fs-sm); color: var(--dim); }
 .studio .dock-empty-icon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 6px; border: 1px dashed var(--line-strong); border-radius: 50%; color: var(--dim); }
+
+/* narrow (a phone, a split window): the bar wraps, the tools take a second row of their own and the name ellipsizes */
+@media (max-width: 760px) {
+  .studio .dock-bar { flex-wrap: wrap; row-gap: 0; column-gap: 8px; padding: 0 4px 0 6px; }
+  .studio .dock-what { flex: 1 1 0; }
+  .studio .dock-sub { display: none; }
+  .studio .dock-toggle { order: 2; }
+  .studio .dock-tools { order: 3; flex: 1 0 100%; justify-content: flex-start; min-height: 34px; overflow-x: auto; scrollbar-width: none; border-top: 1px solid var(--line); }
+  .studio .dock:not(.open) .dock-tools { display: none; }
+  .studio .dock-tabs > button { padding: 2px 8px 2px 6px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .studio .dock-body, .studio .dock-toggle { transition: none; }

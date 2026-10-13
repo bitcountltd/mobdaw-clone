@@ -8,7 +8,7 @@ import {
 import { peaksFor, storedPeaks, drawWave } from '../../audio/peaks'
 import { h } from '../../dom'
 import { icon } from '../../theme/icons'
-import { iconButton, knob, numberField, segmented, toggle } from '../../theme/controls'
+import { iconButton, knob, numberField, segmented, toggle, tooltip } from '../../theme/controls'
 import { clamp } from '../../ui/blocks'
 import { drumGrid } from '../../ui/drumGrid'
 import { noteEditor } from '../../ui/noteEditor'
@@ -41,16 +41,17 @@ export function mountClipEditor(st: Studio) {
   const body = h('div', { className: 'ce-body' })
   const empty = h('div', { className: 'dock-empty' },
     h('div', { className: 'dock-empty-icon' }, icon('piano', 22)),
-    h('p', {}, 'Double-click a clip to edit it here.'),
-    h('p', { className: 'dim' }, 'MIDI clips open as a piano roll or a drum grid; audio clips show their gain and fades.'))
+    h('p', {}, 'Click a clip to edit it here.'),
+    h('p', { className: 'dim' }, 'Instrument clips open as a piano roll or a drum grid; audio clips show their gain and fades.'))
   const audio = audioPanel(st)
   const el = h('div', { className: 'clip-editor' }, empty, body, audio.el)
 
   // --- tools (shown in the dock's bar)
   const lengthF = numberField({ value: 4, min: 0.25, max: 512, step: 0.25, width: '44px', title: 'clip length in bars (drag or click to type)', format: (v) => barsText(v, 1, 1), onChange: (v) => setLength(v) })
-  const loopT = toggle({ icon: 'loop' }, { title: 'loop the clip', onChange: (on) => setLoop(on) })
+  const loopT = toggle(h('span', { className: 'ce-loop-in' }, icon('loop', 14), 'loop'), { className: 'ce-loop-t', onChange: (on) => setLoop(on) })
+  tooltip(loopT.el, 'repeat the clip: its pattern plays again to the end of the clip')
   const loopF = numberField({ value: 1, min: 0.25, max: 512, step: 0.25, width: '44px', title: 'loop length in bars', format: (v) => barsText(v, 1, 1), onChange: (v) => setLoopLen(v) })
-  const viewSeg = segmented<'piano' | 'drums'>([{ value: 'piano', icon: 'piano', title: 'piano roll' }, { value: 'drums', icon: 'drum', title: 'drum grid' }], 'piano', (v) => { const c = midi(); if (c) setMidiView(doc, c.id, v) })
+  const viewSeg = segmented<'piano' | 'drums'>([{ value: 'piano', icon: 'piano', label: 'piano roll' }, { value: 'drums', icon: 'drum', label: 'drum grid' }], 'piano', (v) => { const c = midi(); if (c) setMidiView(doc, c.id, v) })
   const gridSel = h('select', { className: 'ce-grid', title: 'snap for note edits (alt: no snap)' }) as HTMLSelectElement
   const fillGrid = () => {
     const studioLabel = GRID_SIZES.find((g) => g.value === st.ui.grid)?.label ?? '1/16'
@@ -185,7 +186,7 @@ export function mountClipEditor(st: Studio) {
     const track = getTracks(doc).find((t) => t.id === clip.trackId)
     const sub = clip.kind === 'audio'
       ? getSamples(doc)[clip.sourceHash]?.name ?? 'audio clip'
-      : clip.view === 'drums' ? 'drum pattern' : 'midi clip'
+      : clip.view === 'drums' ? 'drum pattern' : 'notes'
     const name = track?.name ?? 'clip'
     return { name, sub: sub === name ? 'audio clip' : sub, color: colorOf(clip.trackId) }
   }
@@ -229,6 +230,9 @@ export function mountClipEditor(st: Studio) {
     st.on('doc', draw),
     st.on('ui', (p) => { if ('editing' in p || 'note' in p || 'dock' in p || 'grid' in p) draw() }),
     st.on('tick', playhead),
+    // notes played live on the open clip's track light the piano roll's keys
+    st.on('liveNote', (n) => { const c = midi(); if (c && c.trackId === n.trackId) ne.liveKey(n.pitch, n.on) }),
+    st.on('ui', (p) => { if ('editing' in p) ne.clearLive() }),
     st.on('transport', playhead),
   ]
   draw()

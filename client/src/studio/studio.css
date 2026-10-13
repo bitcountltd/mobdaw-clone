@@ -11,8 +11,9 @@
 .studio-browser { flex: none; width: 240px; overflow: auto; background: var(--panel); border-right: 1px solid var(--line); }
 .studio-browser[hidden] { display: none; }
 .studio .browser-title { margin: 0; padding: 10px 12px; font-size: var(--fs-h3); font-weight: 500; color: var(--dim); }
-@media (max-width: 899px) { /* narrow: the browser is a drawer over the arrangement */
-  .studio-browser { position: absolute; z-index: 20; top: 0; bottom: 0; left: 0; box-shadow: var(--shadow); }
+@media (max-width: 899px) { /* narrow: the browser is a drawer over the arrangement, over a scrim that closes it */
+  .studio-browser { position: absolute; z-index: 20; top: 0; bottom: 0; left: 0; width: min(280px, calc(100vw - 56px)); box-shadow: var(--shadow); }
+  .studio.browser-open .studio-main::after { content: ''; position: absolute; inset: 0; z-index: 19; background: var(--scrim); }
 }
 .studio-status { display: flex; gap: 12px; align-items: center; height: 22px; padding: 0 12px; font-size: var(--fs-xs); color: var(--dim); background: var(--panel); border-top: 1px solid var(--line); white-space: nowrap; overflow: hidden; }
 .studio-status .status-text { overflow: hidden; text-overflow: ellipsis; }

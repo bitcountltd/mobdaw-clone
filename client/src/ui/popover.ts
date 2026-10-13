@@ -2,6 +2,8 @@ import { h } from '../dom'
 import { icon, type IconName } from '../theme/icons'
 
 let closer: Event | null = null
+/** The gap kept between a popover and the window's edges. */
+const EDGE = 8
 /** True if this event is what just closed a popover (so its click shouldn't open another). */
 export const closedBy = (e: Event) => closer === e
 
@@ -28,15 +30,20 @@ function showMenu(anchor: HTMLElement, menu: HTMLElement, at?: [x: number, y: nu
   }
   const esc = (e: KeyboardEvent) => e.key === 'Escape' && close()
   const r = anchor.getBoundingClientRect()
-  menu.style.left = `${at ? at[0] : r.left}px`
-  menu.style.top = `${at ? at[1] : r.bottom + 4}px`
+  // measured at the left edge first (so its width is not squeezed by the window's right edge), then placed
+  menu.style.left = '0px'
+  menu.style.top = '0px'
+  menu.style.maxWidth = `${innerWidth - 2 * EDGE}px`
   document.body.append(menu)
-  let m = menu.getBoundingClientRect()
+  const m = menu.getBoundingClientRect()
   // anchored in the right half: line the menu up with the anchor's right edge instead
-  if (!at && r.left + r.width / 2 > innerWidth / 2) (menu.style.left = `${Math.max(0, r.right - m.width)}px`), (m = menu.getBoundingClientRect())
-  // keep it on screen (the chat sits at the right edge)
-  if (m.right > innerWidth) menu.style.left = `${Math.max(0, innerWidth - m.width)}px`
-  if (m.bottom > innerHeight) menu.style.top = `${Math.max(0, innerHeight - m.height)}px`
+  let x = at ? at[0] : r.left + r.width / 2 > innerWidth / 2 ? r.right - m.width : r.left
+  let y = at ? at[1] : r.bottom + 4
+  // keep it on screen, a little in from the edges (the chat sits at the right edge)
+  x = Math.max(EDGE, Math.min(x, innerWidth - m.width - EDGE))
+  if (y + m.height > innerHeight - EDGE) y = Math.max(EDGE, innerHeight - m.height - EDGE)
+  menu.style.left = `${x}px`
+  menu.style.top = `${y}px`
   addEventListener('pointerdown', away, true)
   addEventListener('keydown', esc, true)
   return close

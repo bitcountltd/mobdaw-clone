@@ -36,9 +36,13 @@
 .studio .tb .tb-rec { color: color-mix(in srgb, var(--rec) 85%, var(--dim)); }
 .studio .tb .tb-rec.armed { color: var(--rec); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rec) 55%, transparent); }
 .studio .tb .tb-rec.on { color: var(--on-rec); }
-.studio .tb .toggle.tb-count, .studio .tb .toggle.tb-pedal { height: 26px; padding: 0 7px; margin-left: 2px; font-size: var(--fs-sm); color: var(--dim); border-radius: var(--r-sm); }
-.studio .tb .toggle.tb-count:hover:not(:disabled), .studio .tb .toggle.tb-pedal:hover:not(:disabled) { color: var(--fg); }
-.studio .tb .toggle.tb-count.on, .studio .tb .toggle.tb-pedal.on { color: var(--on-accent); }
+.studio .tb .toggle.tb-count, .studio .tb .toggle.tb-pedal, .studio .tb .toggle.tb-keys { height: 26px; padding: 0 7px; margin-left: 2px; font-size: var(--fs-sm); color: var(--dim); border-radius: var(--r-sm); white-space: nowrap; }
+.studio .tb .toggle.tb-count:hover:not(:disabled), .studio .tb .toggle.tb-pedal:hover:not(:disabled), .studio .tb .toggle.tb-keys:hover:not(:disabled) { color: var(--fg); }
+.studio .tb .toggle.tb-count.on, .studio .tb .toggle.tb-pedal.on, .studio .tb .toggle.tb-keys.on { color: var(--on-accent); }
+.studio .tb-keys-in { display: flex; align-items: center; gap: 5px; }
+.studio .tb .tb-keys-oct { min-width: 2.2ch; color: var(--muted); font-variant-numeric: tabular-nums; }
+.studio .tb .tb-keys.on .tb-keys-oct { color: inherit; }
+.tb-pop.tb-hint-pop { max-width: 240px; font-size: var(--fs); line-height: 1.4; color: var(--fg); }
 .studio .tb .toggle:disabled { opacity: .4; }
 
 /* --- the display: a recessed window holding the counter, tempo and meter */
@@ -69,12 +73,13 @@
   font: 600 var(--fs-h3) / 26px var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; cursor: ew-resize;
 }
 .studio .tb input.numfield.tb-bpm:hover { background: var(--raise); }
-.studio .tb input.numfield.tb-bpm:not(:read-only) { background: var(--raise); box-shadow: inset 0 0 0 1px var(--accent); }
+.studio .tb input.numfield.tb-bpm:not(:read-only) { background: var(--raise); }
+.studio .tb input.numfield.tb-bpm:focus-visible, .studio .tb input.numfield.tb-bpm:not(:read-only) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .studio .tb input.numfield.tb-bpm.scrubbing { color: var(--accent); }
 .studio .tb-unit { font-size: var(--fs-xs); color: var(--dim); }
 .studio .tb .tb-tap {
-  margin-left: 4px; height: 20px; padding: 0 6px; border-radius: var(--r-sm); background: none; border: 1px solid var(--line);
-  font-size: var(--fs-xs); color: var(--dim); transition: background var(--t-fast) linear, color var(--t-fast) linear;
+  margin-left: 2px; height: 22px; padding: 0 6px; border-radius: var(--r-sm); background: none; border: 0;
+  font-size: var(--fs-sm); color: var(--dim); transition: background var(--t-fast) linear, color var(--t-fast) linear;
 }
 .studio .tb .tb-tap:hover:not(:disabled) { color: var(--fg); background: var(--raise); }
 .studio .tb .tb-tap.hit { background: var(--accent); border-color: var(--accent); color: var(--on-accent); transition: none; }
@@ -83,14 +88,16 @@
 
 /* --- snap */
 .studio .tb-snap { display: flex; align-items: center; }
-.studio .tb .tb-magnet.lit { color: var(--accent); }
+.studio .tb .toggle.tb-magnet { color: var(--dim); }
+.studio .tb .toggle.tb-magnet.on, .studio .tb .toggle.tb-magnet.on:hover:not(:disabled) { background: var(--raise); color: var(--accent); box-shadow: inset 0 0 0 1px var(--line-strong); }
 .studio .tb .tb-snapsize { display: flex; align-items: center; gap: 2px; height: 26px; padding: 0 4px 0 2px; border-radius: var(--r-sm); background: none; font-size: var(--fs-sm); color: var(--fg); font-variant-numeric: tabular-nums; }
 .studio .tb .tb-snapsize svg { color: var(--dim); }
 .studio .tb .tb-snapsize.off { color: var(--dim); }
 .studio .tb .tb-snapsize:hover { background: var(--line); }
 
 /* --- right */
-.studio .tb .seg.tb-view > button { padding: 3px 8px; }
+.studio .tb .seg.tb-view > button { display: flex; align-items: center; gap: 5px; padding: 3px 8px; }
+.studio .tb .tb-view-txt { font-size: var(--fs-sm); }
 .studio .tb-meterbox { display: flex; align-items: center; gap: 8px; margin: 0 4px; }
 .studio .tb .scope {
   flex: none; display: block; width: 120px; height: 28px; padding: 0; border-radius: var(--r-sm); background: var(--bg);
@@ -98,12 +105,12 @@
 }
 .studio .tb .scope:hover { background: color-mix(in srgb, var(--bg) 85%, var(--raise)); }
 .studio .scope-cv { display: block; }
-.studio .tb-cpu { min-width: 6ch; font-size: var(--fs-xs); color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
+.studio .tb-cpu { min-width: 6ch; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
 .studio .tb-cpu.hot { color: var(--rec); }
-.studio .tb .pedal-st { font-size: var(--fs-xs); color: var(--faint); white-space: nowrap; cursor: default; }
+.studio .tb .pedal-st { font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; cursor: default; }
 .studio .tb .pedal-st.rec { color: var(--rec); }
 .studio .tb .presence { display: flex; gap: 2px; }
-.studio .tb .presence .dot { width: 20px; height: 20px; border-radius: 50%; font-size: 10px; color: var(--on-accent); display: grid; place-items: center; }
+.studio .tb .presence .dot { width: 20px; height: 20px; border-radius: 50%; font-size: var(--fs-xs); color: var(--on-accent); display: grid; place-items: center; }
 .studio .tb .chat-btn { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); background: none; color: var(--dim); }
 .studio .tb .chat-btn:hover { color: var(--fg); background: var(--line); }
 .studio .tb .chat-btn.on { color: var(--on-accent); background: var(--accent); }
@@ -122,7 +129,10 @@
 .more-panel .mp-act { display: flex; justify-content: flex-start; align-items: center; gap: 10px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); background: none; text-align: left; }
 .more-panel .mp-act:hover:not(:disabled) { background: var(--line); }
 .more-panel .mp-act svg { color: var(--dim); }
-.more-panel .mp-act .kbd-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--dim); }
+.more-panel .mp-act .kbd-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--muted); }
+.more-panel .mp-state { margin-left: auto; padding: 0 6px; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 18px; color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.more-panel .mp-state.on { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+.more-panel .mp-state + .kbd-hint { margin-left: 8px; min-width: 2.4em; text-align: right; }
 .more-panel input.numfield { width: 3.4em; height: 26px; font-variant-numeric: tabular-nums; }
 
 /* quiet toggles on the right: the panels and the view are layout, not signal, so "on" is a raised tile, not the accent */
@@ -132,26 +142,37 @@
 
 /* --- narrower: fold away, least important first (everything folded is in the more panel) */
 @container (max-width: 1640px) {
-  .studio .tb .tb-pedal, .studio .tb-cpu, .studio .tb .pedal-st { display: none; }
+  .studio .tb-cpu, .studio .tb .pedal-st { display: none; }
 }
 @container (max-width: 1500px) {
-  .studio .tb .tb-count, .studio .tb .saved-text { display: none; }
+  .studio .tb .tb-pedal, .studio .tb .saved-text { display: none; }
+  .studio .tb .scope { width: 100px; }
+  .studio .tb-display { gap: 10px; }
   .studio .tb-c { gap: 10px; }
+  .studio .studio-top.tb { gap: 12px; }
+  /* the name takes the room it needs (the centre no longer has to sit dead centre) */
+  .studio .tb-l { flex: 1 1 auto; min-width: 120px; }
+  .studio .tb-r { flex: none; }
 }
 @container (max-width: 1340px) {
-  .studio .tb .tb-panels { display: none; }
+  .studio .tb .tb-panels, .studio .tb .tb-view-txt, .studio .tb .tb-keys-txt { display: none; }
   .studio .tb .scope { width: 84px; }
 }
-@container (max-width: 1160px) {
-  .studio .tb .tb-view, .studio .tb .tb-tap { display: none; }
+@container (max-width: 1100px) {
+  .studio .tb .tb-count, .studio .tb .tb-tap, .studio .tb .tb-meterbox, .studio .tb .tb-hist { display: none; }
+  .studio .tb-c { gap: 8px; }
 }
-@container (max-width: 960px) {
-  .studio .tb .tb-hist, .studio .tb .tb-meterbox, .studio .tb .tb-files { display: none; }
+@container (max-width: 1000px) {
+  .studio .tb .tb-keys { display: none; }
+}
+/* (the bar's container is its content box: 24px narrower than the window) */
+@container (max-width: 935px) {
+  .studio .tb .tb-hist, .studio .tb .tb-meterbox, .studio .tb .tb-files, .studio .tb .tb-view { display: none; }
   .studio .studio-top.tb { gap: 10px; }
 }
 @container (max-width: 700px) {
-  .studio .tb .tb-snap, .studio .tb .tb-meter, .studio .tb .tb-tap, .studio .tb .project-name, .studio .tb .saved, .studio .tb .tb-pedal { display: none; }
-  .studio .tb-l, .studio .tb-r { flex: none; }
+  .studio .tb .tb-snap, .studio .tb .tb-meter, .studio .tb .tb-tap, .studio .tb .project-name, .studio .tb .saved, .studio .tb .tb-pedal, .studio .tb .tb-keys { display: none; }
+  .studio .tb-l, .studio .tb-r { flex: none; min-width: 0; }
   .studio .tb-c { flex: 1; justify-content: center; }
 }
 @container (max-width: 480px) {

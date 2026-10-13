@@ -26,7 +26,7 @@
 /* (the shadow keeps the gutter dark while clips scroll under the pinned header) */
 .studio .head { left: var(--gutter); width: var(--head); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg); }
 .studio .ruler-body { position: relative; height: 100%; overflow: hidden; }
-.studio .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: 10px; color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
+.studio .tick { position: absolute; top: 0; padding: 4px 0 0 4px; font-size: var(--fs-xs); color: var(--dim); border-left: 1px solid var(--line); height: 100%; }
 
 /* overlays: playheads, the snap line, the selection box */
 .studio .arr-lanes { position: relative; padding-bottom: var(--gutter); display: flex; flex-direction: column; user-select: none; -webkit-user-select: none; }
@@ -45,12 +45,16 @@
 /* --- lanes: a tile per track (header + body), with the gutter around it */
 .studio .lane {
   --lane: var(--panel); --tc: var(--line-strong);
-  --clip: color-mix(in srgb, var(--tc) 22%, var(--raise));
-  --clip-head: color-mix(in srgb, var(--tc) 50%, var(--raise));
+  /* how strongly clips take the track colour: body and name strip (warm hues read louder, so they get less) */
+  --tint-b: 22%; --tint-h: 50%;
+  --clip: color-mix(in srgb, var(--tc) var(--tint-b), var(--raise));
+  --clip-head: color-mix(in srgb, var(--tc) var(--tint-h), var(--raise));
   background: var(--lane); position: relative; margin: var(--gutter) 0 0 var(--gutter); border-radius: var(--r-md);
   overflow: clip; /* clip, not hidden: the sticky headers must still stick to the scroller */
   flex: none;
 }
+/* the amber and the orange (TRACK_COLORS 4 and 6) */
+.studio .lane:is([style*="#d9a648"], [style*="#e0896a"]) { --tint-b: 18%; --tint-h: 40%; }
 .studio .lane-row { display: flex; height: var(--track-h); }
 .studio .lane-body { position: relative; flex: none; height: 100%; }
 .studio .lane.focus { --lane: color-mix(in srgb, var(--tc) 5%, var(--panel)); }
@@ -77,7 +81,7 @@
   box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), inset 3px 0 0 var(--tc);
 }
 .studio .track-head.focus { background: color-mix(in srgb, var(--tc) 11%, var(--panel)); box-shadow: calc(-1 * var(--gutter)) 0 0 var(--bg), inset 4px 0 0 var(--tc); }
-.studio .th-top { display: flex; align-items: center; gap: 4px; height: 20px; min-width: 0; }
+.studio .th-top { display: flex; align-items: center; gap: 4px; height: 22px; min-width: 0; }
 .studio .th-grip { flex: none; display: flex; width: 12px; margin-left: -7px; color: var(--faint); opacity: 0; cursor: grab; touch-action: none; transition: opacity var(--t-fast) linear; }
 .studio .track-head:hover .th-grip { opacity: 1; }
 .studio .th-grip:hover { color: var(--fg); }
@@ -85,14 +89,16 @@
 .studio .th-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; cursor: text; padding-left: 2px; }
 .studio .th-rename { flex: 1; min-width: 0; height: 20px; padding: 0 4px; font: inherit; font-weight: 500; }
 .studio .th-btns { flex: none; display: flex; gap: 2px; }
-.studio .th-btn { width: 18px; height: 18px; padding: 0; font-size: var(--fs-sm); font-weight: 600; line-height: 1; color: var(--dim); border-radius: var(--r-sm); }
+.studio .th-btn { width: 22px; height: 22px; padding: 0; font-size: var(--fs-sm); font-weight: 600; line-height: 1; color: var(--dim); border-radius: var(--r-sm); }
 .studio .th-btn:hover:not(:disabled) { color: var(--fg); }
 .studio .th-btn.on, .studio .th-btn.on:hover:not(:disabled) { color: var(--on-accent); }
-.studio .th-btn.arm { color: color-mix(in srgb, var(--rec) 70%, var(--dim)); }
-.studio .th-btn.arm.on, .studio .th-btn.arm.on:hover:not(:disabled) { color: var(--on-rec); }
+/* arm: quiet at rest, red on hover, a red fill when armed (the mixer's arm matches) */
+.studio .th-btn.arm { color: var(--dim); }
+.studio .th-btn.arm:hover:not(:disabled) { color: var(--rec); }
+.studio .th-btn.arm.on, .studio .th-btn.arm.on:hover:not(:disabled) { background: var(--rec); color: var(--on-rec); }
 .studio .th-btn[hidden] { display: none; }
 .studio .th-bottom { display: flex; align-items: center; gap: 6px; padding-left: 2px; }
-.studio .th-bottom .fader.h { flex: 1; min-width: 0; height: 22px; grid-template-columns: 1fr 30px; gap: 4px; }
+.studio .th-bottom .fader.h { flex: 1; min-width: 0; height: 22px; grid-template-columns: 1fr 44px; gap: 4px; }
 .studio .th-bottom .knob { flex: none; }
 .studio .track-head.compact { justify-content: center; }
 .studio .track-head.compact .th-bottom { display: none; }
@@ -119,9 +125,9 @@
 }
 .studio .clip-name { position: relative; z-index: 1; pointer-events: none; }
 .studio .clip-body { position: absolute; left: 0; right: 0; top: 14px; bottom: 0; pointer-events: none; }
-.studio .clip:hover { --clip: color-mix(in srgb, var(--tc) 27%, var(--raise)); }
+.studio .clip:hover { --clip: color-mix(in srgb, var(--tc) calc(var(--tint-b) + 5%), var(--raise)); }
 .studio .clip.midi, .studio .clip.midi.sel { background: var(--clip); } /* (over the old timeline's MIDI colours) */
-.studio .clip.sel { --clip: color-mix(in srgb, var(--tc) 30%, var(--raise)); --clip-head: color-mix(in srgb, var(--tc) 66%, var(--raise)); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.studio .clip.sel { --clip: color-mix(in srgb, var(--tc) calc(var(--tint-b) + 8%), var(--raise)); --clip-head: color-mix(in srgb, var(--tc) calc(var(--tint-h) + 16%), var(--raise)); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .studio .clip.editing { z-index: auto; padding: 0; cursor: grab; background: var(--clip); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .studio .clip.editing::before, .studio .clip.editing::after { bottom: 0; height: auto; }
 .studio .clip.editing .clip-name::before { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 5px 1px 0; border-radius: 50%; background: var(--accent); }
@@ -167,7 +173,7 @@
 .studio .clip.forever::after { display: none; }
 .studio .clip.forever:not(.editing) { mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); }
 /* short tracks: the name strip only takes what it needs */
-.studio .lane.short .clip-head { height: 12px; line-height: 12px; font-size: 10px; }
+.studio .lane.short .clip-head { height: 13px; line-height: 13px; font-size: var(--fs-xs); }
 .studio .lane.short .clip-body { top: 12px; }
 .studio .lane.short .fade-h { top: 12px; }
 /* audio still arriving, gone, being recorded */
@@ -196,7 +202,7 @@
 .studio .master-meter { flex: 1; width: auto; }
 .studio .master-body { position: sticky; left: calc(var(--head) + var(--gutter)); display: flex; align-items: center; gap: 4px; padding: 0 8px; font-size: var(--fs-sm); white-space: nowrap; cursor: pointer; }
 .studio .master-chip { height: 20px; padding: 0 8px 0 6px; gap: 4px; font-size: var(--fs-xs); color: var(--dim); background: var(--raise); border-color: var(--line); }
-.studio .master-chip svg { color: var(--faint); }
+.studio .master-chip svg { color: var(--dim); }
 .studio .master-body:hover .master-chip { color: var(--fg); border-color: var(--line-strong); }
 .studio .master-chip.off { text-decoration: line-through; text-decoration-color: var(--faint); opacity: .6; }
 
@@ -253,7 +259,7 @@
 .studio .loop-box::before, .studio .loop-box::after { content: ''; position: absolute; top: 0; bottom: 0; width: 8px; max-width: 33%; cursor: ew-resize; }
 .studio .loop-box::before { left: 0; }
 .studio .loop-box::after { right: 0; }
-.studio .loop-box span { pointer-events: none; position: absolute; top: 0; left: 0; padding: 0 5px; font-size: 10px; line-height: 14px; color: var(--bg); background: var(--c); }
+.studio .loop-box span { pointer-events: none; position: absolute; top: 0; left: 0; padding: 0 5px; font-size: var(--fs-xs); line-height: 14px; color: var(--bg); background: var(--c); }
 .studio .loop-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--c); pointer-events: none; z-index: 2; }
 /* The source lane is opaque and above the playhead overlay: the timeline's playhead means nothing in source time. */
 .studio .src-row { position: relative; z-index: 2; height: 72px; background: var(--lane); border-top: 1px solid var(--line); }
@@ -273,7 +279,7 @@
 .studio .src-ticks { position: absolute; top: 0; left: 0; right: 0; height: 14px; cursor: pointer; z-index: 1; background: var(--lane); border-bottom: 1px solid var(--line); }
 .studio .src-body .playhead { z-index: 2; pointer-events: none; background: var(--fg); }
 .studio .src-body .playhead[hidden] { display: none; }
-.studio .src-ticks .tick { padding: 0 0 0 3px; font-size: 9px; line-height: 14px; }
+.studio .src-ticks .tick { padding: 0 0 0 3px; font-size: var(--fs-xs); line-height: 14px; }
 /* compact transport (soundscape lanes) */
 .studio .transport.sm { align-self: flex-start; }
 .studio .transport.sm .play { width: 24px; height: 18px; border: 1px solid var(--line); background: var(--raise); }
@@ -307,3 +313,43 @@
 .studio .auto-row.off .auto-line, .studio .auto-row.off .auto-pt, .studio .auto-row.off .auto-fill { opacity: .35; }
 .studio .automatable { cursor: pointer; }
 .studio .automatable:hover { color: var(--fg); text-decoration: underline dotted; }
+
+/* --- keyboard users: "Skip to tracks" is the first stop in the studio, shown only while focused */
+.studio .skip-link:focus, .studio .skip-link:focus-visible {
+  position: absolute; z-index: 50; top: 8px; left: 8px; width: auto; height: auto; margin: 0; padding: 6px 12px; overflow: visible; clip: auto; white-space: nowrap;
+  background: var(--accent); color: var(--on-accent); font-weight: 600; border-radius: var(--r-sm); box-shadow: var(--shadow); text-decoration: none;
+}
+
+/* --- renaming a clip in place: an input that fits the name strip */
+.studio .clip-head .clip-rename {
+  position: relative; z-index: 2; width: calc(100% + 8px); max-width: 220px; height: 14px; margin: 0 -4px; padding: 0 3px; box-sizing: border-box;
+  font: 500 var(--fs-xs) / 12px var(--font-ui); color: var(--fg); background: var(--bg); border: 1px solid var(--accent); border-radius: 2px; outline: 0;
+}
+.studio .lane.short .clip-head .clip-rename { height: 13px; line-height: 11px; }
+
+/* --- the light empty state in the tail, under the add-track button (until the first clip): one quiet row */
+.studio .arr-lite {
+  position: sticky; left: var(--gutter); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  max-width: calc(var(--view, 100%) - 2 * var(--gutter) - 12px); margin-top: 10px; padding: 0 2px;
+}
+.studio .arr-lite[hidden] { display: none; }
+.studio .arr-lite-sub { margin: 0; font-size: var(--fs-sm); color: var(--dim); }
+.studio .arr-lite-btns { display: flex; flex-wrap: wrap; gap: 4px; }
+.studio .arr-lite-btns .btn { gap: 5px; height: 26px; padding: 0 10px 0 8px; font-size: var(--fs-sm); color: var(--dim); background: none; border-color: var(--line); }
+.studio .arr-lite-btns .btn svg { color: var(--dim); }
+.studio .arr-lite-btns .btn:hover:not(:disabled) { color: var(--fg); background: var(--panel); border-color: var(--line-strong); }
+.studio .arr-lite-btns .btn:hover:not(:disabled) svg { color: var(--accent); }
+
+/* --- narrow studio (< 600px wide, set by shell.ts): slim headers with the name and m / s / arm only */
+.studio.narrow .arrange { --head: 128px; --gutter: 6px; }
+.studio.narrow .track-head { padding: 4px 18px 4px 9px; gap: 3px; }
+.studio.narrow .track-head.slim { justify-content: center; }
+.studio.narrow .th-top { flex-wrap: wrap; height: auto; row-gap: 2px; }
+.studio.narrow .th-name { flex: 1 1 100%; font-size: var(--fs-sm); padding-left: 0; }
+.studio.narrow .th-btns { gap: 3px; }
+.studio.narrow .th-btn { width: 24px; height: 24px; }
+.studio.narrow .th-meter { right: 5px; top: 6px; bottom: 6px; }
+.studio.narrow .th-bottom[hidden], .studio.narrow .th-grip[hidden], .studio.narrow .th-kind[hidden], .studio.narrow .monitor[hidden] { display: none; }
+.studio.narrow .add-track { padding: 0 9px; font-size: var(--fs-sm); }
+.studio.narrow .fx-toggle { padding-left: 9px; }
+.studio.narrow .master-head { padding: 0 6px 0 9px; gap: 6px; }

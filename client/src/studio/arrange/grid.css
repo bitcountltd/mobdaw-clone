@@ -25,17 +25,18 @@
 .studio .rl-loop.on { background: rgba(240, 180, 76, .09); }
 .studio .rl-brace {
   position: absolute; left: 0; right: 0; top: 2px; height: 7px; pointer-events: auto; cursor: grab;
-  border: 1.5px solid var(--faint); border-bottom: 0; border-radius: 3px 3px 0 0;
-  background: color-mix(in srgb, var(--faint) 35%, transparent);
+  /* off: the region is still there to see and drag, in a quiet accent */
+  border: 1.5px solid color-mix(in srgb, var(--accent) 40%, transparent); border-bottom: 0; border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 .studio .rl-loop.on .rl-brace { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 55%, transparent); }
-.studio .rl-brace:hover { background: color-mix(in srgb, var(--faint) 60%, transparent); }
+.studio .rl-brace:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .studio .rl-loop.on .rl-brace:hover { background: color-mix(in srgb, var(--accent) 75%, transparent); }
 /* the ends: grab zones a little wider than they look, with a short tick running down into the numbers */
 .studio .rl-handle { position: absolute; top: 0; height: 100%; width: 9px; pointer-events: auto; cursor: ew-resize; z-index: 1; }
 .studio .rl-handle.l { left: -4px; }
 .studio .rl-handle.r { right: -4px; }
-.studio .rl-handle::after { content: ''; position: absolute; left: 4px; top: 2px; bottom: 0; width: 1.5px; background: var(--faint); }
+.studio .rl-handle::after { content: ''; position: absolute; left: 4px; top: 2px; bottom: 0; width: 1.5px; background: color-mix(in srgb, var(--accent) 40%, transparent); }
 .studio .rl-loop.on .rl-handle::after { background: var(--accent); }
 .studio .rl-handle:hover::after { width: 2.5px; left: 3.5px; }
 

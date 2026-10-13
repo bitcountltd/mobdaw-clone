@@ -343,7 +343,7 @@ export function noteEditor(deps: NoteEditorDeps) {
     e.style.top = `${(PITCH_MAX - n.pitch) * row}px`
     e.style.width = `${Math.max(3, px(n.durTicks) - 1)}px`
     e.style.setProperty('--v', String(n.velocity))
-    const label = px(n.durTicks) > 30 && row >= 11 ? noteName(n.pitch) : ''
+    const label = px(n.durTicks) > 30 && row >= 13 ? noteName(n.pitch) : ''
     if (e.textContent !== label) e.textContent = label
   }
   function placeAll() {
@@ -414,5 +414,17 @@ export function noteEditor(deps: NoteEditorDeps) {
   }
   /** Call when another clip opens: the next update re-centres on its notes. */
   const reset = () => { centered = 0; touched = false; sel.clear(); lastLen = 0 }
-  return { el, scroller: scroll, keysWidth: KEYS_W, update, reset, setPlayhead, commands }
+  /** Light (or let go of) the key of a note played live, from the computer keyboard or a MIDI keyboard. */
+  const lit = new Map<number, number>() // pitch -> how many sources hold it
+  function liveKey(pitch: number, on: boolean) {
+    const n = Math.max(0, (lit.get(pitch) ?? 0) + (on ? 1 : -1))
+    if (n) lit.set(pitch, n)
+    else lit.delete(pitch)
+    keys.querySelector<HTMLElement>(`.pr-key[data-pitch="${pitch}"]`)?.classList.toggle('live', n > 0)
+  }
+  function clearLive() {
+    lit.clear()
+    for (const k of keys.querySelectorAll('.pr-key.live')) k.classList.remove('live')
+  }
+  return { el, scroller: scroll, keysWidth: KEYS_W, update, reset, setPlayhead, commands, liveKey, clearLive }
 }

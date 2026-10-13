@@ -39,7 +39,7 @@ const eqParams = (): ParamDef[] => [
 
 export const DEVICES: Record<number, DeviceDef> = {
   [SIMPLE_FILTER]: {
-    type: SIMPLE_FILTER, name: 'filter / eq', instrument: false,
+    type: SIMPLE_FILTER, name: 'Filter', instrument: false,
     params: [
       { id: 0, name: 'mode', min: 0, max: 7, def: 0, scale: 'lin', options: ['lowpass', 'highpass', 'bandpass', 'notch', 'peak', 'bell', 'low shelf', 'high shelf'] },
       { id: 1, name: 'cutoff', min: 20, max: 20000, def: 1000, scale: 'log', unit: 'hz' },
@@ -49,7 +49,7 @@ export const DEVICES: Record<number, DeviceDef> = {
   },
   [EQ]: { type: EQ, name: 'EQ', instrument: false, params: eqParams() },
   [REVERB]: {
-    type: REVERB, name: 'reverb', instrument: false,
+    type: REVERB, name: 'Reverb', instrument: false,
     params: [
       { id: 0, name: 'mix', min: 0, max: 1, def: 0.3, scale: 'lin' },
       { id: 1, name: 'size', min: 0, max: 1, def: 0.5, scale: 'lin' },
@@ -58,7 +58,7 @@ export const DEVICES: Record<number, DeviceDef> = {
     ],
   },
   [COMPRESSOR]: {
-    type: COMPRESSOR, name: 'compressor', instrument: false,
+    type: COMPRESSOR, name: 'Compressor', instrument: false,
     params: [
       { id: 0, name: 'threshold', min: -60, max: 0, def: -18, scale: 'lin', unit: 'db' },
       { id: 1, name: 'ratio', min: 1, max: 20, def: 4, scale: 'log', unit: ':1' },
@@ -68,7 +68,7 @@ export const DEVICES: Record<number, DeviceDef> = {
     ],
   },
   [TREMOLO]: {
-    type: TREMOLO, name: 'tremolo', instrument: false,
+    type: TREMOLO, name: 'Tremolo', instrument: false,
     params: [
       { id: 0, name: 'rate', min: 0.1, max: 20, def: 4, scale: 'log', unit: 'hz' },
       { id: 1, name: 'depth', min: 0, max: 1, def: 0.5, scale: 'lin' },
@@ -77,7 +77,7 @@ export const DEVICES: Record<number, DeviceDef> = {
     ],
   },
   [DELAY]: {
-    type: DELAY, name: 'tape delay', instrument: false,
+    type: DELAY, name: 'Tape delay', instrument: false,
     params: [
       { id: 0, name: 'mix', min: 0, max: 1, def: 0.3, scale: 'lin' },
       { id: 1, name: 'time', min: 10, max: 2000, def: 375, scale: 'log', unit: 'ms' },
@@ -90,7 +90,7 @@ export const DEVICES: Record<number, DeviceDef> = {
     ],
   },
   [LOFI_DRUM]: {
-    type: LOFI_DRUM, name: 'lofi drum', instrument: true,
+    type: LOFI_DRUM, name: 'Lofi drum', instrument: true,
     params: [
       { id: 0, name: 'cutoff', min: 20, max: 20000, def: 2000, scale: 'log', unit: 'hz' },
       { id: 1, name: 'resonance', min: 0, max: 1, def: 0.3, scale: 'lin' },
@@ -99,7 +99,7 @@ export const DEVICES: Record<number, DeviceDef> = {
     ],
   },
   [FINNWAVE]: {
-    type: FINNWAVE, name: 'finnwave', instrument: true,
+    type: FINNWAVE, name: 'Finnwave', instrument: true,
     params: [
       { id: 0, name: 'rolloff', min: 0.001, max: 3, def: 0.3, scale: 'log' },
       { id: 1, name: 'env→rolloff', min: 0, max: 3, def: 0.5, scale: 'lin' },

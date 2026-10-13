@@ -42,7 +42,8 @@ function sectionMenu(anchor: HTMLElement, sections: { label: string; items: Menu
   if (anchor.matches(':focus-visible')) body.querySelector<HTMLButtonElement>('button')?.focus()
 }
 const FOLD_KEY = 'mobdaw.rack.collapsed'
-const CATEGORIES: [InstrumentCategory, string][] = [['keys', 'keys'], ['bass', 'bass'], ['lead', 'lead'], ['pad', 'pads'], ['pluck', 'plucks'], ['fx', 'textures']]
+const CATEGORIES: [InstrumentCategory, string][] = [['keys', 'Keys'], ['bass', 'Bass'], ['lead', 'Lead'], ['pad', 'Pads'], ['pluck', 'Plucks'], ['fx', 'Textures']]
+const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 type Card = ReturnType<typeof deviceCard> | ReturnType<typeof drumPad>
 
 export function mountRack(st: Studio) {
@@ -59,15 +60,15 @@ export function mountRack(st: Studio) {
   const kitMenu = h('button', { className: 'unit-preset', title: 'replace the drums with a kit', disabled: readOnly }, h('span', {}, 'load kit'), icon('chevron-down', 12))
   const kitAdd = h('button', { className: 'btn sm', title: 'add a lofi drum on the next free key', disabled: readOnly }, icon('plus', 14), 'drum')
   const kit = h('div', { className: 'unit kit' },
-    h('div', { className: 'unit-head' }, h('span', { className: 'unit-name static' }, 'drum kit'), kitName, kitMenu, h('span', { className: 'grow' }), kitAdd),
+    h('div', { className: 'unit-head' }, h('span', { className: 'unit-name static' }, 'Drum kit'), kitName, kitMenu, h('span', { className: 'grow' }), kitAdd),
     pads)
   const addSynth = slot('add an instrument', () => instrumentMenu(addSynth))
   const synths = h('div', { className: 'rack-row' })
-  const synthSec = h('div', { className: 'rack-sec' }, header('instrument'), synths)
+  const synthSec = h('div', { className: 'rack-sec' }, header('Instrument'), synths)
   // effects
   const addFx = slot('add an effect', () => effectMenu(addFx))
   const fx = h('div', { className: 'rack-row' })
-  const fxSec = h('div', { className: 'rack-sec' }, header('effects'), fx)
+  const fxSec = h('div', { className: 'rack-sec' }, header('Effects'), fx)
   const chain = h('div', { className: 'rack-chain' }, synthSec, fxSec)
   const empty = h('div', { className: 'dock-empty' },
     h('div', { className: 'dock-empty-icon' }, icon('effect', 22)),
@@ -90,22 +91,22 @@ export function mountRack(st: Studio) {
     if (!id || id === MASTER_TRACK) return
     sectionMenu(anchor, [
       ...CATEGORIES.map(([cat, label]) => ({ label, items: INSTRUMENT_PRESETS.filter((x) => x.category === cat).map((p) => ({ label: p.name, run: pick(() => addInstrument(doc, id, p)) })) })),
-      { label: 'drum kits', items: DRUM_KITS.map((k) => ({ label: k.name, hint: `${k.drums.length}`, run: pick(() => replaceDrumKit(doc, id, k)) })) },
-      { label: 'blank', items: [{ label: 'finnwave', run: pick(() => addDevice(doc, id, FINNWAVE)) }, { label: 'one lofi drum', run: pick(() => addDrum(doc, id)) }] },
+      { label: 'Drum kits', items: DRUM_KITS.map((k) => ({ label: k.name, hint: count(k.drums.length, 'drum'), run: pick(() => replaceDrumKit(doc, id, k)) })) },
+      { label: 'Start from scratch', items: [{ label: 'Blank synth', title: 'a Finnwave synth on its default settings', run: pick(() => addDevice(doc, id, FINNWAVE)) }, { label: 'One lofi drum', run: pick(() => addDrum(doc, id)) }] },
     ], 4)
   }
   function effectMenu(anchor: HTMLElement) {
     const id = target()
     if (!id) return
     sectionMenu(anchor, [
-      { label: 'effects', items: EFFECTS.map((d) => ({ label: d.name, run: pick(() => addDevice(doc, id, d.type)) })) },
-      { label: 'chains', items: EFFECT_PRESETS.map((p) => ({ label: p.name, hint: p.devices.length > 1 ? `${p.devices.length}` : '', title: p.devices.map((d) => DEVICES[d.type]?.name).join(', '), run: pick(() => addEffectPreset(doc, id, p)) })) },
+      { label: 'Effects', items: EFFECTS.map((d) => ({ label: d.name, run: pick(() => addDevice(doc, id, d.type)) })) },
+      { label: 'Presets and chains', items: EFFECT_PRESETS.map((p) => ({ label: p.name, hint: p.devices.length > 1 ? count(p.devices.length, 'effect') : DEVICES[p.devices[0].type]?.name ?? '', title: p.devices.map((d) => DEVICES[d.type]?.name).join(' → '), run: pick(() => addEffectPreset(doc, id, p)) })) },
     ], 2)
   }
   kitMenu.onclick = () => {
     const id = target()
     if (!id || id === MASTER_TRACK) return
-    sectionMenu(kitMenu, [{ label: 'replace the drums with', items: DRUM_KITS.map((k) => ({ label: k.name, hint: `${k.drums.length}`, run: pick(() => replaceDrumKit(doc, id, k)) })) }], 1)
+    sectionMenu(kitMenu, [{ label: 'Replace the drums with', items: DRUM_KITS.map((k) => ({ label: k.name, hint: count(k.drums.length, 'drum'), run: pick(() => replaceDrumKit(doc, id, k)) })) }], 1)
   }
   kitAdd.onclick = () => { const id = target(); if (id && id !== MASTER_TRACK) addDrum(doc, id) }
 
@@ -113,14 +114,14 @@ export function mountRack(st: Studio) {
   function presets(dev: Device): { menu: ((anchor: HTMLElement) => void) | null; current: string | null } {
     const def = DEVICES[dev.type]
     if (!def) return { menu: null, current: null }
-    const reset = { label: 'default settings', run: () => commitMany(dev.id, Object.fromEntries(def.params.map((p) => [p.id, p.def]))) }
+    const reset = { label: 'Default settings', run: () => commitMany(dev.id, Object.fromEntries(def.params.map((p) => [p.id, p.def]))) }
     if (dev.type === FINNWAVE) {
       const cur = INSTRUMENT_PRESETS.find((p) => p.name === dev.name && same(dev, p.params))?.name ?? null
       return {
         current: cur,
         menu: (a) => sectionMenu(a, [
           ...CATEGORIES.map(([cat, label]) => ({ label, items: INSTRUMENT_PRESETS.filter((x) => x.category === cat).map((p) => ({ label: p.name, on: p.name === cur, run: pick(() => applyInstrumentPreset(doc, dev.id, p)) })) })),
-          { label: 'start over', items: [reset] },
+          { label: 'Start over', items: [reset] },
         ], 4),
       }
     }
@@ -243,10 +244,10 @@ export function mountRack(st: Studio) {
     runs.clear()
     if (midi) {
       place(pads, drums, null, null, true)
-      kitName.textContent = drums.length ? `${drums.length} drum${drums.length === 1 ? '' : 's'}` : ''
+      kitName.textContent = drums.length ? count(drums.length, 'drum') : ''
       place(synths, others, others.length || drums.length ? null : addSynth, drums.length ? kit : null)
       if (!drums.length) kit.remove()
-      ;(synthSec.querySelector('.rack-rail span') as HTMLElement).textContent = drums.length && !others.length ? 'drums' : 'instrument'
+      ;(synthSec.querySelector('.rack-rail span') as HTMLElement).textContent = drums.length && !others.length ? 'Drums' : 'Instrument'
     }
     findRuns(effects)
     place(fx, effects, addFx)
@@ -275,7 +276,7 @@ export function mountRack(st: Studio) {
     const id = target()
     undo.stopCapturing()
     const landed = applyDrop(st, p, { trackId: id && canDrop(st, p, id) ? id : null })
-    if (landed && landed !== id) st.status('dropped on a new track: the focused one takes something else')
+    if (landed && landed !== id) st.status('That sound needs a different kind of track, so it went on a new one.')
   })
 
   const offs = [
