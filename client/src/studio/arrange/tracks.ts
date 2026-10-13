@@ -145,8 +145,10 @@ export function mountTrackHeaders(st: Studio) {
     const hd = heads.get(id)
     if (!hd) return
     const input = h('input', { value: hd.name.textContent ?? '', className: 'th-rename', 'aria-label': 'track name' })
+    let finished = false // (replacing the input blurs it, which would finish again)
     const done = (ok: boolean) => {
-      if (!input.isConnected) return
+      if (finished || !input.isConnected) return
+      finished = true
       if (ok && input.value.trim()) updateTrack(doc, id, { name: input.value.trim() })
       input.replaceWith(hd.name)
     }
