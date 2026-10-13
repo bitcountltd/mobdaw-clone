@@ -8,8 +8,9 @@
   --rl-beat: rgba(235, 230, 220, .17);
   --rl-sub: rgba(235, 230, 220, .09);
 }
-/* every lane body (track lanes, automation) paints the grid under its clips; the master row and source lanes don't */
-.studio .arrange .lane-row > .lane-body:not(.master-body):not(.src-body) { background-image: var(--lane-grid, none); }
+/* every lane body (track lanes, automation) paints the grid under its clips; the master row and source lanes don't.
+   grid.ts writes that rule into its own <style> (a custom property on the arrangement would restyle every clip and note
+   mark under it on each zoom step). */
 
 /* --- ruler: the marker lane on top (ruler-markers.css, --marks tall), the loop strip, bar numbers and ticks below */
 .studio .arrange { --marks: 17px; }

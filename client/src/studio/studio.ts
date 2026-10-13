@@ -340,17 +340,25 @@ export class Studio {
   async dropFiles(files: File[], trackId: string | null, at: number) {
     const { doc } = this
     if (trackId && this.locks.has(trackId)) return this.status(`${this.locks.get(trackId)} is recording on that track`)
+    // (callers may pass everything dropped: what isn't audio is named in the status, not silently ignored)
+    const isAudio = (f: File) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name)
+    const skipped = files.filter((f) => !isAudio(f))
+    files = files.filter(isAudio)
+    const skipMsg = skipped.length === 1 ? `${skipped[0].name} isn't an audio file.` : skipped.length ? `${skipped.length} files aren't audio files.` : ''
+    if (!files.length) return void (skipMsg && this.status(skipMsg))
     for (const f of files) {
       this.status(`uploading ${f.name}…`)
       try {
         const m = await importFile(this.s.projectId, doc, f)
         const length = Math.round(m.duration * this.rate)
+        const name = f.name.replace(/\.[^.]+$/, '')
         doc.transact(() => {
-          trackId ??= this.addTrack('audio', f.name.replace(/\.[^.]+$/, ''))
-          addAudioClip(doc, { trackId, sourceHash: m.hash, start: at, length })
+          trackId ??= this.addTrack('audio', name)
+          // its own name: the same audio dropped under two file names shares one stored sample, but not a label
+          addAudioClip(doc, { trackId, sourceHash: m.hash, start: at, length, name })
         })
         at += length
-        this.status('')
+        this.status(skipMsg)
       } catch (err) {
         this.status(`${f.name}: ${(err as Error).message}`)
       }

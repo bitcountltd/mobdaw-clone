@@ -76,6 +76,10 @@ describe('sections', () => {
     expect(sectionRange(list, 0, 20 * bar)).toEqual({ start: 0, end: 4 * bar })
     expect(sectionRange(list, 2, 20 * bar)).toEqual({ start: 12 * bar, end: 20 * bar })
     expect(sectionRange(list, 2, 0)).toEqual({ start: 12 * bar, end: 12 * bar + 1 }) // (a marker past the end)
+    // with a minimum length (the studio passes 4 bars), a marker at or past the song end still makes a usable section
+    expect(sectionRange(list, 2, 12 * bar, 4 * bar)).toEqual({ start: 12 * bar, end: 16 * bar })
+    expect(sectionRange(list, 2, 20 * bar, 4 * bar)).toEqual({ start: 12 * bar, end: 20 * bar })
+    expect(sectionBands(list, 0, 4 * bar).at(-1)).toMatchObject({ start: 12 * bar, end: 16 * bar })
   })
   it('jumps to the next and previous marker', () => {
     expect(markerJump(list, 0, 1)?.name).toBe('Verse')

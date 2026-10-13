@@ -21,6 +21,15 @@ describe('barsBeats', () => {
   it('is exact on a downbeat despite rounding (no 1.4.4 just before bar 2)', () => {
     const bar = samplesPerBar({ bpm: 88, beatsPerBar: 4 }, rate) // fractional samples per bar
     expect(barsBeats(Math.round(bar * 7), { bpm: 88, beatsPerBar: 4 }, rate).bar).toBe(8)
+    // every rounded (or floored) bar line at 88 bpm, 44.1 and 48 kHz, reads as that bar's 1.1, never the bar before
+    for (const r of [44100, 48000]) {
+      const t88 = { bpm: 88, beatsPerBar: 4 }
+      const b = samplesPerBar(t88, r)
+      for (let k = 1; k < 200; k++) {
+        for (const p of [Math.round(b * k), Math.floor(b * k)]) expect(formatBarsBeats(p, t88, r)).toBe(`${k + 1}.1.1`)
+      }
+    }
+    expect(formatBarsBeats(Math.round(samplesPerBar({ bpm: 88, beatsPerBar: 4 }, rate) * 4) - 10, { bpm: 88, beatsPerBar: 4 }, rate)).toBe('4.4.4')
   })
   it('follows the meter', () => {
     expect(formatBarsBeats(72000, { bpm: 120, beatsPerBar: 3 }, rate)).toBe('2.1.1')

@@ -3,7 +3,7 @@
 // timeline core: plain absolutely-positioned DOM, keyed reuse, redrawn from the Studio's events.
 // Positions in the doc are integer samples; the zoom is the Studio's pixels per second.
 import {
-  DEVICES, FINNWAVE, MASTER_TRACK, addDevice, addNextLooper, clipLength, clipsMap, deleteClip, deleteLooper, deletePad, getClips, getDevices, getLoopers, getNotes, getPads,
+  DEVICES, FINNWAVE, MASTER_TRACK, addDevice, addNextLooper, clipLength, clipsMap, deleteClip, deleteLooper, deletePad, getClips, getDevices, getLoopers, getNotes, getPads, notesMap,
   getSamples, getTracks, isDrum, isForever, isLooping, padsMap, passLength, resolveTarget, splitClip, trackColor, tracksMap, updateClip, updateLooper, updatePad,
   type Clip, type Device, type Lane as AutoLane, type Looper, type Note, type Pad, type ParamTarget, type SampleMeta, type Track,
 } from '@mobdaw/shared'
@@ -75,7 +75,7 @@ type Wave = {
   sig: string; pk?: Float32Array; v0: number; v1: number
 }
 /** Every clip: its name strip and the body under it. */
-type Parts = { head: HTMLElement; name: HTMLElement; body: HTMLElement }
+type Parts = { head: HTMLElement; name: HTMLElement; body: HTMLElement; midiKey?: string }
 
 export type LanesFrame = {
   /** The arrangement's scroller (both axes): the lanes' horizontal scroll and the visible window for waveforms. */
@@ -96,6 +96,23 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
   let autoShownBefore = new Set<string>()
   let destroyed = false
   let raf = 0
+  // the notes grouped by clip, re-read only when a note changes (a zoom or a clip move doesn't touch them); the version
+  // keys each MIDI clip's preview so an unchanged one skips even building its signature
+  let notesVer = 0, notesReadVer = -1
+  let notesBy = new Map<string, Note[]>()
+  const onNotes = () => { notesVer++ }
+  notesMap(doc).observeDeep(onNotes)
+  function notesByClip() {
+    if (notesReadVer === notesVer) return notesBy
+    notesReadVer = notesVer
+    notesBy = new Map()
+    for (const n of getNotes(doc)) {
+      const a = notesBy.get(n.clipId)
+      if (a) a.push(n)
+      else notesBy.set(n.clipId, [n])
+    }
+    return notesBy
+  }
 
   // --- static structure
   const laneBox = h('div', { className: 'lanes' })
@@ -537,7 +554,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         if (canDrop(st, p, trackId)) applyDrop(st, p, { trackId, at: at(e) })
         return
       }
-      void st.dropFiles(audioFiles(e.dataTransfer?.files), kind() === 'audio' ? trackId : null, st.snap(at(e), e))
+      void st.dropFiles([...(e.dataTransfer?.files ?? [])], kind() === 'audio' ? trackId : null, st.snap(at(e), e))
     })
   }
   // below the tracks (and the empty arrangement): a new track for whatever is dropped
@@ -556,7 +573,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const at = st.snap(st.fromX(e.clientX - el.getBoundingClientRect().left - HEADER), e)
     const p = hasPayload(e) ? readDragPayload(e) : null
     if (p) applyDrop(st, p, { trackId: null, at })
-    else void st.dropFiles(audioFiles(e.dataTransfer?.files), null, at)
+    else void st.dropFiles([...(e.dataTransfer?.files ?? [])], null, at)
   })
   // the empty space below the tracks is a selection box too, across every lane
   tail.addEventListener('pointerdown', (e) => { if (e.target === tail && e.button === 0) marqueeDown(e, null) })
@@ -605,7 +622,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
       e.preventDefault()
       e.stopPropagation()
       if (readOnly) return
-      void st.dropFiles(audioFiles(e.dataTransfer?.files), trackId, srcAt(e.clientX))
+      void st.dropFiles([...(e.dataTransfer?.files ?? [])], trackId, srcAt(e.clientX))
     }
     bgMenu(body, (e) => [['upload', () => pickInto(trackId, srcAt(e.clientX))]])
     view.addEventListener('scroll', schedule, { passive: true })
@@ -784,11 +801,16 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const devices = getDevices(doc)
     const loopers = getLoopers(doc)
     const pads = getPads(doc)
-    const notes = getNotes(doc)
+    const notes = notesByClip()
     const samples = getSamples(doc)
     const total = st.extent()
     const { selection, editing } = st.ui
-    scroll.style.setProperty('--view', `${scroll.clientWidth}px`)
+    // read the scrollers' metrics once, before this draw writes any style (reading them after a write forces a layout,
+    // which was once per audio clip)
+    const view = { w: scroll.clientWidth || innerWidth, left: scroll.scrollLeft, h: scroll.clientHeight }
+    const srcViews = new Map<string, { w: number; left: number }>()
+    for (const [id, l] of lanes) if (l.src) srcViews.set(id, { w: l.src.view.clientWidth || innerWidth, left: l.src.view.scrollLeft })
+    scroll.style.setProperty('--view', `${view.w}px`)
     el.style.width = `${HEADER + x(total)}px`
 
     // the master row
@@ -883,9 +905,10 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
         drawSeams(c, w, width, cpps)
         drawFades(c, w, width, bodyH, cpps, !lane.src && !readOnly && !st.locks.has(c.trackId))
         const pk = !st.pb || !canPlay ? undefined : status ? storedPeaks(meta, rt) : peaksFor(s.projectId, c.sourceHash, rt)
-        if (pk) drawVisibleWave(c, w, pk, width, bodyH, lane.src ? { pps: cpps, scroller: lane.src.view, off: 0 } : { pps: cpps, scroller: scroll, off: HEADER })
+        const sv = lane.src ? srcViews.get(c.trackId) ?? { w: lane.src.view.clientWidth || innerWidth, left: lane.src.view.scrollLeft } : view
+        if (pk) drawVisibleWave(c, w, pk, width, bodyH, { pps: cpps, viewW: sv.w, scrollLeft: sv.left, off: lane.src ? 0 : HEADER })
         else w.cv.style.display = 'none'
-      } else drawMidiClip(pt, c, notes.filter((n) => n.clipId === c.id), forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks, c.name || midiLabel.get(c.trackId) || 'clip')
+      } else drawMidiClip(pt, c, notes.get(c.id) ?? [], forever ? (width / cpps) * c.bpm * c.ppq / 60 : c.lengthTicks, c.name || midiLabel.get(c.trackId) || 'clip')
       e.classList.toggle('midi', c.kind === 'midi')
       e.classList.toggle('editing', c.id === editing)
       e.classList.toggle('sel', selection.includes(c.id))
@@ -904,7 +927,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
     const last = masterAuto.el.offsetHeight ? masterAuto.el : laneBox
     overlay.style.height = `${last.offsetTop + last.offsetHeight}px`
     // the lanes fill the scroller's height, so the space below the last track takes drops and selection boxes
-    const fill = `${Math.max(0, scroll.clientHeight - el.offsetTop)}px`
+    const fill = `${Math.max(0, view.h - el.offsetTop)}px`
     if (el.style.minHeight !== fill) el.style.minHeight = fill
     drawPlayhead()
     if (refreshPreviews()) ensurePreviewTick()
@@ -967,14 +990,14 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
    */
   function drawVisibleWave(
     c: Clip & { kind: 'audio' }, w: Wave, pk: Float32Array, width: number, height: number,
-    /** The lane's frame: its scale, its horizontal scroller, and how much of the scroller's left edge is covered. */
-    f: { pps: number; scroller: HTMLElement; off: number },
+    /** The lane's frame: its scale, its horizontal scroller's width and scroll (read before the draw's writes), and how much of the scroller's left edge is covered. */
+    f: { pps: number; viewW: number; scrollLeft: number; off: number },
   ) {
     const rt = rate()
     const dpr = window.devicePixelRatio || 1
-    const viewW = f.scroller.clientWidth || innerWidth
+    const viewW = f.viewW
     const left = f.off + (c.start / rt) * f.pps // clip's left edge in scroller-content px
-    const need0 = Math.max(0, f.scroller.scrollLeft + f.off - left), need1 = Math.min(width, f.scroller.scrollLeft + viewW - left)
+    const need0 = Math.max(0, f.scrollLeft + f.off - left), need1 = Math.min(width, f.scrollLeft + viewW - left)
     if (need1 <= need0) { w.cv.style.display = 'none'; return }
     const pass = isLooping(c) ? c.loopLength! : 0
     const phase = pass ? c.loopPhase ?? 0 : 0
@@ -1097,8 +1120,11 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
    */
   function drawMidiClip(pt: Parts, c: Clip & { kind: 'midi' }, notes: Note[], extent: number, label: string) {
     const lp = isLooping(c) ? c.loopTicks! : 0
-    const sig = `${extent}|${lp}|${c.view ?? ''}|${notes.map((n) => `${n.tick},${n.durTicks},${n.pitch},${n.velocity}`).join(';')}`
     if (pt.name.textContent !== label) (pt.name.textContent = label), (pt.head.title = label)
+    const key = `${notesVer}|${extent}|${lp}|${c.view ?? ''}`
+    if (pt.midiKey === key) return // nothing it shows has changed
+    pt.midiKey = key
+    const sig = `${extent}|${lp}|${c.view ?? ''}|${notes.map((n) => `${n.tick},${n.durTicks},${n.pitch},${n.velocity}`).join(';')}`
     if (pt.body.dataset.sig === sig) return
     pt.body.dataset.sig = sig
     const shown = lp ? notes.filter((n) => n.tick < lp) : notes
@@ -1440,6 +1466,7 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
       scroll.removeEventListener('scroll', schedule)
       removeEventListener('resize', schedule)
       offs.forEach((f) => f())
+      notesMap(doc).unobserveDeep(onNotes)
     },
   }
 }

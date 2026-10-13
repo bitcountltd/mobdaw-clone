@@ -5,7 +5,7 @@ import { applyDrop, readDragPayload } from '../drops'
 import { clipLength, getClips, getLoop, getPads, getTracks, isForever, patternTicks, samplesPerBar } from '@mobdaw/shared'
 import { h } from '../../dom'
 import type { Studio } from '../studio'
-import { HEADER, audioFiles, mountLanes } from './lanes'
+import { HEADER, mountLanes } from './lanes'
 import { mountLaneGrid } from './grid'
 import { mountRuler } from './ruler'
 import { mountTrackHeaders } from './tracks'
@@ -33,7 +33,7 @@ export function mountArrange(st: Studio) {
     const at = st.fromX(e.clientX - scroll.getBoundingClientRect().left - HEADER + scroll.scrollLeft)
     const p = readDragPayload(e)
     if (p) return void applyDrop(st, p, { at })
-    void st.dropFiles(audioFiles(e.dataTransfer?.files), null, at)
+    void st.dropFiles([...(e.dataTransfer?.files ?? [])], null, at)
   }
 
   // --- zoom: whoever changes `pps` may leave an anchor (a screen x); otherwise the middle of the visible lanes stays put

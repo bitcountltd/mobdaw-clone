@@ -73,11 +73,12 @@ export function sectionAt<M extends Pick<Marker, 'pos'>>(markers: M[], pos: numb
   return i < 0 ? null : markers[i]
 }
 
-/** Where section `i` runs: from its marker to the next marker, the last one to `songEnd` (at least a sample long). */
-export function sectionRange(markers: Pick<Marker, 'pos'>[], i: number, songEnd: number): { start: number; end: number } {
+/** Where section `i` runs: from its marker to the next marker, the last one to `songEnd` (at least `minLen` samples long). */
+export function sectionRange(markers: Pick<Marker, 'pos'>[], i: number, songEnd: number, minLen = 1): { start: number; end: number } {
   const start = markers[i].pos
   const next = markers.slice(i + 1).find((m) => m.pos > start)
-  return { start, end: next ? next.pos : Math.max(songEnd, start + 1) }
+  // the last section runs to the song's end, but at least `minLen` (callers pass 4 bars) for a marker at or past it
+  return { start, end: next ? next.pos : Math.max(songEnd, start + Math.max(1, minLen)) }
 }
 
 /**

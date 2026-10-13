@@ -34,11 +34,13 @@ export const samplesPerBar = (t: Tempo, rate: number) => samplesPerBeat(t.bpm, r
 /** Bar (from 1), beat in bar (from 1) and sixteenth in beat (from 1) at timeline sample `pos`. */
 export function barsBeats(pos: number, t: Tempo, rate: number): { bar: number; beat: number; sixteenth: number } {
   const beats = pos / samplesPerBeat(t.bpm, rate)
-  const whole = Math.floor(beats + 1e-9)
+  // positions are whole samples, so one on a beat (or sixteenth) can land a fraction of a sample short of it when a
+  // beat isn't a whole number of samples (e.g. 88 bpm): allow ~1e-4 beat, so it still counts as that beat
+  const whole = Math.floor(beats + 1e-4)
   return {
     bar: Math.floor(whole / t.beatsPerBar) + 1,
     beat: (whole % t.beatsPerBar) + 1,
-    sixteenth: Math.floor((beats - whole) * 4 + 1e-9) + 1,
+    sixteenth: Math.min(4, Math.max(0, Math.floor((beats - whole) * 4 + 1e-4)) + 1),
   }
 }
 export const formatBarsBeats = (pos: number, t: Tempo, rate: number) => {

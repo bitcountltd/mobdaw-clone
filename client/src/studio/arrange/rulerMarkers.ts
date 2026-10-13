@@ -5,11 +5,11 @@
 //   empty lane    double-click: add a marker there (on the bar)
 // ruler.ts owns the element's pointer handlers and asks this lane first.
 import {
-  TRACK_COLORS, deleteMarker, formatBarsBeats, getMarkers, sectionIndexAt, snapToGrid, updateMarker, type Marker,
+  TRACK_COLORS, deleteMarker, sectionRange, formatBarsBeats, getMarkers, sectionIndexAt, snapToGrid, updateMarker, type Marker,
 } from '@mobdaw/shared'
 import { h } from '../../dom'
 import { popover } from '../../ui/popover'
-import { insertMarker, loopSection, markerKeys, markerPos, songEnd } from '../markers'
+import { insertMarker, loopSection, markerKeys, markerPos, sectionMinLen, songEnd } from '../markers'
 import type { Studio } from '../studio'
 import './ruler-markers.css'
 
@@ -19,10 +19,10 @@ export const MARKS = 17
 const hint = (m: Marker) => `${m.name}: click to go there · drag to move (shift: grid, alt: free) · double-click to rename · right-click for more`
 
 /** The sections the markers make, in timeline samples (for the bands here and under the lanes). */
-export function sectionBands(markers: Marker[], end: number) {
+export function sectionBands(markers: Marker[], end: number, minLen = 1) {
   return markers.map((m, i) => {
-    const next = markers.slice(i + 1).find((n) => n.pos > m.pos)
-    return { id: m.id, start: m.pos, end: next ? next.pos : Math.max(end, m.pos + 1), alt: i % 2 === 1, color: m.color != null ? TRACK_COLORS[m.color % TRACK_COLORS.length] : null }
+    const { start, end: e } = sectionRange(markers, i, end, minLen)
+    return { id: m.id, start, end: e, alt: i % 2 === 1, color: m.color != null ? TRACK_COLORS[m.color % TRACK_COLORS.length] : null }
   })
 }
 
@@ -34,13 +34,13 @@ export function mountMarkerLane(st: Studio, ruler: HTMLElement, body: HTMLElemen
   let list: Marker[] = []
   const flagEls = new Map<string, HTMLElement>()
   let cur = -2
-  let renaming: { id: string; input: HTMLInputElement } | null = null
+  let renaming: { id: string; input: HTMLInputElement; outside: (e: PointerEvent) => void } | null = null
 
   const at = (clientX: number) => st.fromX(clientX - body.getBoundingClientRect().left)
 
   function draw() {
     list = getMarkers(doc)
-    const sections = sectionBands(list, songEnd(st))
+    const sections = sectionBands(list, songEnd(st), sectionMinLen(st))
     bands.replaceChildren(...sections.map((s) => {
       const b = h('div', { className: `rl-sect${s.alt ? ' alt' : ''}${s.color ? ' tinted' : ''}` })
       b.style.left = `${st.x(s.start)}px`
@@ -107,7 +107,13 @@ export function mountMarkerLane(st: Studio, ruler: HTMLElement, body: HTMLElemen
       else if (e.key === 'Escape') endRename(false)
     })
     input.addEventListener('blur', () => endRename(true))
-    renaming = { id, input }
+    // the lanes and the ruler preventDefault their pointerdowns (so the input never blurs): any press outside it
+    // commits the name, seen in the capture phase before those handlers run
+    const outside = (e: PointerEvent) => {
+      if (e.target !== input) endRename(true)
+    }
+    document.addEventListener('pointerdown', outside, true)
+    renaming = { id, input, outside }
     flagEls.get(id)?.classList.add('renaming')
     el.append(input)
     placeRename()
@@ -118,6 +124,7 @@ export function mountMarkerLane(st: Studio, ruler: HTMLElement, body: HTMLElemen
     const r = renaming
     if (!r) return
     renaming = null
+    document.removeEventListener('pointerdown', r.outside, true)
     flagEls.get(r.id)?.classList.remove('renaming')
     const name = r.input.value
     r.input.remove()

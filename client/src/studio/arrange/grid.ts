@@ -5,7 +5,7 @@
 // the same samples -> px mapping as the clips (`Studio.x`), so the lines sit under clip edges at every zoom.
 import { getLoop, getMarkers, gridSamples, metaMap, samplesPerBar, samplesPerBeat, visibleGridBeats, type GridSize, type LoopRegion, type Tempo } from '@mobdaw/shared'
 import type { Studio } from '../studio'
-import { songEnd } from '../markers'
+import { sectionMinLen, songEnd } from '../markers'
 import { sectionBands } from './rulerMarkers'
 import './grid.css'
 
@@ -108,18 +108,25 @@ export const stepSamples = (g: GridSize, t: Tempo, rate: number) => gridSamples(
 export { samplesPerBar }
 
 /**
- * Keep `--lane-grid` on `host` (the arrangement) in step with the tempo, meter, loop, zoom and snap grid. The lanes'
- * bodies pick it up in grid.css.
+ * Keep the lanes' grid background in step with the tempo, meter, loop, zoom and snap grid. It is one rule in a <style> of
+ * its own (not a custom property on the arrangement, which every clip and note mark inherits: changing that restyled
+ * all of them on each zoom step), so only the lane bodies are restyled.
  */
 export function mountLaneGrid(st: Studio, host: HTMLElement) {
   let last = ''
+  const style = document.createElement('style')
+  style.dataset.laneGrid = ''
+  document.head.append(style)
+  void host
   const draw = () => {
-    const css = laneGridCss(st.tempo(), st.rate, st.ui.pps, st.ui.grid, getLoop(st.doc), sectionBands(getMarkers(st.doc), songEnd(st)))
-    if (css !== last) host.style.setProperty('--lane-grid', (last = css))
+    const css = laneGridCss(st.tempo(), st.rate, st.ui.pps, st.ui.grid, getLoop(st.doc), sectionBands(getMarkers(st.doc), songEnd(st), sectionMinLen(st)))
+    if (css === last) return
+    last = css
+    style.textContent = `.studio .arrange .lane-row > .lane-body:not(.master-body):not(.src-body) { background-image: ${css || 'none'}; }`
   }
   const meta = metaMap(st.doc)
   meta.observe(draw)
   const offs = [st.on('ui', (p) => { if ('pps' in p || 'grid' in p) draw() }), st.on('doc', draw)]
   draw()
-  return { draw, destroy: () => { meta.unobserve(draw); offs.forEach((f) => f()) } }
+  return { draw, destroy: () => { meta.unobserve(draw); offs.forEach((f) => f()); style.remove() } }
 }

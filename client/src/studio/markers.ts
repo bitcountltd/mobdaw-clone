@@ -52,13 +52,16 @@ export function jumpMarker(st: Studio, dir: 1 | -1) {
   if (dir < 0 && p > 0) st.seek(0)
 }
 
+/** The shortest last section (a marker at or past the song's end still makes a usable section): 4 bars. */
+export const sectionMinLen = (st: Studio) => Math.round(4 * samplesPerBar(st.tempo(), st.rate))
+
 /** The loop region over a marker's section: to the next marker, or the song's end for the last one. Switched on. */
 export function loopSection(st: Studio, id: string) {
   if (st.readOnly) return
   const markers = getMarkers(st.doc)
   const i = markers.findIndex((m) => m.id === id)
   if (i < 0) return
-  const r = sectionRange(markers, i, songEnd(st))
+  const r = sectionRange(markers, i, songEnd(st), sectionMinLen(st))
   st.undo.stopCapturing()
   setLoop(st.doc, { start: r.start, end: r.end, on: true })
   st.undo.stopCapturing()
