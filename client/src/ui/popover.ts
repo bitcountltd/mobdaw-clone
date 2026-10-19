@@ -21,6 +21,25 @@ const open = new WeakMap<HTMLElement, { close: () => void; at: number }>()
  */
 const SETTLE_MS = 180
 
+/**
+ * After an entry is picked the menu is gone, and whatever was under it would take the next press: the second half of a
+ * double click (or a doubled trackpad tap) selected a track behind a kit menu. Presses anywhere are ignored for a moment
+ * after a pick, as native menus do.
+ */
+const SHIELD_MS = 300
+function shieldPresses() {
+  const until = performance.now() + SHIELD_MS
+  const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'dblclick', 'contextmenu'] as const
+  const stop = (e: Event) => {
+    if (performance.now() > until) return off()
+    e.stopPropagation()
+    e.preventDefault()
+  }
+  const off = () => types.forEach((t) => removeEventListener(t, stop, true))
+  types.forEach((t) => addEventListener(t, stop, true))
+  setTimeout(off, SHIELD_MS + 50)
+}
+
 function showMenu(anchor: HTMLElement, menu: HTMLElement, at?: [x: number, y: number]) {
   // the same button again straight away (a double click, a doubled event): the menu that just opened stays
   const prev = open.get(anchor)
@@ -80,6 +99,8 @@ function showMenu(anchor: HTMLElement, menu: HTMLElement, at?: [x: number, y: nu
   addEventListener('keydown', esc, true)
   // a press already under way when it opened (the second half of a double click or tap) doesn't pick an entry
   menu.addEventListener('click', (e) => { if (performance.now() - opened < 250) (e.stopPropagation(), e.preventDefault()) }, true)
+  // an entry picked (its own handler has run and closed the menu by now): shield what was under it
+  menu.addEventListener('click', (e) => { if ((e.target as Element).closest('button:not(:disabled)') && !menu.isConnected) shieldPresses() })
   open.set(anchor, { close, at: opened })
   return close
 }
