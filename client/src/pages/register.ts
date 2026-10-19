@@ -6,14 +6,15 @@ import { authMessage } from './login'
 /** Registration form; `invite` (from the `#/register/<code>` link) prefills the invite code. */
 export function registerPage(invite: string, done: () => void) {
   const err = h('p', { className: 'error' })
-  const code = h('input', { placeholder: 'invite code', required: true, value: invite, autocomplete: 'off' })
+  // (from an invite link the code is already filled in: no need to show it)
+  const code = h('input', { placeholder: 'invite code', required: true, value: invite, autocomplete: 'off', hidden: !!invite, 'aria-label': 'invite code' })
   const username = h('input', { placeholder: 'username', required: true, autofocus: !!invite, autocomplete: 'username' })
   const password = h('input', { type: 'password', placeholder: 'password (8+ characters)', required: true, autocomplete: 'new-password' })
   const again = h('input', { type: 'password', placeholder: 'password again', required: true, autocomplete: 'new-password' })
   mount(h('main', { className: 'center' },
     h('div', { className: 'card' },
       h('h1', { className: 'logo' }, 'mobdaw'),
-      h('p', { className: 'dim' }, 'invite only for now. ask the owner for an invite link.'),
+      h('p', { className: 'dim' }, invite ? "you're invited. pick a username and a password." : 'invite only for now. paste the code from your invite, or open the invite link.'),
       h('form', {
         onsubmit: (e: Event) => {
           e.preventDefault()

@@ -1,0 +1,17 @@
+/* A project's people (ui/members.ts), in the project settings and the share dialog. */
+.people { display: flex; flex-direction: column; gap: 4px; }
+.people[aria-busy=true] { opacity: .7; }
+.people-row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.people-dot { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: var(--fs-xs); font-weight: 600; color: var(--on-accent); }
+.people-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.people-role { font-size: var(--fs-sm); }
+.people .people-row select { flex: none; width: auto; min-width: 0; }
+.people .people-remove { flex: none; }
+.people-add { display: flex; gap: 6px; align-items: center; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.people .people-add select { flex: none; width: auto; }
+.people .people-add select:first-child { flex: 1; min-width: 0; }
+.people-note { margin: 0; font-size: var(--fs-sm); }
+.share-dialog { width: min(440px, calc(100vw - 32px)); }
+.share-dialog .modal-body h3 { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
+.share-link { display: flex; gap: 6px; }
+.share-link input { flex: 1; min-width: 0; color: var(--dim); }

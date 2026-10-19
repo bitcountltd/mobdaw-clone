@@ -3,7 +3,8 @@
 import type * as Y from 'yjs'
 import { DEFAULT_SAMPLE_RATE, getClips, getPads, getTracks, metaMap, type TrackKind } from './schema.ts'
 
-export type PreviewRow = { kind: TrackKind; spans: [start: number, end: number][] }
+/** `color`: the track's palette index (TRACK_COLORS), so a list shows the colours the studio does. */
+export type PreviewRow = { kind: TrackKind; color?: number; spans: [start: number, end: number][] }
 export type ProjectPreview = { rows: PreviewRow[] }
 
 const MAX_ROWS = 10
@@ -15,7 +16,7 @@ export function projectPreview(doc: Y.Doc): ProjectPreview {
   const tracks = getTracks(doc).slice(0, MAX_ROWS)
   const clips = getClips(doc)
   const pads = getPads(doc)
-  const raw = tracks.map((t) => {
+  const raw = tracks.map((t, i) => {
     const spans: [number, number][] = []
     if (t.kind === 'soundscape') {
       for (const p of pads) if (p.trackId === t.id) spans.push([p.start, p.start + p.length])
@@ -26,13 +27,14 @@ export function projectPreview(doc: Y.Doc): ProjectPreview {
         spans.push([c.start, c.start + length])
       }
     }
-    return { kind: t.kind, spans: spans.slice(0, MAX_SPANS) }
+    return { kind: t.kind, color: t.color ?? i, spans: spans.slice(0, MAX_SPANS) }
   })
   const end = Math.max(0, ...raw.flatMap((r) => r.spans.map((s) => s[1])))
-  if (end <= 0) return { rows: raw.map((r) => ({ kind: r.kind, spans: [] })) }
+  if (end <= 0) return { rows: raw.map((r) => ({ kind: r.kind, color: r.color, spans: [] })) }
   return {
     rows: raw.map((r) => ({
       kind: r.kind,
+      color: r.color,
       spans: r.spans.map(([a, b]): [number, number] => [round(a / end), round(b / end)]),
     })),
   }

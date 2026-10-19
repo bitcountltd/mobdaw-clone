@@ -23,9 +23,15 @@ import './studio.css'
 export function mountStudio(s: Session, projectName: string, readOnly = false, renameProject?: (name: string) => Promise<unknown> | void, cloud?: Cloud) {
   const st = new Studio(s, readOnly)
   let unread = (_n: number) => {}
-  const chat = chatPanel({ doc: s.doc, user: s.user, readOnly, onUnread: (n) => unread(n) })
-  const top = mountTopbar(st, { projectName, renameProject, cloud, chat: s.local ? undefined : chat })
+  let chatOpened = (_open: boolean) => {}
+  const chat = chatPanel({ doc: s.doc, user: s.user, readOnly, onUnread: (n) => unread(n), onOpenChange: (o) => chatOpened(o) })
+  // (watchers, in through a public link, don't read the collaborators' chat)
+  const top = mountTopbar(st, { projectName, renameProject, cloud, chat: s.local || s.watching ? undefined : chat })
   unread = top.setUnread
+  chatOpened = (o) => {
+    top.chatOpened(o)
+    window.dispatchEvent(new Event('resize')) // the arrangement's width changed
+  }
 
   // The browser of sounds, instruments, effects and project audio (browser/browser.ts), in the left panel.
   const qwerty = mountQwerty(st) // (before the browser, which shows its state)

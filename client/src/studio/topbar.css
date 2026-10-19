@@ -109,8 +109,18 @@
 .studio .tb-cpu.hot { color: var(--rec); }
 .studio .tb .pedal-st { font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; cursor: default; }
 .studio .tb .pedal-st.rec { color: var(--rec); }
-.studio .tb .presence { display: flex; gap: 2px; }
-.studio .tb .presence .dot { width: 20px; height: 20px; border-radius: 50%; font-size: var(--fs-xs); color: var(--on-accent); display: grid; place-items: center; }
+.studio .tb .presence { display: flex; align-items: center; gap: 0; height: 30px; padding: 0 4px; border-radius: var(--r-sm); background: none; }
+.studio .tb .presence .dot.total { display: none; }
+.studio .tb .presence[hidden] { display: none; }
+.studio .tb .presence:hover { background: var(--line); }
+.studio .tb .presence .dot, .presence-pop .dot { flex: none; width: 20px; height: 20px; border-radius: 50%; font-size: var(--fs-xs); font-weight: 600; color: var(--on-accent); display: grid; place-items: center; }
+/* the dots overlap a little, each ringed in the bar's colour, so a crowd stays compact */
+.studio .tb .presence .dot { box-shadow: 0 0 0 2px var(--panel); }
+.studio .tb .presence .dot + .dot { margin-left: -4px; }
+.studio .tb .presence .dot.more { background: var(--raise); color: var(--fg); font-weight: 500; }
+.presence-pop { display: flex; flex-direction: column; gap: 6px; min-width: 200px; }
+.presence-pop .pp-row { display: flex; align-items: center; gap: 8px; font-size: var(--fs); }
+.presence-pop .pp-row .dim { margin-left: auto; font-size: var(--fs-sm); }
 .studio .tb .chat-btn { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); background: none; color: var(--dim); }
 .studio .tb .chat-btn:hover { color: var(--fg); background: var(--line); }
 .studio .tb .chat-btn.on { color: var(--on-accent); background: var(--accent); }
@@ -178,14 +188,24 @@
   .studio .tb .tb-snap, .studio .tb .tb-meter, .studio .tb .tb-tap, .studio .tb .project-name, .studio .tb .saved, .studio .tb .tb-pedal, .studio .tb .tb-keys { display: none; }
   .studio .tb-l, .studio .tb-r { flex: none; min-width: 0; }
   .studio .tb-c { flex: 1; justify-content: center; }
+  /* a cloud project that lost its connection says so, even here (the dot alone) */
+  .studio .tb .saved[data-state=offline] { display: flex; padding: 0; }
 }
 @container (max-width: 480px) {
-  .studio .studio-top.tb { padding: 0 6px 0 10px; gap: 6px; }
+  .studio .tb .presence .dot { display: none; }
+  .studio .tb .presence .dot.total:not([hidden]) { display: grid; background: var(--raise); color: var(--fg); }
+  .studio .tb .presence:has(.total[hidden]) { display: none; }
+  .studio .tb .presence { padding: 0 2px; }
+  .studio .tb .chat-btn { padding: 0 6px; }
   .studio .tb .tb-rewind, .studio .tb .tb-metro, .studio .tb-sep, .studio .tb-tempo { display: none; }
   .studio .tb .logo { font-size: 20px; margin-right: 0; }
   .studio .tb-c { gap: 6px; }
   .studio .tb-display { padding: 0 2px; }
   .studio .counter .c-sub { display: none; }
+}
+/* (a container query can't style the container itself: the bar's own padding and gaps follow the window, which the bar spans) */
+@media (max-width: 504px) {
+  .studio .studio-top.tb { padding: 0 6px 0 10px; gap: 6px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .studio .tb .tb-tap { transition: none; }

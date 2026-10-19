@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { addAudioClip, addMonths, addTrack, getTracks } from '@mobdaw/shared'
+import { addAudioClip, addChatMessage, addMonths, addTrack, chatLog, getTracks } from '@mobdaw/shared'
 import { audit } from '../src/audit.ts'
 import { openDb } from '../src/db.ts'
 import { createStorage, objectKey } from '../src/storage/index.ts'
@@ -186,6 +186,7 @@ describe('copy', () => {
     const a = connect(t.port, src, admin.token!)
     await until(() => a.provider.synced)
     addTrack(a.doc, 'Drums')
+    addChatMessage(a.doc, { username: ADMIN, color: '#fff' }, 'just between us')
     await until(() => a.provider.unsyncedChanges === 0)
 
     const copy = await alice.post(`/api/projects/${src}/copy`, { name: 'Mine' }) // a viewer may copy
@@ -197,6 +198,8 @@ describe('copy', () => {
     const b = connect(t.port, copy.body.id, alice.token!)
     await until(() => b.provider.synced)
     expect(names(b)).toEqual(['Drums'])
+    expect(chatLog(b.doc).length).toBe(0) // the chat stays with the original
+    expect(chatLog(a.doc).length).toBe(1)
     a.provider.destroy()
     b.provider.destroy()
 
@@ -217,7 +220,7 @@ describe('preview', () => {
     await until(() => c.provider.unsyncedChanges === 0)
     const res = await admin.get(`/api/projects/${id}/preview`)
     expect(res.status).toBe(200)
-    expect(res.body.rows).toEqual([{ kind: 'audio', spans: [[0, 0.25], [0.75, 1]] }])
+    expect(res.body.rows).toEqual([{ kind: 'audio', color: 0, spans: [[0, 0.25], [0.75, 1]] }])
     c.provider.destroy()
     expect((await alice.get(`/api/projects/${id}/preview`)).status).toBe(404)
   })

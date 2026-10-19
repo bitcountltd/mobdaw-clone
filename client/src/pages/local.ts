@@ -95,8 +95,8 @@ export function localSection(me: Me | null): HTMLElement {
       }) },
       ...(CLOUD && me ? [{
         label: 'upload to cloud', icon: 'upload' as const, disabled: !canUpload,
-        title: canUpload ? 'move a copy to the cloud, where you can share it' : 'your subscription has ended',
-        onclick: () => busy('uploading…', async () => {
+        title: canUpload ? 'put a copy in the cloud, with its audio, where you can share it (this copy stays on this device)' : 'your subscription has ended',
+        onclick: () => busy(`uploading ${p.name}…`, async () => {
           const id = await localToCloud(p.id, me, (m) => (status.textContent = m))
           location.hash = `#/project/${id}`
         }),
@@ -127,7 +127,7 @@ export function localSection(me: Me | null): HTMLElement {
     h('p', { className: 'dim' }, 'Projects live in this browser, on this device. Export a project to move it or keep a backup.'))
 
   const section = h('section', { className: 'home-sec', 'aria-labelledby': 'local-h' },
-    h('div', { className: 'sec-head' }, h('h2', { id: 'local-h' }, 'Your projects'), count, h('span', { className: 'grow' }), importButton()),
+    h('div', { className: 'sec-head' }, h('h2', { id: 'local-h' }, CLOUD && me ? 'On this device' : 'Your projects'), count, h('span', { className: 'grow' }), importButton()),
     status, err, list, empty)
   render()
   return section

@@ -5,16 +5,24 @@ import { saveBlob, safeName } from '../download'
 import { describeError } from '../errors'
 import { peaksFromBase64, analyzeAudio, peaksToBase64 } from '../audio/probe'
 import { bytes, describeAudio } from '../format'
+import { confirmModal } from '../theme/dialog'
+import { icon } from '../theme/icons'
 import { nav } from '../ui/nav'
+import { popover } from '../ui/popover'
+import './cloud.css'
+import './home.css'
 
 /** Bigger files are not downloaded just to be measured. */
 const MEASURE_MAX_BYTES = 500 * 1024 * 1024
 
 /** "My uploads": every audio file you own, where it is used, and the way to delete it. */
 export function uploadsPage(me: Me) {
-  const list = h('ul', { className: 'uploads' })
-  const err = h('p', { className: 'error' })
-  const used = h('p', { className: 'dim' })
+  const list = h('ul', { className: 'tiles up-tiles' })
+  const err = h('p', { className: 'error', role: 'alert' })
+  const used = h('span', { className: 'dim' })
+  const empty = h('div', { className: 'tiles-empty', hidden: true },
+    h('p', {}, 'No uploads yet.'),
+    h('p', { className: 'dim' }, 'Audio you add to a cloud project (imported, dropped or recorded) is stored here, under your account.'))
 
   /** Where it is used, for the delete confirmation: the first few project names, then a count. */
   const where = (u: UploadInfo) => {
@@ -36,14 +44,15 @@ export function uploadsPage(me: Me) {
     }
   }
 
-  function remove(u: UploadInfo) {
+  async function remove(u: UploadInfo) {
     const label = u.name || u.hash.slice(0, 12)
     const used = where(u)
-    const msg = used
-      ? `delete "${label}"? it will be removed from ${used}, for everyone, and cannot be undone.`
-      : `delete "${label}"? this cannot be undone.`
-    if (!confirm(msg)) return
-    api.deleteUpload(u.hash).then(() => ((err.textContent = ''), render()), (e) => (err.textContent = describeError(e)))
+    const yes = await confirmModal({
+      title: `Delete “${label}”?`,
+      text: used ? `It is removed from ${used}, for everyone in them. This cannot be undone.` : 'This cannot be undone.',
+      action: 'delete', danger: true,
+    })
+    if (yes) api.deleteUpload(u.hash).then(() => ((err.textContent = ''), render()), (e) => (err.textContent = describeError(e)))
   }
 
   const SVG = 'http://www.w3.org/2000/svg'
@@ -105,28 +114,36 @@ export function uploadsPage(me: Me) {
   const pending: Row[] = []
 
   function row(u: UploadInfo) {
-    const r: Row = { u, slot: h('div', { className: 'up-slot' }), specs: h('div', { className: 'dim small' }), audio: '' }
+    const r: Row = { u, slot: h('div', { className: 'up-pic' }), specs: h('span', { className: 'tile-sub' }), audio: '' }
     if (u.analysis) show(r, u.analysis)
     else (paint(r), pending.push(r))
-    const menu = h('details', { className: 'menu up-menu' },
-      h('summary', { title: 'actions' }, '⋯'),
-      h('div', {},
-        h('button', { className: 'link', onclick: () => download(u) }, 'download'),
-        h('button', { className: 'link danger', onclick: () => remove(u) }, 'Delete')))
-    return h('li', { className: 'upload' },
-      h('div', { className: 'up-tile' }, r.slot, h('strong', { className: 'up-name' }, u.name || u.hash.slice(0, 12)), menu),
-      r.specs)
+    const name = u.name || u.hash.slice(0, 12)
+    const usedIn = where(u)
+    const more = h('button', { className: 'icon-btn tile-more', type: 'button', title: 'actions', 'aria-label': `actions for ${name}`, 'aria-haspopup': 'menu' }, icon('more'))
+    more.onclick = () => popover(more, [
+      { label: 'download', icon: 'export', run: () => void download(u) },
+      'sep',
+      { label: 'delete', icon: 'trash', danger: true, run: () => void remove(u) },
+    ])
+    return h('li', { className: 'tile' },
+      r.slot,
+      h('span', { className: 'tile-meta', title: usedIn ? `used in ${usedIn}` : 'not used in any project' },
+        h('strong', { className: 'tile-name' }, name), r.specs,
+        h('span', { className: 'tile-sub' }, usedIn ? `in ${usedIn}` : 'not in a project')),
+      more)
   }
 
   async function render() {
     const [uploads, current] = await Promise.all([api.uploads(), api.me()])
-    used.textContent = `${bytes(current.bytesUsed)} of ${bytes(current.quotaBytes)} used.`
+    used.textContent = `${bytes(current.bytesUsed)} of ${bytes(current.quotaBytes)} used`
     generation++
     pending.length = 0
-    list.replaceChildren(...(uploads.length ? uploads.map(row) : [h('li', { className: 'dim' }, 'you have not uploaded any audio.')]))
+    list.replaceChildren(...uploads.map(row))
+    list.hidden = !uploads.length
+    empty.hidden = !!uploads.length
     void measure([...pending], generation)
   }
 
-  mount(nav(me), h('main', {}, h('h2', {}, 'your uploads'), used, err, list))
+  mount(nav(me), h('main', { className: 'page wide' }, h('div', { className: 'page-head' }, h('h1', {}, 'Uploads'), used), err, list, empty))
   render().catch((e) => (err.textContent = describeError(e)))
 }

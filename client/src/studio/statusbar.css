@@ -14,3 +14,6 @@
 .studio .sb-where { color: var(--dim); }
 .studio .sb-where::before { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--ok); vertical-align: middle; }
 @media (max-width: 600px) { .studio .sb-rate, .studio .sb-zoom { display: none; } }
+.studio .sb-where[data-state=saving]::before, .studio .sb-where[data-state=connecting]::before { background: var(--accent); }
+.studio .sb-where[data-state=offline] { color: var(--fg); }
+.studio .sb-where[data-state=offline]::before { background: var(--rec); }

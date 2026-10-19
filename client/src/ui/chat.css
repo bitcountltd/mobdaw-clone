@@ -1,0 +1,22 @@
+/* The chat panel (ui/chat.ts), beside the arrangement. On a phone it covers the arrangement instead. */
+.studio .chat { width: 300px; background: var(--panel); border-left: 1px solid var(--line); }
+.studio .chat-head { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); }
+.studio .chat-head h2 { flex: 1; margin: 0; font-size: var(--fs); font-weight: 600; }
+.studio .chat-log { gap: 3px; padding: 10px 12px; }
+.studio .chat-empty { margin: auto 8px; text-align: center; font-size: var(--fs-sm); color: var(--dim); text-wrap: pretty; }
+.studio .msg { padding: 6px 10px; border-radius: var(--r-md); font-size: var(--fs); line-height: 1.35; }
+.studio .msg.them { background: var(--raise); }
+.studio .msg.me { background: color-mix(in srgb, var(--accent) 20%, var(--raise)); }
+.studio .msg-meta { padding: 8px 2px 0; font-size: var(--fs-xs); color: var(--muted); }
+.studio .chat-in { gap: 6px; align-items: center; padding: 8px; border-top: 1px solid var(--line); }
+.studio .chat-in input { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); }
+.studio .chat-in input:focus-visible { border-color: var(--line-strong); }
+.studio .chat-in .chat-send { flex: none; width: 32px; height: 32px; border: 0; color: var(--on-accent); background: var(--accent); }
+.studio .chat-in .chat-send:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, white); }
+.studio .chat-in .chat-send:disabled { color: var(--faint); background: var(--raise); }
+/* the unread count on the bar's toggle: a small lit badge */
+.studio .tb .chat-btn:not(.on) .chat-n:not(:empty) { min-width: 16px; padding: 0 4px; border-radius: 8px; line-height: 16px; text-align: center; color: var(--on-accent); background: var(--accent); }
+@media (max-width: 700px) {
+  .studio .studio-centre { position: relative; }
+  .studio .chat { position: absolute; z-index: 15; inset: 0; width: auto; border-left: 0; }
+}

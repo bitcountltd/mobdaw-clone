@@ -15,8 +15,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.600.0",
     "@aws-sdk/s3-request-presigner": "^3.600.0",
-    "@hocuspocus/extension-database": "latest",
-    "@hocuspocus/server": "latest",
+    "@hocuspocus/extension-database": "^4.7.0",
+    "@hocuspocus/server": "^4.7.0",
     "@hono/node-server": "^1.13.0",
     "@mobdaw/shared": "*",
     "hono": "^4.6.0",
@@ -25,7 +25,7 @@
     "yjs": "^13.6.0"
   },
   "devDependencies": {
-    "@hocuspocus/provider": "latest",
+    "@hocuspocus/provider": "^4.7.0",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.0",
     "esbuild": "^0.28.2",

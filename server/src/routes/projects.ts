@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import * as Y from 'yjs'
-import { docName, projectPreview, type Member, type ProjectPreview, type ProjectDetail, type ProjectSummary, type Role } from '@mobdaw/shared'
+import { chatLog, docName, projectPreview, type Member, type ProjectPreview, type ProjectDetail, type ProjectSummary, type Role } from '@mobdaw/shared'
 import { accountBlocked, findUser, isAdmin, isDevUser, memberRole, projectRole, requireSignedInOrPublic, writeBlock, type Ctx, type Env } from '../auth.ts'
 import { kick, KICK_REASON, type Collab } from '../collab.ts'
 import { tx } from '../db.ts'
@@ -201,7 +201,18 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
     // Latest state: the live Y.Doc if Hocuspocus has it loaded (the stored row lags by the store debounce).
     const live = collab.hocuspocus.documents.get(docName(id))
     const stored = db.prepare('SELECT data FROM documents WHERE name = ?').get(docName(id)) as { data: Uint8Array } | undefined
-    const state = live ? Y.encodeStateAsUpdate(live) : stored?.data
+    const source = live ? Y.encodeStateAsUpdate(live) : stored?.data
+    // The copy starts its own conversation: the original's chat stays with the original (a public project's copier
+    // must not get its collaborators' messages).
+    let state: Uint8Array | undefined
+    if (source) {
+      const d = new Y.Doc()
+      Y.applyUpdate(d, source)
+      const chat = chatLog(d)
+      if (chat.length) chat.delete(0, chat.length)
+      state = Y.encodeStateAsUpdate(d)
+      d.destroy()
+    }
     tx(db, () => {
       db.prepare('INSERT INTO projects(id, name, owner_id, created_at) VALUES(?,?,?,?)').run(copy, given || `${src.name} (copy)`, me, Date.now())
       db.prepare("INSERT INTO project_members(project_id, user_id, role) VALUES(?,?,'owner')").run(copy, me)

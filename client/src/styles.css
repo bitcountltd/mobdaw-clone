@@ -41,18 +41,6 @@ main.center { margin: auto; text-align: center; }
   display: flex; flex-direction: column; gap: 10px; padding: 10px 14px;
   background: var(--raise); border: 1px solid var(--line);
 }
-.uploads { list-style: none; padding: 0; margin: 12px 0; display: flex; flex-direction: column; gap: 14px; }
-.upload { display: flex; flex-direction: column; gap: 6px; }
-.up-tile { position: relative; height: 84px; border-radius: var(--r-md); overflow: hidden; background: var(--raise); border: 1px solid var(--line); }
-.up-slot { position: absolute; inset: 0; }
-.up-wave { display: block; width: 100%; height: 100%; padding: 6px 0; fill: var(--accent); }
-.up-name { position: absolute; top: 6px; left: 10px; right: 52px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; text-shadow: 0 1px 3px var(--bg); }
-.up-menu { position: absolute; top: 0; right: 0; }
-.up-menu > summary { padding: 4px 10px; list-style: none; background: color-mix(in srgb, var(--bg) 70%, transparent); }
-.up-menu > summary::-webkit-details-marker { display: none; }
-.up-menu > div { top: 100%; margin-top: 0; }
-.members { flex-basis: 100%; font-size: 13px; }
-.members .row { padding-top: 6px; }
 .hint { padding: 48px 12px; text-align: center; font-size: 13px; }
 
 /* universal delete button: flush in the parent's upper-right corner (parent must be positioned) */

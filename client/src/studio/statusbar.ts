@@ -4,6 +4,7 @@
 import { h } from '../dom'
 import { iconButton, tooltip } from '../theme/controls'
 import { ZOOM_FIT, ZOOM_MAX, ZOOM_MIN } from './arrange/arrange'
+import { syncHint, syncLine, syncWord, watchSync } from '../project/syncState'
 import type { Studio } from './studio'
 import './statusbar.css'
 
@@ -27,9 +28,13 @@ export function mountStatusbar(st: Studio, host: () => HTMLElement | null) {
   tooltip(zIn, 'zoom in', `${mod}+`)
   const cpu = h('span', { className: 'sb-cpu', 'data-hint': 'audio engine load: average share of the real-time budget used by DSP (red from 70%)' }, 'cpu –')
   const rate = h('span', { className: 'sb-rate', 'data-hint': 'the project sample rate' })
-  const where = readOnly
-    ? h('span', { className: 'sb-where' }, 'view only')
-    : s.local ? h('span', { className: 'sb-where', 'data-hint': 'saved in this browser, on this device; export a .mobdaw file from the home page to move it' }, 'saved on this device') : null
+  // where the project is saved, and whether it is (a viewer only sees whether they are connected)
+  const where = h('span', { className: 'sb-where', 'data-state': 'saved' })
+  const offSync = watchSync(s, (state, pending) => {
+    where.dataset.state = state
+    where.textContent = readOnly ? (s.local || state === 'saved' || state === 'saving' ? 'view only' : `view only · ${syncWord(state)}`) : syncLine(state, s.local, pending)
+    where.dataset.hint = readOnly ? 'you can look and listen, but not change this project' : syncHint(state, s.local)
+  })
   const el = h('footer', { className: 'studio-status' },
     text, h('span', { className: 'grow' }),
     h('span', { className: 'sb-zoom' }, zOut, zFit, zIn), cpu, rate, where)
@@ -83,6 +88,7 @@ export function mountStatusbar(st: Studio, host: () => HTMLElement | null) {
     el,
     destroy() {
       offs.forEach((f) => f())
+      offSync()
       clearTimeout(freshTimer)
       document.removeEventListener('pointerover', onOver)
       document.documentElement.removeEventListener('pointerleave', onLeave)

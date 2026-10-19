@@ -15,6 +15,7 @@ import { projectPage } from './project/page'
 import { localProjectPage } from './project/localPage'
 import { engineTestPage } from './pages/engineTest'
 import { registerServiceWorker } from './pwa'
+import { hideTip } from './theme/controls'
 import type { Me } from '@mobdaw/shared'
 
 async function getMe(): Promise<Me | null> {
@@ -82,5 +83,7 @@ if (import.meta.env.DEV) {
     return () => ((dead = true), typeof cleanup === 'function' && cleanup())
   })
 }
+// a tooltip whose button went away with the page (pointerleave never came) goes with it
+addEventListener('hashchange', hideTip)
 start('/')
 registerServiceWorker() // installable + offline (production builds only)

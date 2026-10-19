@@ -20,6 +20,7 @@ import type { chatPanel } from '../ui/chat'
 import { exportDialog } from '../ui/exportDialog'
 import { popoverPanel } from '../ui/popover'
 import { projectMenu } from '../ui/projectMenu'
+import { syncHint, syncWord, watchSync } from '../project/syncState'
 import { fmt } from '../ui/transport'
 import { ZOOM_FIT, ZOOM_MAX, ZOOM_MIN } from './arrange/arrange'
 import { toggleLoop } from './arrange/ruler'
@@ -30,7 +31,11 @@ import { mountScope } from './scope'
 import type { Studio } from './studio'
 import './topbar.css'
 
-export type Cloud = { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean }
+export type Cloud = {
+  projectId: string; me: string; role: Role; member: boolean; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean
+  /** Why it opened read-only (shown on the bar's "view only"). */
+  why?: string
+}
 export type TopbarOpts = {
   projectName: string
   renameProject?: (name: string) => Promise<unknown> | void
@@ -87,11 +92,11 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
     })
   }
   const savedText = h('span', { className: 'saved-text' }, 'saved')
-  const saved = h('span', { className: 'saved', 'data-state': 'saved', 'data-hint': s.local ? 'every change is saved in this browser, on this device' : 'every change is saved to the server' },
+  const saved = h('span', { className: 'saved', 'data-state': 'saved', 'data-hint': syncHint('saved', s.local) },
     h('i', { className: 'saved-dot' }), savedText)
   const left = h('div', { className: 'tb-l' },
     h('a', { ...homeLink, className: 'logo', title: 'all projects' }, 'mobdaw'), title,
-    readOnly ? h('span', { className: 'tb-ro dim' }, 'view only') : saved)
+    readOnly ? h('span', { className: 'tb-ro dim', 'data-hint': cloud?.why ?? 'you can look and listen, but not change this project' }, 'view only') : saved)
 
   // ---------------------------------------------------------------- centre: transport
   const rewind = iconButton('rewind', 'go to the start', () => st.rewind(), 'tb-rewind')
@@ -279,12 +284,34 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   tooltip(helpBtn, 'shortcuts and help', '?')
   const pedalText = h('span', { className: 'pedal-st', title: 'loop pedal: the number of loops going; red while a layer is recording' })
   const showCloud = CLOUD && !s.local
-  const presence = showCloud ? h('span', { className: 'presence' }) : null
-  const chatBtn = showCloud && chat ? h('button', { className: 'chat-btn', type: 'button', onclick: () => {
-    chat.setOpen(!chat.open)
-    chatBtn!.classList.toggle('on', chat.open)
-    window.dispatchEvent(new Event('resize')) // the arrangement's width changed
-  } }, icon('chat'), h('span', { className: 'chat-n' })) : null
+  /** Who has the project open: a dot each (a few, then a count); a click lists them. */
+  // (a visitor through the public link isn't shown who is in the project: the server doesn't list members to them either)
+  const presence: HTMLButtonElement | null = showCloud && !s.watching ? h('button', { className: 'presence', type: 'button', onclick: () => presenceList() }) : null
+  if (presence) tooltip(presence, 'who is here')
+  const people = () => {
+    const seen = new Set<string>()
+    return [...(s.watching ? [] : [{ ...s.user, me: true }]), ...st.remote.map((r) => ({ ...r.user, me: false }))]
+      .filter((u) => u.username !== 'guest' && !seen.has(u.username) && !!seen.add(u.username)) // (one dot per account, however many tabs)
+  }
+  const dot = (u: { username: string; color: string }) => h('span', { className: 'dot', style: `background:${u.color}` }, initials(u.username))
+  function drawPresence() {
+    if (!presence) return
+    const all = people()
+    const MAX = 3
+    const shown = all.length > MAX + 1 ? all.slice(0, MAX) : all
+    presence.replaceChildren(...shown.map(dot), ...(all.length > shown.length ? [h('span', { className: 'dot more' }, `+${all.length - shown.length}`)] : []),
+      h('span', { className: 'dot total', hidden: all.length < 2 }, String(all.length))) // (a phone shows just the count)
+    presence.hidden = !all.length
+    presence.setAttribute('aria-label', `here now: ${all.map((u) => u.username).join(', ')}`)
+  }
+  function presenceList() {
+    const all = people()
+    popoverPanel(presence!, h('div', { className: 'tb-pop presence-pop' },
+      h('p', { className: 'tb-pop-label' }, all.length === 1 ? 'Only you have this project open.' : `${all.length} people have this project open.`),
+      ...all.map((u) => h('div', { className: 'pp-row' }, dot(u), h('span', {}, u.username), u.me ? h('span', { className: 'dim' }, 'you') : null))))
+  }
+  const chatBtn = showCloud && chat ? h('button', { className: 'chat-btn', type: 'button', 'aria-pressed': 'false', onclick: () => chat.setOpen(!chat.open) },
+    icon('chat'), h('span', { className: 'chat-n' })) : null
   if (chatBtn) tooltip(chatBtn, 'chat')
   const moreBtn = iconButton('more', 'more', () => morePanel(), 'tb-more')
   tooltip(moreBtn, 'more controls')
@@ -435,8 +462,7 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   }
   function drawDoc() {
     metro.set(getTracks(doc).some((t) => t.role === 'click' && !t.muted)) // lit: a click track exists and is unmuted
-    presence?.replaceChildren(...[s.user, ...st.remote.map((r) => r.user)].map((u) =>
-      h('span', { className: 'dot', title: u.username, style: `background:${u.color}` }, initials(u.username))))
+    drawPresence()
     rec.set(!!st.rec.take || st.midi.active)
     drawMeta()
   }
@@ -455,27 +481,14 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   }
 
   // ---------------------------------------------------------------- saved state
-  let saveTimer = 0
-  const setSaved = (state: 'saved' | 'saving' | 'offline') => {
+  const offSync = watchSync(s, (state) => {
     saved.dataset.state = state
-    savedText.textContent = state === 'saving' ? 'saving…' : state
-  }
-  const onUpdate = () => {
-    if (s.provider) return
-    setSaved('saving')
-    clearTimeout(saveTimer)
-    saveTimer = window.setTimeout(() => setSaved('saved'), 600)
-  }
-  doc.on('update', onUpdate)
-  const onUnsynced = () => { if (s.provider?.unsyncedChanges) setSaved('saving'); else if (saved.dataset.state !== 'offline') setSaved('saved') }
-  const onStatus = ({ status }: { status: string }) => {
-    el.dataset.status = status
-    if (status === 'disconnected') setSaved('offline')
-    else if (status === 'connected') onUnsynced()
-  }
+    savedText.textContent = syncWord(state)
+    saved.dataset.hint = syncHint(state, s.local)
+  })
+  const onStatus = ({ status }: { status: string }) => (el.dataset.status = status)
   const onAuthFail = () => st.status('no access')
   s.provider?.on('status', onStatus)
-  s.provider?.on('unsyncedChanges', onUnsynced)
   s.provider?.on('authenticationFailed', onAuthFail)
 
   // ---------------------------------------------------------------- keys: L, T, Z, X, ⌘+ / ⌘-
@@ -540,7 +553,16 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
   return {
     el,
     /** The chat's unread count, on its toggle. */
-    setUnread(n: number) { if (chatBtn) chatBtn.querySelector('.chat-n')!.textContent = n ? String(n) : '' },
+    setUnread(n: number) {
+      if (!chatBtn) return
+      chatBtn.querySelector('.chat-n')!.textContent = n ? String(n) : ''
+      chatBtn.setAttribute('aria-label', n ? `chat, ${n} unread` : 'chat')
+    },
+    /** The chat panel opened or closed. */
+    chatOpened(open: boolean) {
+      chatBtn?.classList.toggle('on', open)
+      chatBtn?.setAttribute('aria-pressed', String(open))
+    },
     destroy() {
       offs.forEach((f) => f())
       cancelCount?.()
@@ -550,13 +572,11 @@ export function mountTopbar(st: Studio, opts: TopbarOpts) {
       window.removeEventListener('keydown', onNoteKey)
       meta.unobserve(drawMeta)
       undoEvents.forEach((ev) => undo.off(ev, drawUndo))
-      doc.off('update', onUpdate)
-      clearTimeout(saveTimer)
+      offSync()
       cancelAnimationFrame(bpmRaf)
       scope.destroy()
       section.destroy()
       s.provider?.off('status', onStatus)
-      s.provider?.off('unsyncedChanges', onUnsynced)
       s.provider?.off('authenticationFailed', onAuthFail)
     },
   }

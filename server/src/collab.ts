@@ -1,7 +1,7 @@
 import { Database } from '@hocuspocus/extension-database'
 import { Server } from '@hocuspocus/server'
 import { docName, samplesMap } from '@mobdaw/shared'
-import { isPublic, memberRole, projectRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
+import { SESSION_COOKIE, isPublic, memberRole, projectRole, sessionUser, writeBlock, type Ctx } from './auth.ts'
 import type { Link } from './uploads.ts'
 
 export type Collab = ReturnType<typeof createCollab>
@@ -58,6 +58,28 @@ export async function markMissing(ctx: Ctx, collab: Collab, links: Link[]) {
   }
 }
 
+type HeaderBag = Headers | Record<string, string | string[] | undefined> | undefined
+const header = (headers: HeaderBag, name: string) => {
+  const raw = headers instanceof Headers ? headers.get(name) : headers?.[name]
+  return (Array.isArray(raw) ? raw.join('; ') : raw) ?? undefined
+}
+
+/** The session token from a request's Cookie header, if any. */
+export function cookieToken(headers: HeaderBag): string | undefined {
+  const line = header(headers, 'cookie')
+  for (const part of line?.split(';') ?? []) {
+    const [k, ...v] = part.trim().split('=')
+    if (k === SESSION_COOKIE) {
+      try {
+        return decodeURIComponent(v.join('='))
+      } catch {
+        return undefined
+      }
+    }
+  }
+  return undefined
+}
+
 /** Hocuspocus server; the caller swaps in its own HTTP request handler (see main.ts). */
 export function createCollab(ctx: Ctx) {
   const { db, config } = ctx
@@ -95,8 +117,12 @@ export function createCollab(ctx: Ctx) {
     async beforeHandleAwareness({ context, states }) {
       if (context?.watching) states.clear()
     },
-    async onAuthenticate({ token, documentName, connectionConfig }) {
-      const user = sessionUser(ctx, token)
+    async onAuthenticate({ token, documentName, connectionConfig, requestHeaders }) {
+      // The client sends the token it keeps in localStorage; the session cookie (sent with the upgrade request) covers a
+      // browser whose stored token is gone or stale (storage cleared, signed in again elsewhere) while the cookie lives on.
+      // (only from our own pages: a cookie must not let another site open the socket as the user)
+      const sameOrigin = header(requestHeaders, 'origin') === new URL(config.publicUrl).origin
+      const user = sessionUser(ctx, token) ?? (sameOrigin ? sessionUser(ctx, cookieToken(requestHeaders)) : null)
       const projectId = documentName.startsWith('project:') ? documentName.slice(8) : null
       if (!user) {
         // Signed out: only a public project, read-only.

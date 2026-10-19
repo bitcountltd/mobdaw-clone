@@ -6,7 +6,6 @@
 .settings .field input, .settings .field select, .settings select { width: 100%; }
 .settings .field.inline input { flex: 1; width: auto; }
 .settings .who { margin: 0; }
-.settings .members { display: flex; flex-direction: column; gap: 6px; }
 .settings .check { align-items: flex-start; }
 .settings .check input { margin-top: 2px; }
 .settings .row { display: flex; gap: 6px; align-items: center; }

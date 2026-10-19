@@ -1,9 +1,10 @@
-import type { ProjectDetail, Role } from '@mobdaw/shared'
+import type { Role } from '@mobdaw/shared'
 import { api } from '../api'
 import { getInputOffset, getPreferredInput, setInputOffset, setPreferredInput } from '../audio/recording'
 import { h } from '../dom'
 import { describeError } from '../errors'
-import { memberRows } from './members'
+import { peopleList } from './members'
+import { linkRow } from './share'
 import { pedalSettings } from './pedalSettings'
 import { popoverPanel } from './popover'
 import { liveDoc, saveSnapshotDialog, snapshotsDialog } from '../pages/snapshots'
@@ -16,7 +17,7 @@ export type ProjectMenuOpts = {
   rename?: (name: string) => Promise<unknown> | void
   onRenamed(name: string): void
   /** Absent for projects on this device. */
-  cloud?: { projectId: string; me: string; role: Role; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean; onPublic(v: boolean): void; onDemo(v: boolean): void }
+  cloud?: { projectId: string; me: string; role: Role; member: boolean; owner: boolean; locked: boolean; public: boolean; admin: boolean; demo: boolean; onPublic(v: boolean): void; onDemo(v: boolean): void }
   /** The project's sample rate; `locked` says why it can't change (it is only possible while the project has no tracks). */
   sampleRate: { value: number; locked: 'tracks' | 'readonly' | null; set(rate: number): void }
   /** The microphone choice changed: re-open the input if it is in use. */
@@ -62,16 +63,16 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
   const c = o.cloud
   if (c) {
     const pub = h('input', { type: 'checkbox', checked: c.public, disabled: !c.owner || c.locked })
-    const link = h('button', { hidden: !c.public, title: 'copy the address of this project', onclick: () => void navigator.clipboard?.writeText(location.href) }, 'copy link')
+    const link = linkRow(c.projectId)
     const demo = h('input', { type: 'checkbox', checked: c.demo, disabled: !c.public || c.locked })
-    const demoRow = h('label', { className: 'check', hidden: !c.admin || !c.owner, title: 'list this project in the demo section of everyone\'s home page' }, demo, h('span', {}, 'demo: show on the home page'))
+    const demoRow = h('label', { className: 'check', hidden: !c.admin || !c.owner || !c.public, title: 'list this project in the demo section of everyone\'s home page' }, demo, h('span', {}, 'demo: show on the home page'))
     pub.onchange = () => {
       const v = pub.checked
       api.setProjectPublic(c.projectId, v).then(() => {
         c.public = v
         if (!v) (c.demo = false), (demo.checked = false), c.onDemo(false) // the server drops the demo flag with it
         demo.disabled = !v || c.locked
-        link.hidden = !v
+        demoRow.hidden = !c.admin || !c.owner || !v
         msg.textContent = ''
         c.onPublic(v)
       }, (e) => ((pub.checked = !v), fail(e)))
@@ -80,18 +81,20 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
       const v = demo.checked
       api.setProjectDemo(c.projectId, v).then(() => ((c.demo = v), (msg.textContent = ''), c.onDemo(v)), (e) => ((demo.checked = !v), fail(e)))
     }
-    const who = !c.me ? 'you are viewing without an account' : { owner: 'you are the owner', editor: 'you are a collaborator', viewer: 'you are a viewer' }[c.role]
-    const people = h('div', { className: 'members', hidden: true })
-    const toggle = h('button', { onclick: () => {
-      people.hidden = !people.hidden
-      toggle.textContent = people.hidden ? 'collaborators…' : 'collaborators ▴'
-      if (!people.hidden) void loadMembers(people, c, fail)
-    } }, 'collaborators…')
+    // a visitor (signed out, or in through the public link) isn't told who else is in it
+    const people = c.me && c.member ? peopleList({ projectId: c.projectId, me: c.me, owner: c.owner, locked: c.locked, onError: fail }) : null
+    const who = !c.me ? 'You are viewing a public project without an account.' : !c.member ? 'You are viewing a public project.' : null
+    // someone who can't edit it can still start from it: a copy of their own
+    const copy = c.me && c.role === 'viewer' ? h('button', { title: 'a new cloud project of your own, with the same tracks and audio', onclick: () => {
+      copy!.disabled = true
+      api.copyProject(c.projectId).then((p) => (closePanel(), (location.hash = `#/project/${p.id}`)), (e) => ((copy!.disabled = false), fail(e)))
+    } }, 'save a copy to edit') : null
     sharing = section('Sharing',
-      h('p', { className: 'dim who' }, who),
-      h('label', { className: 'check', title: 'anyone signed in who has the link can open it, read-only' }, pub, h('span', {}, 'public: anyone with the link can view')),
-      demoRow,
-      h('div', { className: 'row' }, link, toggle), people)
+      who ? h('p', { className: 'dim who' }, who) : null,
+      copy ? h('div', { className: 'row' }, copy) : null,
+      people,
+      h('label', { className: 'check', title: 'anyone with the link can open it and listen, read-only, with or without an account' }, pub, h('span', {}, 'public: anyone with the link can view')),
+      demoRow, link)
   }
 
   // Microphone: the choice is remembered in this browser. Names only show once the page has been given microphone access.
@@ -153,21 +156,4 @@ export function projectMenu(anchor: HTMLElement, o: ProjectMenuOpts) {
       h('button', { title: 'earlier versions: restore as a new project, download or delete', onclick: () => (closePanel(), snapshotsDialog({ project: snaps.project, projectName: o.name, source: liveDoc(snaps.doc) })) }, 'snapshots…')))
   const panel = h('div', { className: 'settings' }, section('Project', field('Name', name)), sharing, history ?? null, audio, pedal, msg)
   const closePanel = popoverPanel(anchor, panel)
-}
-
-/** The collaborators of a cloud project, as on the home screen: change roles, remove, share with someone else. */
-function loadMembers(body: HTMLElement, c: NonNullable<ProjectMenuOpts['cloud']>, fail: (e: unknown) => void) {
-  const show = (d: ProjectDetail, usernames: string[]) => {
-    const others = d.members.filter((m) => m.role !== 'owner')
-    const act = (fn: () => Promise<unknown>) => fn().then(() => load(), fail)
-    body.replaceChildren(
-      h('div', { className: 'row' }, h('span', { className: 'grow' }, d.ownerUsername), h('span', { className: 'dim' }, 'owner')),
-      ...(c.owner
-        ? memberRows({ projectId: c.projectId, members: d.members, usernames, me: c.me, locked: c.locked, act })
-        : others.map((m) => h('div', { className: 'row' }, h('span', { className: 'grow' }, m.username), h('span', { className: 'dim' }, m.role)))))
-  }
-  const load = () =>
-    Promise.all([api.project(c.projectId), c.owner ? api.users() : Promise.resolve([])]).then(
-      ([d, users]) => show(d, users.map((u) => u.username)), fail)
-  return load()
 }

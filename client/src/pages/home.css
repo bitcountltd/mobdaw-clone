@@ -79,9 +79,6 @@ h1.home-mark { margin: 0; font-size: 84px; line-height: .78; letter-spacing: .01
 input.tile-rename { width: 100%; min-height: 0; padding: 1px 4px; margin: -2px -5px; font-weight: 600; }
 .tile-more { position: absolute; right: 8px; bottom: 12px; }
 .tile-extra { padding: 0 12px 12px; font-size: var(--fs-sm); }
-.tile-new { border-style: dashed; background: none; }
-.tile-new button { flex-direction: column; gap: 6px; width: 100%; height: 100%; min-height: 136px; color: var(--dim); font-size: var(--fs-sm); }
-.tile-new button:hover:not(:disabled) { color: var(--fg); background: none; }
 
 .tiles-empty { display: flex; flex-direction: column; gap: 6px; padding: 28px 24px; border: 1px dashed var(--line-strong); border-radius: var(--r-md); }
 .tiles-empty p:first-child { font-size: var(--fs-h3); }
@@ -119,3 +116,4 @@ input.tile-rename { width: 100%; min-height: 0; padding: 1px 4px; margin: -2px -
 .site-nav .nav-link { color: var(--dim); }
 .site-nav .nav-link:hover:not(:disabled) { color: var(--fg); }
 .card form { gap: 10px; }
+.sec-lede { margin: -8px 0 0; font-size: var(--fs-sm); }

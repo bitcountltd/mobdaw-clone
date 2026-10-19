@@ -19,7 +19,9 @@ export function homePage(me: Me | null) {
     h('h1', { className: 'logo home-mark' }, 'mobdaw'),
     h('p', { className: 'home-lede' },
       h('span', {}, 'A multitrack studio in a browser tab.'),
-      h('span', { className: 'dim' }, ' Record, loop, sequence, automate and mix. Nothing to install, and your projects stay on this device.')))
+      h('span', { className: 'dim' }, CLOUD
+        ? ' Record, loop, sequence, automate and mix. Nothing to install: work on this device, or in the cloud to share and play together.'
+        : ' Record, loop, sequence, automate and mix. Nothing to install, and your projects stay on this device.')))
   const main = h('main', { className: 'home-main' }, intro, startSection(), localSection(me))
   if (CLOUD) {
     main.append(me ? cloudSection(me) : cloudPitch(), demoSection(me))
@@ -37,8 +39,10 @@ export function homePage(me: Me | null) {
 
 /** What the cloud section offers, shown in place of it when signed out (cloud builds only). */
 function cloudPitch(): HTMLElement {
-  return h('section', { className: 'home-sec' },
-    h('div', { className: 'sec-head' }, h('h2', {}, 'Cloud')),
-    h('p', { className: 'dim' }, 'Cloud storage and real-time editing with others are part of mobdaw pro. ',
-      h('a', { href: '#/login' }, 'Sign in'), ' or ', h('a', { href: '#/register' }, 'create a free account'), '.'))
+  return h('section', { className: 'home-sec', 'aria-labelledby': 'cloud-h' },
+    h('div', { className: 'sec-head' }, h('h2', { id: 'cloud-h' }, 'Cloud projects')),
+    h('div', { className: 'tiles-empty' },
+      h('p', {}, 'Keep projects in the cloud, share them, and edit together in real time.'),
+      h('p', { className: 'dim' }, 'Accounts are by invite for now. ', h('a', { href: '#/login' }, 'Sign in'), ', or ',
+        h('a', { href: '#/register' }, 'use an invite code'), '. Everything above works without one.')))
 }

@@ -15,8 +15,8 @@ export function docPicture(doc: Y.Doc): PictureRow[] {
   return projectPreview(doc).rows.map((r, i) => ({ color: tracks[i] ? trackColor(tracks[i], i) : TRACK_COLORS[i % 8], spans: r.spans }))
 }
 
-/** Picture rows from a server preview (no colours there: tracks take the palette in order). */
-export const previewRows = (p: ProjectPreview): PictureRow[] => p.rows.map((r, i) => ({ color: TRACK_COLORS[i % TRACK_COLORS.length], spans: r.spans }))
+/** Picture rows from a server preview, in the tracks' colours (older servers send none: the palette in order). */
+export const previewRows = (p: ProjectPreview): PictureRow[] => p.rows.map((r, i) => ({ color: TRACK_COLORS[(((r.color ?? i) % TRACK_COLORS.length) + TRACK_COLORS.length) % TRACK_COLORS.length], spans: r.spans }))
 
 /**
  * The little arrangement of a project: a lane per track, a block per clip, in the track colour. Says "what kind of
@@ -38,12 +38,6 @@ export function picture(rows: PictureRow[], cls = ''): HTMLElement {
     el.append(lane)
   }
   return el
-}
-
-/** The tile that starts a new project, shown first in a list (cloud projects). */
-export function newProjectTile(onclick: () => void, o: { title: string; disabled?: boolean }): HTMLElement {
-  return h('li', { className: 'tile tile-new' },
-    h('button', { title: o.title, disabled: o.disabled, onclick }, icon('plus', 20), h('span', {}, 'new project')))
 }
 
 /**

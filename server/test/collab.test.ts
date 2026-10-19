@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { addAudioClip, addTrack, getClips, getTracks } from '@mobdaw/shared'
+import { HocuspocusProvider } from '@hocuspocus/provider'
+import WebSocket from 'ws'
+import * as Y from 'yjs'
 import { ADMIN, admit, connect, login, startTest, until, type Client } from './helpers.ts'
 
 let t: Awaited<ReturnType<typeof startTest>>
@@ -44,6 +47,30 @@ describe('collab', () => {
     await until(() => getTracks(a.doc).length === 2)
     expect(getTracks(a.doc).map((x) => x.name)).toEqual(['Drums', 'Bass'])
     a.provider.destroy(); b.provider.destroy()
+  })
+
+  it('signs in with the session cookie when the client has no token, from our own origin only', async () => {
+    const withHeaders = (headers: Record<string, string>) =>
+      class extends WebSocket { constructor(url: string, protocols?: string | string[]) { super(url, protocols, { headers }) } }
+    const open = (headers: Record<string, string>) => {
+      const doc = new Y.Doc()
+      const provider = new HocuspocusProvider({ url: `ws://127.0.0.1:${t.port}/collab`, name: `project:${projectId}`, document: doc, token: '',
+        WebSocketPolyfill: withHeaders(headers) } as ConstructorParameters<typeof HocuspocusProvider>[0])
+      return { doc, provider }
+    }
+    const cookie = `mobdaw_session=${encodeURIComponent(alice.token!)}`
+    const ok = open({ cookie, origin: new URL(t.config.publicUrl).origin })
+    await until(() => ok.provider.synced)
+    expect(getTracks(ok.doc).length).toBeGreaterThan(0)
+    ok.provider.destroy()
+    // another site's page can't borrow the cookie (and the project isn't public, so a guest gets nothing)
+    const other = open({ cookie, origin: 'https://evil.example' })
+    await new Promise<void>((resolve, reject) => {
+      other.provider.on('authenticationFailed', () => resolve())
+      other.provider.on('synced', () => reject(new Error('synced from another origin')))
+      setTimeout(() => reject(new Error('timeout')), 5000)
+    })
+    other.provider.destroy()
   })
 
   it('persists across restart', async () => {
