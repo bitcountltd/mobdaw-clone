@@ -1,21 +1,29 @@
-# Deploying the static demo to daw.bitcount.com
+# Deploying mobdaw to daw.bitcount.com
 
-The redesigned client is a fully static site (the wasm engine, AudioWorklet, fonts and demo song
-are all in `client/dist`; projects live in the browser). It is served from a private S3 bucket
-through CloudFront at **https://daw.bitcount.com/**, with an ACM certificate and Route 53
-alias records, all in one CloudFormation stack (`mobdaw-daw-bitcount`, us-east-1).
-What gets created and what it costs: [`RESOURCES.md`](../RESOURCES.md).
+**https://daw.bitcount.com/** is two CloudFormation stacks in us-east-1:
 
-There is no server behind this deployment, so the features that need one (sign-in, cloud
-projects, sharing, collaboration) do not work there; everything on-device does. The original
-wrongbad.com/mobdaw deployment (with the server) is unchanged: see [`deploy/README.md`](../deploy/README.md).
+- **`mobdaw-daw-bitcount`** (`deploy/aws/site.yaml`): the client, a static build in a private S3 bucket behind
+  CloudFront, with an ACM certificate and Route 53 alias records.
+- **`mobdaw-daw-bitcount-server`** (`deploy/aws/server.yaml`): the cloud server (accounts, cloud projects, sharing,
+  live collaboration, sample storage). One EC2 instance runs the Node server behind Caddy, with a data volume for
+  SQLite and an S3 bucket for samples, releases and backups. CloudFront sends `/api/*` and `/collab*` to it (see
+  "Cloud server" below).
+
+The site works without the server stack: then it is static, projects live in the browser, and the cloud features
+are hidden. What gets created and what it costs: [`RESOURCES.md`](../RESOURCES.md). The original wrongbad.com/mobdaw
+deployment is separate and unchanged ([`deploy/README.md`](../deploy/README.md)).
 
 Files:
 
 | File | What |
 |---|---|
 | `deploy/aws/site.yaml` | CloudFormation template (bucket, OAC, CloudFront, headers policy, cert, DNS) |
-| `deploy/aws/deploy.sh` | one command: stack create/update, build, upload, invalidate |
+| `deploy/aws/deploy.sh` | the site: stack create/update, build (cloud features on when the server stack exists), upload, invalidate |
+| `deploy/aws/server.yaml` | CloudFormation template for the server (instance, data volume, bucket, role, DNS for the origin) |
+| `deploy/aws/deploy-server.sh` | the server: secrets, stack, build a release, roll it out, health check |
+| `deploy/aws/build-server.mjs` | bundles the server and admin CLI, dependencies included, into one file each |
+| `deploy/aws/server-admin.sh` | runs the admin CLI on the instance (invites, make-admin, gift months ...) |
+| `deploy/aws/ssm-run.sh` | Run Command helpers shared by the two scripts above |
 | `deploy/aws/teardown.sh` | empty the bucket and delete the stack (asks first) |
 | `deploy/aws/serve-local.mjs` | local static server with the same headers as CloudFront, for testing the CSP |
 | `client/vite.config.ts` | `BASE_PATH` env picks the base (`/` here; default build stays `/mobdaw/`) |
@@ -152,6 +160,91 @@ To change headers (CSP etc.), edit `SecurityHeadersPolicy` in `site.yaml` (keep 
 line: `serve-local.mjs` reads them from there), test locally (below), then deploy.
 
 To remove everything: `deploy/aws/teardown.sh` (asks you to type the stack name; `--yes` skips it).
+
+## Cloud server
+
+### How requests flow
+
+```
+browser ── https://daw.bitcount.com ── CloudFront ─┬─ /*            → S3 (the client)
+                                                   └─ /api/*, /collab* → https://origin.daw.bitcount.com
+                                                         (header X-Mobdaw-Origin: <secret>)
+                                                         → Caddy :443 (Let's Encrypt) → node :8787
+browser ── presigned GET/PUT ── https://<data bucket>.s3.us-east-1.amazonaws.com/samples/...
+```
+
+- **Caching:** the API and WebSocket behaviours use the managed `CachingDisabled` and `AllViewerExceptHostHeader`
+  policies. Cookies, query strings and the WebSocket upgrade reach the server, and the Host header is the origin's.
+- **Origin secret:** Caddy refuses (403) every request without the secret `X-Mobdaw-Origin` header that CloudFront
+  adds. Ports 80/443 have to be open for Let's Encrypt, but the server is only usable through the CDN.
+- **CSP:** with the server, `SecurityHeadersPolicy` adds `wss://daw.bitcount.com` and the bucket's S3 host to
+  `connect-src` and `media-src`.
+- **Secrets:** `session-secret` and `origin-secret` live in Parameter Store under `/mobdaw/daw-bitcount/`
+  (SecureString). `deploy-server.sh` creates them once. The instance reads them at boot into `/etc/mobdaw.env` and
+  `/etc/caddy/caddy.env`. `deploy.sh` passes the origin secret to CloudFront as a NoEcho parameter.
+
+### Deploy
+
+```sh
+deploy/aws/deploy-server.sh    # the server: secrets, stack, release, health check
+deploy/aws/deploy.sh           # the site: routes /api and /collab to it, builds the client with VITE_CLOUD=1
+```
+
+`deploy-server.sh`:
+1. Creates the secrets if missing.
+2. Deploys `server.yaml`. On the first run, the instance's user data installs Node 24 (checked against
+   nodejs.org's SHA-256 list) and Caddy (checked against its release checksums), and formats and mounts the data
+   volume at `/var/lib/mobdaw`.
+3. Writes the systemd units: `mobdaw`, `caddy`, and a nightly `mobdaw-backup.timer`.
+4. Bundles the server (`build-server.mjs`: one `main.mjs` plus `admin.mjs`, so there is no npm on the box) and
+   uploads it to `s3://<bucket>/deploy/releases/<time>-<commit>/`, then points `deploy/current.txt` at it.
+5. Over Run Command, switches `/opt/mobdaw/current` to it and restarts. It keeps the last five releases.
+6. Checks the origin: 401 for `/api/me` through the header, 403 without it.
+
+`--release-only` skips the secrets and the stack, for code-only updates.
+
+### First admin account and invites
+
+Registration is invite-only, and there is no billing: pro time is given as months (`gift`, or an invite's months).
+
+```sh
+deploy/aws/server-admin.sh create-invite --days 7 --months 12 --memo me   # prints https://daw.bitcount.com/#/register/<code>
+# register with that link in the browser (your own username and password), then:
+deploy/aws/server-admin.sh make-admin <username>
+```
+
+Admins can also make invites in the app (the admin page). Other commands: `gift <username> <months>`,
+`list-invites`, `set-plan`, `tree`, `audit`.
+
+Commands that ask for a password (`create-user`, `passwd`) need a terminal, so run them in a Session Manager shell:
+
+```sh
+aws ssm start-session --target <instance id> --region us-east-1
+sudo -u mobdaw bash -c 'set -a; . /etc/mobdaw.env; node /opt/mobdaw/current/admin.mjs passwd <username>'
+```
+
+This needs the Session Manager plugin for the AWS CLI.
+
+### On the instance
+
+| | |
+|---|---|
+| Server | `systemctl status mobdaw`, `journalctl -u mobdaw -f` |
+| TLS / proxy | `systemctl status caddy`, `journalctl -u caddy -f` (certificates in `/var/lib/mobdaw/caddy`) |
+| Database | `/var/lib/mobdaw/db/mobdaw.db` (SQLite, on the data volume) |
+| Backups | `systemctl list-timers mobdaw-backup.timer`: daily `VACUUM INTO`, copied to `s3://<bucket>/backups/` (kept 30 days) |
+| Bootstrap log | `/var/log/mobdaw-bootstrap.log` |
+
+**Disks:** the root disk is disposable. Everything that matters is on the data volume (snapshotted if the stack
+replaces or deletes it) or in the bucket (retained if the stack is deleted). A new Amazon Linux image or instance type
+replaces the instance on the next stack update. The new one mounts the same volume and pulls the current release.
+
+**Restore a backup:**
+1. `systemctl stop mobdaw`.
+2. `aws s3 cp s3://<bucket>/backups/mobdaw-YYYY-MM-DD.db /var/lib/mobdaw/db/mobdaw.db`.
+3. `chown mobdaw: /var/lib/mobdaw/db/mobdaw.db`.
+4. Delete any `-wal`/`-shm` files next to it.
+5. `systemctl start mobdaw`.
 
 ## Test locally with the production headers
 

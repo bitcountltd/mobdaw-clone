@@ -1,0 +1,506 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  mobdaw cloud server for daw.bitcount.com: one EC2 instance (Node 24 + Caddy) behind the site's CloudFront
+  distribution, a data volume for SQLite that outlives the instance, and an S3 bucket for samples, server releases
+  and database backups. Deployed by deploy/aws/deploy-server.sh.
+
+Parameters:
+  SiteDomain:
+    Type: String
+    Default: daw.bitcount.com
+    Description: Public site host name (CORS origin for direct S3 uploads and downloads).
+  OriginDomain:
+    Type: String
+    Default: origin.daw.bitcount.com
+    Description: >-
+      Host name of the server itself. CloudFront connects to it over HTTPS; Caddy gets its certificate from Let's
+      Encrypt. Requests without the CloudFront origin header are refused.
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: Route 53 hosted zone that holds OriginDomain.
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues: [t4g.micro, t4g.small, t4g.medium]
+  ImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: >-
+      Amazon Linux 2023 (arm64). A new image replaces the instance on the next stack update; the data volume, the
+      certificates on it and the releases in S3 carry over, so that is a short restart, not data loss.
+  ParamPrefix:
+    Type: String
+    Default: /mobdaw/daw-bitcount
+    Description: SSM Parameter Store prefix holding session-secret and origin-secret (SecureString, made by deploy-server.sh).
+  CaddyVersion:
+    Type: String
+    Default: 2.10.0
+
+Resources:
+  # --- storage ------------------------------------------------------------------------------
+  # samples/   audio, content-addressed per owner (the server's S3 storage driver)
+  # deploy/    server releases (deploy-server.sh uploads, the instance pulls)
+  # backups/   nightly SQLite copies, kept 30 days
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      # browsers upload and download samples directly with presigned URLs
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: [!Sub 'https://${SiteDomain}']
+            AllowedMethods: [GET, PUT, HEAD]
+            AllowedHeaders: ['*']
+            ExposedHeaders: [ETag, Content-Length]
+            MaxAge: 3000
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-backups
+            Status: Enabled
+            Prefix: backups/
+            ExpirationInDays: 30
+          - Id: expire-old-releases
+            Status: Enabled
+            Prefix: deploy/releases/
+            ExpirationInDays: 90
+          - Id: abort-multipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub '${DataBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # --- instance identity --------------------------------------------------------------------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      # Session Manager and Run Command: deploys and shell access without SSH keys or an open port 22
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: mobdaw-server
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub '${DataBucket.Arn}/samples/*'
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${DataBucket.Arn}/backups/*'
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${DataBucket.Arn}/deploy/*'
+              # ListBucket: HeadObject gives 404 rather than 403 for a missing sample, and the admin audit lists samples/
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParamPrefix}/*'
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # --- network ------------------------------------------------------------------------------
+  # Its own small VPC (the account has no default one): one public subnet, an internet gateway, no NAT (free).
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: mobdaw-daw-bitcount
+        - Key: project
+          Value: mobdaw-demo
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: mobdaw-daw-bitcount-public
+        - Key: project
+          Value: mobdaw-demo
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+
+  # 80 and 443 are open: Caddy needs them for Let's Encrypt, and CloudFront's addresses change. Every request
+  # without CloudFront's secret origin header is refused by Caddy, so the server is only reachable through the CDN.
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: mobdaw server (HTTP/HTTPS for Caddy; no SSH, Session Manager instead)
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  # SQLite and Caddy's certificates live here, not on the root volume, so a replaced instance (new image, new type)
+  # picks up where the old one left off. Snapshotted if the stack ever deletes or replaces it.
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Size: 10
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: mobdaw-daw-bitcount-data
+        - Key: project
+          Value: mobdaw-demo
+
+  Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultRoute   # the bootstrap downloads Node and Caddy on first boot
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref Subnet
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds: [!GetAtt SecurityGroup.GroupId]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: mobdaw-daw-bitcount
+        - Key: project
+          Value: mobdaw-demo
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            # Bootstrap: Node 24, Caddy, the data volume, systemd units, config from SSM, the latest release from S3.
+            # Safe to re-run (deploy-server.sh --bootstrap does, through Run Command).
+            set -euo pipefail
+            exec > >(tee -a /var/log/mobdaw-bootstrap.log) 2>&1
+            echo "bootstrap $(date -Is)"
+            REGION=${AWS::Region}
+            BUCKET=${DataBucket}
+            PREFIX=${ParamPrefix}
+            ORIGIN=${OriginDomain}
+            PUBLIC_URL=https://${SiteDomain}
+            CADDY_VERSION=${CaddyVersion}
+
+            dnf -y -q install tar xz jq || true
+
+            # swap: npm-free installs, but a little headroom for a 2 GB instance
+            if [ ! -f /swapfile ]; then
+              fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+              echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            fi
+
+            # data volume: the one disk that isn't the root disk (attached a moment after boot, so wait for it)
+            ROOT_DISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")
+            DEV=""
+            for i in $(seq 1 120); do
+              DEV=$(lsblk -dnpo NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v "/dev/$ROOT_DISK$" | head -n1 || true)
+              [ -n "$DEV" ] && break
+              sleep 5
+            done
+            [ -n "$DEV" ] || { echo "data volume never appeared"; exit 1; }
+            blkid "$DEV" >/dev/null 2>&1 || mkfs.xfs -q "$DEV"
+            UUID=$(blkid -s UUID -o value "$DEV")
+            mkdir -p /var/lib/mobdaw
+            grep -q "$UUID" /etc/fstab || echo "UUID=$UUID /var/lib/mobdaw xfs defaults,nofail 0 2" >> /etc/fstab
+            mountpoint -q /var/lib/mobdaw || mount /var/lib/mobdaw
+
+            # Node 24 (latest 24.x), checked against the release's published SHA-256
+            if ! /usr/local/bin/node --version 2>/dev/null | grep -q '^v24\.'; then
+              cd /tmp
+              curl -fsSLO https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt
+              TARBALL=$(awk '/linux-arm64\.tar\.xz$/{print $2}' SHASUMS256.txt)
+              curl -fsSLO "https://nodejs.org/dist/latest-v24.x/$TARBALL"
+              grep " $TARBALL\$" SHASUMS256.txt | sha256sum -c -
+              rm -rf /opt/node && mkdir -p /opt/node && tar -xJf "$TARBALL" -C /opt/node --strip-components=1
+              ln -sf /opt/node/bin/node /usr/local/bin/node
+              rm -f "$TARBALL" SHASUMS256.txt
+            fi
+
+            # Caddy (TLS for the origin, Let's Encrypt), checked against the release's checksums
+            if ! /usr/local/bin/caddy version 2>/dev/null | grep -q "v$CADDY_VERSION"; then
+              cd /tmp
+              BASE=https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION
+              FILE=caddy_${!CADDY_VERSION}_linux_arm64.tar.gz
+              curl -fsSLO "$BASE/$FILE"
+              curl -fsSLO "$BASE/caddy_${!CADDY_VERSION}_checksums.txt"
+              grep " $FILE\$" "caddy_${!CADDY_VERSION}_checksums.txt" | sha512sum -c -
+              tar -xzf "$FILE" caddy && install -m 755 caddy /usr/local/bin/caddy
+              rm -f caddy "$FILE" "caddy_${!CADDY_VERSION}_checksums.txt"
+            fi
+
+            id mobdaw >/dev/null 2>&1 || useradd --system --home-dir /var/lib/mobdaw --shell /sbin/nologin mobdaw
+            id caddy >/dev/null 2>&1 || useradd --system --home-dir /var/lib/mobdaw/caddy --shell /sbin/nologin caddy
+            mkdir -p /var/lib/mobdaw/db /var/lib/mobdaw/caddy /opt/mobdaw/releases /etc/caddy
+            chown mobdaw:mobdaw /var/lib/mobdaw /var/lib/mobdaw/db
+            chown caddy:caddy /var/lib/mobdaw/caddy
+
+            # secrets from Parameter Store
+            param() { aws ssm get-parameter --region "$REGION" --with-decryption --name "$PREFIX/$1" --query Parameter.Value --output text; }
+            SESSION_SECRET=$(param session-secret)
+            ORIGIN_SECRET=$(param origin-secret)
+
+            umask 077
+            cat > /etc/mobdaw.env <<EOF
+            NODE_ENV=production
+            PORT=8787
+            PUBLIC_URL=$PUBLIC_URL
+            SESSION_SECRET=$SESSION_SECRET
+            DB_PATH=/var/lib/mobdaw/db/mobdaw.db
+            STORAGE_DRIVER=s3
+            S3_BUCKET=$BUCKET
+            S3_REGION=$REGION
+            EOF
+            chown root:mobdaw /etc/mobdaw.env && chmod 640 /etc/mobdaw.env
+            cat > /etc/caddy/caddy.env <<EOF
+            ORIGIN_SECRET=$ORIGIN_SECRET
+            EOF
+            chown root:caddy /etc/caddy/caddy.env && chmod 640 /etc/caddy/caddy.env
+            umask 022
+
+            cat > /etc/caddy/Caddyfile <<'EOF'
+            {
+              storage file_system /var/lib/mobdaw/caddy
+              admin off
+            }
+            ORIGIN_HOST {
+              # only CloudFront knows this header; anything else (scanners, the bare host name) gets a 403
+              @cdn header X-Mobdaw-Origin {$ORIGIN_SECRET}
+              handle @cdn {
+                reverse_proxy 127.0.0.1:8787
+              }
+              handle {
+                respond "forbidden" 403
+              }
+            }
+            EOF
+            sed -i "s/ORIGIN_HOST/$ORIGIN/" /etc/caddy/Caddyfile
+
+            cat > /etc/systemd/system/mobdaw.service <<'EOF'
+            [Unit]
+            Description=mobdaw server (API + collaboration)
+            After=network-online.target var-lib-mobdaw.mount
+            Wants=network-online.target
+            RequiresMountsFor=/var/lib/mobdaw
+            ConditionPathExists=/opt/mobdaw/current/main.mjs
+
+            [Service]
+            User=mobdaw
+            EnvironmentFile=/etc/mobdaw.env
+            WorkingDirectory=/var/lib/mobdaw
+            ExecStart=/usr/local/bin/node --enable-source-maps /opt/mobdaw/current/main.mjs
+            Restart=always
+            RestartSec=2
+            TimeoutStopSec=20
+            NoNewPrivileges=true
+            ProtectSystem=strict
+            ReadWritePaths=/var/lib/mobdaw/db
+            ProtectHome=true
+            PrivateTmp=true
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            cat > /etc/systemd/system/caddy.service <<'EOF'
+            [Unit]
+            Description=Caddy (TLS origin for mobdaw)
+            After=network-online.target var-lib-mobdaw.mount
+            Wants=network-online.target
+            RequiresMountsFor=/var/lib/mobdaw
+
+            [Service]
+            User=caddy
+            Environment=HOME=/var/lib/mobdaw/caddy XDG_DATA_HOME=/var/lib/mobdaw/caddy XDG_CONFIG_HOME=/var/lib/mobdaw/caddy
+            EnvironmentFile=/etc/caddy/caddy.env
+            ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+            Restart=always
+            AmbientCapabilities=CAP_NET_BIND_SERVICE
+            CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+            NoNewPrivileges=true
+            LimitNOFILE=65536
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            # nightly backup: a consistent copy (VACUUM INTO) of the database to s3://BUCKET/backups/
+            cat > /usr/local/bin/mobdaw-backup <<EOF
+            #!/bin/bash
+            set -euo pipefail
+            f=/tmp/mobdaw-\$(date +%F).db
+            rm -f "\$f"
+            /usr/local/bin/node -e "new (require('node:sqlite').DatabaseSync)('/var/lib/mobdaw/db/mobdaw.db').exec(\"VACUUM INTO '\$f'\")"
+            aws s3 cp --only-show-errors "\$f" "s3://$BUCKET/backups/\$(basename "\$f")"
+            rm -f "\$f"
+            EOF
+            chmod 755 /usr/local/bin/mobdaw-backup
+            cat > /etc/systemd/system/mobdaw-backup.service <<'EOF'
+            [Unit]
+            Description=mobdaw database backup to S3
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/bin/mobdaw-backup
+            EOF
+            cat > /etc/systemd/system/mobdaw-backup.timer <<'EOF'
+            [Unit]
+            Description=nightly mobdaw database backup
+            [Timer]
+            OnCalendar=*-*-* 04:17:00
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+            EOF
+
+            # the latest release, if one has been deployed (a fresh stack has none until deploy-server.sh runs)
+            if aws s3 cp --only-show-errors "s3://$BUCKET/deploy/current.txt" /tmp/current.txt 2>/dev/null; then
+              REL=$(cat /tmp/current.txt)
+              if [ ! -f "/opt/mobdaw/releases/$REL/main.mjs" ]; then
+                mkdir -p "/opt/mobdaw/releases/$REL"
+                aws s3 cp --only-show-errors --recursive "s3://$BUCKET/deploy/releases/$REL/" "/opt/mobdaw/releases/$REL/"
+              fi
+              ln -sfn "/opt/mobdaw/releases/$REL" /opt/mobdaw/current
+            fi
+
+            systemctl daemon-reload
+            systemctl enable --now caddy mobdaw-backup.timer
+            systemctl enable mobdaw
+            systemctl restart caddy
+            if [ -e /opt/mobdaw/current/main.mjs ]; then systemctl restart mobdaw; fi
+            echo "bootstrap done $(date -Is)"
+          - {}
+
+  DataVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/sdf
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Instance
+      Tags:
+        - Key: project
+          Value: mobdaw-demo
+
+  OriginRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref OriginDomain
+      Type: A
+      TTL: '300'
+      ResourceRecords: [!Ref ElasticIp]
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+    Description: The server instance (Session Manager / Run Command target).
+  DataBucketName:
+    Value: !Ref DataBucket
+    Description: Samples, server releases and backups.
+  OriginDomain:
+    Value: !Ref OriginDomain
+  PublicIp:
+    Value: !Ref ElasticIp

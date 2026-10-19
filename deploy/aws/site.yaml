@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  mobdaw static demo site (daw.bitcount.com): private S3 bucket behind CloudFront (OAC),
-  ACM certificate (DNS-validated in Route 53) and A/AAAA alias records.
+  mobdaw site (daw.bitcount.com): private S3 bucket behind CloudFront (OAC), ACM certificate (DNS-validated in
+  Route 53) and A/AAAA alias records; with ServerOrigin set, /api/* and /collab* go to the cloud server (server.yaml).
   Deploy in us-east-1 (CloudFront only accepts ACM certificates from us-east-1).
 
 Parameters:
@@ -12,6 +12,23 @@ Parameters:
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     Description: Route 53 hosted zone that contains DomainName (e.g. the bitcount.com zone).
+  # The cloud server (deploy/aws/server.yaml). Empty: a static site only (no accounts, cloud projects or collaboration).
+  ServerOrigin:
+    Type: String
+    Default: ''
+    Description: Host name of the mobdaw server (e.g. origin.daw.bitcount.com); /api/* and /collab* go there.
+  OriginSecret:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Sent to the server as X-Mobdaw-Origin, which refuses requests without it (only CloudFront can reach it).
+  SamplesHost:
+    Type: String
+    Default: ''
+    Description: The samples bucket's S3 host (BUCKET.s3.REGION.amazonaws.com), which browsers fetch and upload audio from.
+
+Conditions:
+  HasServer: !Not [!Equals [!Ref ServerOrigin, '']]
 
 Rules:
   UsEast1Only:
@@ -139,7 +156,11 @@ Resources:
             ReferrerPolicy: strict-origin-when-cross-origin
             Override: true
           ContentSecurityPolicy:
-            ContentSecurityPolicy: "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+            # With the server: its WebSocket (wss: on this host) and the samples bucket (presigned GETs and PUTs).
+            ContentSecurityPolicy: !If
+              - HasServer
+              - !Sub "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data: https://${SamplesHost}; connect-src 'self' blob: data: wss://${DomainName} https://${SamplesHost}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+              - "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
             Override: true
         CustomHeadersConfig:
           Items:
@@ -172,6 +193,20 @@ Resources:
             OriginAccessControlId: !GetAtt OriginAccessControl.Id
             S3OriginConfig:
               OriginAccessIdentity: ''
+          - !If
+            - HasServer
+            - Id: server
+              DomainName: !Ref ServerOrigin
+              CustomOriginConfig:
+                OriginProtocolPolicy: https-only
+                OriginSSLProtocols: [TLSv1.2]
+                HTTPSPort: 443
+                OriginReadTimeout: 60
+                OriginKeepaliveTimeout: 60
+              OriginCustomHeaders:
+                - HeaderName: X-Mobdaw-Origin
+                  HeaderValue: !Ref OriginSecret
+            - !Ref AWS::NoValue
         DefaultCacheBehavior:
           TargetOriginId: s3-site
           ViewerProtocolPolicy: redirect-to-https
@@ -190,6 +225,31 @@ Resources:
             Compress: true
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
             ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+          # The server's API and collaboration WebSocket: never cached, everything forwarded but the Host header
+          # (managed CachingDisabled + AllViewerExceptHostHeader), every method.
+          - !If
+            - HasServer
+            - PathPattern: /api/*
+              TargetOriginId: server
+              ViewerProtocolPolicy: https-only
+              AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+              CachedMethods: [GET, HEAD]
+              Compress: true
+              CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+              OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+              ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+            - !Ref AWS::NoValue
+          - !If
+            - HasServer
+            - PathPattern: /collab*
+              TargetOriginId: server
+              ViewerProtocolPolicy: https-only
+              AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+              CachedMethods: [GET, HEAD]
+              Compress: false
+              CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+              OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            - !Ref AWS::NoValue
         # No CustomErrorResponses: the app uses hash routing (no deep links), and rewriting
         # 403/404 to index.html would turn a missing /assets/*.wasm or chunk into a 200 text/html
         # response, hiding the real error. A missing key is a plain 403 (OAC, no s3:ListBucket).

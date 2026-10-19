@@ -3,6 +3,11 @@
 #
 #   deploy/aws/deploy.sh                 # provision/update the stack, build, upload, invalidate
 #   deploy/aws/deploy.sh --skip-build    # upload the existing client/dist as is
+#   deploy/aws/deploy.sh --static        # static only, even if the cloud server stack exists
+#
+# With the cloud server deployed (deploy-server.sh, stack mobdaw-daw-bitcount-server), the site routes /api/* and
+# /collab* to it and the client is built with the cloud features (VITE_CLOUD=1): accounts, cloud projects, sharing,
+# collaboration. Without it, the site is static (projects on the device only).
 #
 # Idempotent: re-running updates the stack only if the template changed, then re-uploads.
 # Portable to macOS bash 3.2. Needs: aws cli (v2 recommended), node/npm; cargo unless --skip-wasm.
@@ -14,6 +19,9 @@ DOMAIN=${DOMAIN:-daw.bitcount.com}
 HOSTED_ZONE_ID=${HOSTED_ZONE_ID:-}
 SKIP_BUILD=0
 SKIP_WASM=0
+STATIC=0
+SERVER_STACK_NAME=${SERVER_STACK_NAME:-mobdaw-daw-bitcount-server}
+PARAM_PREFIX=${PARAM_PREFIX:-/mobdaw/daw-bitcount}
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
@@ -39,6 +47,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1 ;;
     --skip-wasm) SKIP_WASM=1 ;;
+    --static) STATIC=1 ;;
     --domain) DOMAIN=${2:?--domain needs a value}; shift ;;
     --zone-id) HOSTED_ZONE_ID=${2:?--zone-id needs a value}; shift ;;
     --stack-name) STACK_NAME=${2:?--stack-name needs a value}; shift ;;
@@ -107,10 +116,28 @@ else
   log "Updating stack $STACK_NAME ($STATUS)"
 fi
 
+# --- the cloud server, if it is deployed ----------------------------------------------------
+SERVER_PARAMS=()
+CLOUD=0
+if [ "$STATIC" -eq 0 ]; then
+  SERVER_ORIGIN=$(aws cloudformation describe-stacks --stack-name "$SERVER_STACK_NAME" \
+    --query "Stacks[0].Outputs[?OutputKey=='OriginDomain'].OutputValue" --output text 2>/dev/null || true)
+  if [ -n "$SERVER_ORIGIN" ] && [ "$SERVER_ORIGIN" != None ]; then
+    SERVER_BUCKET=$(aws cloudformation describe-stacks --stack-name "$SERVER_STACK_NAME" \
+      --query "Stacks[0].Outputs[?OutputKey=='DataBucketName'].OutputValue" --output text)
+    ORIGIN_SECRET=$(aws ssm get-parameter --with-decryption --name "$PARAM_PREFIX/origin-secret" --query Parameter.Value --output text)
+    SERVER_PARAMS=("ServerOrigin=$SERVER_ORIGIN" "OriginSecret=$ORIGIN_SECRET" "SamplesHost=$SERVER_BUCKET.s3.$REGION.amazonaws.com")
+    CLOUD=1
+    echo "cloud server: $SERVER_ORIGIN (samples: $SERVER_BUCKET)"
+  else
+    echo "no cloud server stack ($SERVER_STACK_NAME): static site"
+  fi
+fi
+
 aws cloudformation deploy \
   --stack-name "$STACK_NAME" \
   --template-file "$TEMPLATE" \
-  --parameter-overrides "DomainName=$DOMAIN" "HostedZoneId=$HOSTED_ZONE_ID" \
+  --parameter-overrides "DomainName=$DOMAIN" "HostedZoneId=$HOSTED_ZONE_ID" ${SERVER_PARAMS[@]+"${SERVER_PARAMS[@]}"} \
   --tags project=mobdaw-demo \
   --no-fail-on-empty-changeset \
   || die "stack deploy failed; see: aws cloudformation describe-stack-events --stack-name $STACK_NAME --region $REGION --max-items 20"
@@ -138,8 +165,13 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
   fi
   [ -f "$REPO_ROOT/client/src/audio/wasm/engine.wasm" ] \
     || die "client/src/audio/wasm/engine.wasm is missing; run without --skip-wasm (needs cargo + wasm32-unknown-unknown)"
-  log "Building the client (BASE_PATH=/)"
-  (cd "$REPO_ROOT/client" && BASE_PATH=/ npx vite build)
+  if [ "$CLOUD" -eq 1 ]; then
+    log "Building the client (BASE_PATH=/, VITE_CLOUD=1)"
+    (cd "$REPO_ROOT/client" && BASE_PATH=/ VITE_CLOUD=1 npx vite build)
+  else
+    log "Building the client (BASE_PATH=/, static)"
+    (cd "$REPO_ROOT/client" && BASE_PATH=/ VITE_CLOUD= npx vite build)
+  fi
 fi
 
 [ -f "$DIST/index.html" ] || die "$DIST/index.html not found; build first (drop --skip-build)"

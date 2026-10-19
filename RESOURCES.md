@@ -1,81 +1,66 @@
 # Cloud resources
 
-Inventory of the cloud resources mobdaw provisions. Everything below is created by the one
-CloudFormation stack in [`deploy/aws/site.yaml`](deploy/aws/site.yaml), deployed by
-[`deploy/aws/deploy.sh`](deploy/aws/deploy.sh). How-to: [`docs/deploy-daw.bitcount.com.md`](docs/deploy-daw.bitcount.com.md).
+Inventory of what mobdaw provisions for **https://daw.bitcount.com/**. There are two CloudFormation stacks in
+`us-east-1` (CloudFront only uses ACM certificates from us-east-1):
 
-> **Status: not yet created.** The stack was written and tested offline in a sandbox whose
-> network policy blocked every AWS endpoint (`*.amazonaws.com`), so nothing has been
-> provisioned yet. To create it, from the repo root, with AWS credentials for the account that
-> owns the `bitcount.com` hosted zone:
->
-> ```sh
-> deploy/aws/deploy.sh
-> ```
-
-| | |
-|---|---|
-| Stack | `mobdaw-daw-bitcount` |
-| Region | `us-east-1` (required: CloudFront only uses ACM certificates from us-east-1) |
-| Site | https://daw.bitcount.com/ (static client only; no server, no sign-in/cloud features) |
-| Tag | `project=mobdaw-demo` on the stack, propagated to every taggable resource |
-
-## Resources in the stack
-
-| Logical name | Type | Purpose | Demo cost / month |
+| Stack | Template | Deployed by | What |
 |---|---|---|---|
-| `SiteBucket` | `AWS::S3::Bucket` | Private bucket holding `client/dist` (~1 MB). Block Public Access on, SSE-S3 (AES256, bucket key), bucket-owner-enforced (no ACLs), versioning off. Name generated: `mobdaw-daw-bitcount-sitebucket-<random>`. | < $0.01 storage; GETs from CloudFront $0.0004 / 1k |
-| `SiteBucketPolicy` | `AWS::S3::BucketPolicy` | Lets only this CloudFront distribution (OAC, `AWS:SourceArn`) `s3:GetObject`; denies non-TLS access. | free |
-| `Certificate` | `AWS::CertificateManager::Certificate` | Public TLS cert for `daw.bitcount.com`, DNS-validated: CloudFormation writes the `_<hash>.daw.bitcount.com` CNAME into the zone and waits until ISSUED; ACM auto-renews it. | free |
-| `OriginAccessControl` | `AWS::CloudFront::OriginAccessControl` | SigV4-signs CloudFront's requests to S3 (OAC, not legacy OAI). | free |
-| `RootCachePolicy` | `AWS::CloudFront::CachePolicy` | Default behaviour (index.html, favicons): TTL 0-300 s honouring the origin's `Cache-Control: no-cache`; gzip + brotli. | free |
-| `SecurityHeadersPolicy` | `AWS::CloudFront::ResponseHeadersPolicy` | HSTS, nosniff, `X-Frame-Options: DENY`, Referrer-Policy, CSP, Permissions-Policy, COOP on every response. | free |
-| `Distribution` | `AWS::CloudFront::Distribution` | CDN for `daw.bitcount.com`: HTTP/2+3, IPv6, redirect-to-https, TLS 1.2+, PriceClass_100 (NA + EU edges), compression, root object `index.html`; `/assets/*` uses the managed `CachingOptimized` policy (1 year; hashed file names). | free tier: 1 TB out + 10M requests always free; a demo stays at $0 |
-| `RecordA` | `AWS::Route53::RecordSet` | `daw.bitcount.com` A alias → distribution. | free (alias queries to CloudFront are free) |
-| `RecordAAAA` | `AWS::Route53::RecordSet` | `daw.bitcount.com` AAAA alias → distribution. | free |
+| `mobdaw-daw-bitcount` | [`deploy/aws/site.yaml`](deploy/aws/site.yaml) | [`deploy/aws/deploy.sh`](deploy/aws/deploy.sh) | the client (S3 + CloudFront), and the routing of `/api/*` and `/collab*` to the server |
+| `mobdaw-daw-bitcount-server` | [`deploy/aws/server.yaml`](deploy/aws/server.yaml) | [`deploy/aws/deploy-server.sh`](deploy/aws/deploy-server.sh) | the cloud server: accounts, cloud projects, sharing, collaboration, sample storage |
 
-Outside the stack but touched by it:
+Every resource is tagged `project=mobdaw-demo` where the type supports tags. How-to: [`docs/deploy-daw.bitcount.com.md`](docs/deploy-daw.bitcount.com.md).
 
-- **Hosted zone `bitcount.com`** (pre-existing, not managed here): $0.50/month whether or not this stack exists.
-- **ACM validation CNAME** `_<hash>.daw.bitcount.com` in that zone: written by CloudFormation for the certificate. It may stay behind after the stack is deleted; it is harmless and can be removed by hand.
-- **Objects in `SiteBucket`**: uploaded by `deploy.sh` (`aws s3 sync`), not by CloudFormation; `teardown.sh` empties the bucket before deleting the stack.
-- **Managed cache policy `CachingOptimized`** (`658327ea-f89d-4fab-a63d-7e88639e58f6`): AWS-owned, referenced only.
-- **CloudFront invalidations**: one per deploy (2 paths); the first 1,000 paths/month are free.
+> **Status: live (2026-10-19).** Both stacks are created. The server runs release `20261019-073514-54725d7`.
 
-Expected total for a low-traffic demo: **≈ $0.00-0.05 / month** on top of the existing hosted zone.
+## Site stack: `mobdaw-daw-bitcount`
 
-## Provisioned
+| Resource | Type | Physical id | Purpose | Cost / month |
+|---|---|---|---|---|
+| `SiteBucket` | S3 bucket | `mobdaw-daw-bitcount-sitebucket-rbrrv2gn1wkv` | the built client (~2 MB). Private, SSE-S3, reachable only through CloudFront (OAC). | < $0.01 |
+| `SiteBucketPolicy` | S3 bucket policy | (on the bucket) | only this distribution may `s3:GetObject`; non-TLS access is denied | free |
+| `Certificate` | ACM certificate | `…certificate/4988e104-6b84-45be-841f-c762e312a3f1` | TLS for daw.bitcount.com, DNS-validated, auto-renewed | free |
+| `OriginAccessControl` | CloudFront OAC | `E1SZDJ8YR9L4CX` | signs CloudFront's requests to the site bucket | free |
+| `RootCachePolicy` | CloudFront cache policy | `17fa4ec3-…` | index.html etc.: 0-300 s, honouring `no-cache` | free |
+| `SecurityHeadersPolicy` | CloudFront response headers policy | `a4224757-…` | HSTS, CSP (with the server: `wss://` and the samples bucket allowed), COOP, nosniff, frame-deny, Permissions-Policy | free |
+| `Distribution` | CloudFront distribution | `EQ8ATSG30JNNC` | the CDN. `/*` comes from S3. `/assets/*` is cached a year. `/api/*` and `/collab*` go uncached to the server origin with the origin secret header. | free tier: 1 TB + 10M requests |
+| `RecordA` / `RecordAAAA` | Route 53 alias records | `daw.bitcount.com` | → the distribution | free |
 
-| Resource | Physical id | Status |
+## Server stack: `mobdaw-daw-bitcount-server`
+
+| Resource | Type | Physical id | Purpose | Cost / month |
+|---|---|---|---|---|
+| `Instance` | EC2 `t4g.small` (arm64, Amazon Linux 2023) | `i-08da489fc9003bf11` | Node 24 server (API + Hocuspocus WebSocket) behind Caddy (TLS, Let's Encrypt). IMDSv2 only, no SSH: managed with Session Manager / Run Command. | ~$12.26 |
+| (root volume) | EBS gp3 8 GB, encrypted | (on the instance) | OS, Node, Caddy, releases. Disposable. | ~$0.64 |
+| `DataVolume` | EBS gp3 10 GB, encrypted | `vol-04c2f2e441cf37b6b` | SQLite database and Caddy certificates at `/var/lib/mobdaw`. Outlives the instance, and is **snapshotted** if the stack replaces or deletes it. | ~$0.80 |
+| `ElasticIp` | Elastic IP | `32.194.218.127` | the origin's fixed address | ~$3.65 (public IPv4) |
+| `OriginRecord` | Route 53 A record | `origin.daw.bitcount.com` | → the Elastic IP. CloudFront's origin, and the name of Caddy's certificate. | free |
+| `DataBucket` | S3 bucket | `mobdaw-daw-bitcount-server-databucket-nhrg8emlkl3e` | `samples/` (audio, uploaded and downloaded by browsers with presigned URLs; CORS for daw.bitcount.com), `deploy/` (server releases, old ones expire after 90 days), `backups/` (nightly SQLite copies, expire after 30 days). Private, SSE-S3, TLS only. **Retained** if the stack is deleted. | $0.023/GB stored |
+| `DataBucketPolicy` | S3 bucket policy | (on the bucket) | denies non-TLS access | free |
+| `InstanceRole` / `InstanceProfile` | IAM | `mobdaw-daw-bitcount-server-InstanceRole-…` | SSM managed-instance core. Read/write/delete `samples/*`, write `backups/*`, read `deploy/*`, list the bucket, read the two parameters below. | free |
+| `Vpc`, `Subnet`, `InternetGateway`, `RouteTable`, `DefaultRoute`, `SubnetRoutes` | VPC networking | `vpc-0d50f309628505cdf`, `subnet-0611aa870de2b9828`, `igw-0fcae6c32215dc7b1`, `rtb-081833a04a8fcbfd7` | the account has no default VPC: one public subnet (10.42.1.0/24), no NAT | free |
+| `SecurityGroup` | security group | `sg-0f7acdc166b8591e2` | inbound 80/443 only (Let's Encrypt and CloudFront). Caddy refuses requests without the origin secret. | free |
+
+## Outside the stacks
+
+| What | Where | Notes |
 |---|---|---|
-| Stack `mobdaw-daw-bitcount` (us-east-1) | — | pending first run |
-| `SiteBucket` | — | pending first run |
-| `SiteBucketPolicy` | — | pending first run |
-| `Certificate` | — | pending first run |
-| `OriginAccessControl` | — | pending first run |
-| `RootCachePolicy` | — | pending first run |
-| `SecurityHeadersPolicy` | — | pending first run |
-| `Distribution` | — | pending first run |
-| `RecordA` / `RecordAAAA` | — | pending first run |
+| Hosted zone `bitcount.com` | Route 53 | Pre-existing, not managed here ($0.50/month whether or not these stacks exist). |
+| ACM validation CNAME `_<hash>.daw.bitcount.com` | that zone | Written by CloudFormation for the certificate; may remain after a teardown (harmless). |
+| `/mobdaw/daw-bitcount/session-secret` | SSM Parameter Store (SecureString) | Signs sessions. Made once by `deploy-server.sh`. Rotating it signs everyone out. |
+| `/mobdaw/daw-bitcount/origin-secret` | SSM Parameter Store (SecureString) | The `X-Mobdaw-Origin` value shared by CloudFront and Caddy. To rotate it: put a new value, re-run `deploy-server.sh` (the instance re-reads it on bootstrap; or restart Caddy after editing `/etc/caddy/caddy.env`), then `deploy.sh`. |
+| Site bucket objects | `SiteBucket` | Uploaded by `deploy.sh`, not CloudFormation. `teardown.sh` empties the bucket. |
+| Server releases | `DataBucket/deploy/` | Uploaded by `deploy-server.sh`. |
+| Let's Encrypt certificate for `origin.daw.bitcount.com` | the data volume (`/var/lib/mobdaw/caddy`) | Renewed by Caddy. |
+| CloudFront invalidations | per site deploy | The first 1,000 paths a month are free. |
 
-After the first run, fill in the physical ids with the first command below.
+**Expected total: about $17-18 a month**, almost all of it the instance and its public IPv4 address. S3 and
+CloudFront add pennies for a small group of users.
 
-## Seeing them
+**Cheaper options:**
+- `INSTANCE_TYPE=t4g.micro deploy/aws/deploy-server.sh` (1 GB, ~$6/month) is fine for a handful of users.
+- A Savings Plan cuts the instance cost by about a third.
 
-```sh
-aws cloudformation describe-stack-resources --stack-name mobdaw-daw-bitcount --region us-east-1 \
-  --query 'StackResources[].[LogicalResourceId,ResourceType,PhysicalResourceId,ResourceStatus]' --output table
-aws cloudformation describe-stacks --stack-name mobdaw-daw-bitcount --region us-east-1 --query 'Stacks[0].Outputs'
-```
-
-Or by tag, across services: `aws resourcegroupstaggingapi get-resources --tag-filters Key=project,Values=mobdaw-demo --region us-east-1`
-(CloudFront appears there only via us-east-1, which is where this stack lives anyway).
-
-## Deleting them
-
-```sh
-deploy/aws/teardown.sh      # prompts for the stack name; empties the bucket, deletes the stack and waits
-```
-
-CloudFront has to disable the distribution before deleting it, so the delete takes ~5-15 minutes.
-Then optionally remove the leftover `_<hash>.daw.bitcount.com` validation CNAME from the zone.
+**Teardown:**
+- `deploy/aws/teardown.sh` removes the site stack.
+- For the server, run `aws cloudformation delete-stack --stack-name mobdaw-daw-bitcount-server --region us-east-1`.
+  It keeps the data bucket and snapshots the data volume. Delete those by hand to remove all data.

@@ -39,7 +39,9 @@ export function headersFromTemplate(yaml) {
   if (/ContentTypeOptions:/.test(yaml)) h['X-Content-Type-Options'] = 'nosniff'
   h['X-Frame-Options'] = one(/FrameOption:\s*(\w+)/, 'FrameOption')
   h['Referrer-Policy'] = one(/ReferrerPolicy:\s*\n\s*ReferrerPolicy:\s*([\w-]+)/, 'ReferrerPolicy')
-  h['Content-Security-Policy'] = unquote(one(/\n\s*ContentSecurityPolicy:\s*(["'].*["'])\s*\n/, 'ContentSecurityPolicy'))
+  // a plain value, or the static branch of the `!If HasServer` (the last "default-src ..." line; the cloud one is a !Sub)
+  const csp = yaml.match(/\n\s*ContentSecurityPolicy:\s*(["'].*["'])\s*\n/)?.[1] ?? one(/\n\s*- ("default-src [^\n]*")\s*\n/, 'ContentSecurityPolicy')
+  h['Content-Security-Policy'] = unquote(csp)
   for (const m of yaml.matchAll(/- Header:\s*([\w-]+)\s*\n\s*Value:\s*(.+)\n/g)) h[m[1]] = unquote(m[2])
   return h
 }
