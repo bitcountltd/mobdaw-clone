@@ -458,6 +458,10 @@ decay envelope → gain. A one-shot.
 | gain | 3 | 0..2 | 0.5 | Smoothed. |
 
 - Velocity scales amplitude linearly. Pitch and note length are ignored: a hit always rings out.
+- **Strike.** Each hit also puts one impulse into the filter, sized `0.15 / (2·tan(π·cutoff/sr))`, so a ringing
+  low filter (kick, toms) starts on time every hit instead of swelling up from noise at a seed-dependent moment
+  (that varied by up to ~50 ms). Below 150 Hz of filter bandwidth (`2·damping·cutoff`) the excitation crossfades
+  from noise to the impulse (noise × √w, impulse × √(1−w), w = bandwidth/150 Hz); wider filters are all noise.
 - **Monophonic.** A new hit restarts the envelope; the old tail keeps sounding for 64 samples, fading out
   linearly, so a retrigger never clicks. Seek and stop fade the tail the same way.
 - **Deterministic.** The noise (xorshift) is seeded from the note's start position (its timeline

@@ -5,6 +5,9 @@
 //   click a hit             remove it          drag a hit up / down    its velocity
 //   alt + click a hit       cycle its velocity: full, ¾, ½, ¼
 //   click a drum's name     hear it
+//
+// A hit is drawn where it plays, so one off the step (placed at a finer snap, recorded, imported) shows between cells,
+// outlined: it sits in, and clicks with, the cell it starts in.
 import { DEVICES, KEY_MIN, addDrum, addNote, deleteNote, isDrum, isLooping, patternTicks, updateNote, type Device, type MidiClip, type Note } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'
@@ -74,6 +77,7 @@ export function drumGrid(deps: DrumGridDeps) {
       undo.stopCapturing()
       return
     }
+    if (here.some((n) => n.tick !== tick)) deps.status?.('this hit is off the step: click removes it, click again adds one on the step')
     if (here.length) { // drag up / down for velocity; a plain click removes it
       const v0 = here[0].velocity
       let moved = false
@@ -158,10 +162,11 @@ export function drumGrid(deps: DrumGridDeps) {
       const passes = looping ? Math.ceil(extent / pattern) : 1
       for (const n of notes) {
         if (n.pitch !== key || n.tick < 0 || n.tick >= pattern) continue
+        const off = n.tick % stepT !== 0
         for (let k = 0; k < passes; k++) {
-          const tick = k * pattern + Math.floor(n.tick / stepT) * stepT
+          const tick = k * pattern + n.tick
           if (tick >= extent) break
-          const hit = h('i', { className: k ? 'dg-hit rep' : 'dg-hit' })
+          const hit = h('i', { className: `dg-hit${k ? ' rep' : ''}${off ? ' off' : ''}` })
           hit.style.left = `${px(tick) + 1}px`
           hit.style.width = `${Math.max(2, px(stepT) - 3)}px`
           hit.style.setProperty('--v', String(n.velocity))

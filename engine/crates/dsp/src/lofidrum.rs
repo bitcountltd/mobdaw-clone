@@ -11,6 +11,16 @@
 //! strike (its own noise and filter state) and fades out linearly over [`DECLICK`] samples, so
 //! a retrigger never clicks. At most two strikes sound at once, and nothing allocates.
 //!
+//! # Strike
+//! Noise alone makes a ringing (narrow, low) filter swell up at a random moment: a 58 Hz kick
+//! at full resonance took anywhere from 3 to 55 ms to reach half its peak, depending on the
+//! seed, which is heard as sloppy timing. So each hit also adds one impulse to the filter
+//! input, sized `PING / (2g)` (`g = tan(pi fc / sr)`): through a resonant low-pass that rings
+//! at about `PING`, the same on every hit. The noise would still swell over it, so below
+//! [`FULL_NOISE_HZ`] of bandwidth (`2 * damping * fc`) the excitation crossfades from noise to
+//! the impulse at constant power (`w = bw / FULL_NOISE_HZ`: noise `sqrt(w)`, impulse
+//! `sqrt(1 - w)`). Hats, snares and claps are wider and stay all noise.
+//!
 //! # Determinism
 //! The noise is a xorshift generator seeded from the note's start position (a timeline
 //! sample), so the same hit at the same place renders the same samples on every client and in
@@ -24,6 +34,10 @@ use crate::util::flush_denormal;
 pub const SUB_BLOCK: usize = 32;
 /// The old tail's fade-out when a hit retriggers, in samples.
 pub const DECLICK: u32 = 64;
+/// The level the strike impulse rings at through a resonant low-pass (see "Strike").
+pub const PING: f32 = 0.15;
+/// Filter bandwidth (Hz) from which a hit is all noise; narrower ones crossfade to the impulse.
+pub const FULL_NOISE_HZ: f32 = 150.0;
 /// Below this the envelope is treated as finished.
 const SILENT: f32 = 1e-4;
 
@@ -40,6 +54,11 @@ const DAMPING_BUTTERWORTH: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// Damping at resonance 1 (Q = 12.5): the filter rings.
 const DAMPING_RINGING: f32 = 0.04;
 
+/// The SVF damping for a resonance in 0..1 (Butterworth at 0, ringing at 1).
+fn damping(res: f32) -> f32 {
+    DAMPING_BUTTERWORTH * (DAMPING_RINGING / DAMPING_BUTTERWORTH).powf(res)
+}
+
 /// One strike: a noise stream through its own filter, under its own envelope.
 #[derive(Clone)]
 struct Strike {
@@ -47,11 +66,15 @@ struct Strike {
     rng: u32,
     env: f32,
     velocity: f32,
+    /// Added to the next input sample only: the strike impulse (see "Strike").
+    ping: f32,
+    /// The noise's level at the filter input (see "Strike").
+    noise_gain: f32,
 }
 
 impl Strike {
     fn silent() -> Self {
-        Self { svf: Svf::new(), rng: 1, env: 0.0, velocity: 0.0 }
+        Self { svf: Svf::new(), rng: 1, env: 0.0, velocity: 0.0, ping: 0.0, noise_gain: 0.0 }
     }
 
     fn live(&self) -> bool {
@@ -60,7 +83,8 @@ impl Strike {
 
     #[inline(always)]
     fn step<const FADE: bool>(&mut self, k: f32, y: &mut f32, fade_left: u32, i: usize) {
-        let x = self.noise();
+        let x = self.noise() * self.noise_gain + self.ping;
+        self.ping = 0.0;
         let mut v = self.svf.process(x).lp() * self.env * self.velocity;
         if FADE {
             v *= fade_left.saturating_sub(i as u32) as f32 / DECLICK as f32;
@@ -165,10 +189,21 @@ impl LofiDrum {
     }
 
     /// Hit the drum. `start` is the note's start on the caller's clock (timeline samples); it
-    /// seeds the noise. A hit still ringing is faded out over [`DECLICK`] samples.
+    /// seeds the noise; the strike impulse is sized from the cutoff now. A hit still ringing is faded out over [`DECLICK`] samples.
     pub fn note_on(&mut self, velocity: f32, start: i64) {
         self.fade_current();
-        self.cur = Strike { svf: Svf::new(), rng: seed_from(start), env: 1.0, velocity: velocity.clamp(0.0, 1.0) };
+        let cutoff = self.cutoff_log2.value().exp2().clamp(CUTOFF_MIN as f64, 0.499 * self.sample_rate as f64);
+        let g = (std::f64::consts::PI * cutoff / self.sample_rate as f64).tan() as f32;
+        let bandwidth = 2.0 * damping(self.resonance.value() as f32) * cutoff as f32;
+        let w = (bandwidth / FULL_NOISE_HZ).min(1.0);
+        self.cur = Strike {
+            svf: Svf::new(),
+            rng: seed_from(start),
+            env: 1.0,
+            velocity: velocity.clamp(0.0, 1.0),
+            ping: PING * (1.0 - w).sqrt() / (2.0 * g),
+            noise_gain: w.sqrt(),
+        };
     }
 
     /// Fade out whatever is ringing (transport stop / seek).
@@ -216,7 +251,7 @@ impl LofiDrum {
         self.resonance.advance(len);
         let g1 = self.gain.advance(len) as f32;
         let dg = (g1 - g0) / len as f32;
-        let damping = DAMPING_BUTTERWORTH * (DAMPING_RINGING / DAMPING_BUTTERWORTH).powf(res);
+        let damping = damping(res);
         // 60 dB over the decay time.
         let k = (-6.907_755_3 / (self.decay_ms * 1e-3 * self.sample_rate)).exp();
 
@@ -318,6 +353,29 @@ mod tests {
         assert!(max_step < 0.8, "step {max_step}");
         // after the fade only one strike remains
         assert!(!d.old.live() || d.fade_left == 0);
+    }
+
+    /// The time `x` first reaches half its peak.
+    fn half_peak(x: &[f32]) -> usize {
+        let pk = x.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        x.iter().position(|v| v.abs() >= pk * 0.5).unwrap()
+    }
+
+    #[test]
+    fn a_ringing_low_drum_starts_at_the_same_moment_whatever_the_seed() {
+        // a kit kick: noise alone put its half-peak anywhere from 3 to 55 ms after the note
+        let onsets: Vec<usize> = (0..40)
+            .map(|s| {
+                let mut d = LofiDrum::new(SR);
+                d.set_param_smooth(P_CUTOFF, 58.0, 0.0);
+                d.set_param_smooth(P_RESONANCE, 1.0, 0.0);
+                d.set_param_smooth(P_DECAY_MS, 380.0, 0.0);
+                half_peak(&hit(&mut d, 1.0, s * 12_345, 12_000))
+            })
+            .collect();
+        let (lo, hi) = (*onsets.iter().min().unwrap(), *onsets.iter().max().unwrap());
+        assert!(hi - lo < 48, "half-peak spread {} samples ({lo}..{hi})", hi - lo);
+        assert!(hi < 240, "half-peak at {hi} samples");
     }
 
     #[test]
