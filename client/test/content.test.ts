@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import {
-  DEVICES, FINNWAVE, LOFI_DRUM, MASTER_TRACK, SCHEMA_VERSION, TRACK_COLORS, addTrack, clipsMap, devicesMap, getClips, getDevices,
+  DEVICES, DRUM_SYNTH, FINNWAVE, LOFI_DRUM, MASTER_TRACK, SCHEMA_VERSION, TRACK_COLORS, addTrack, clipsMap, devicesMap, getClips, getDevices,
   getLanes, getLoop, getNotes, getPoints, getTempo, getTracks, isDrum, lanesMap, notesMap, patternTicks, pointsMap, samplesPerBar, sweepOrphans,
   tracksMap, metaMap, type Device,
 } from '@mobdaw/shared'
@@ -41,13 +41,13 @@ describe('presets', () => {
     expect(new Set(INSTRUMENT_PRESETS.map((p) => p.category))).toEqual(new Set(['keys', 'bass', 'lead', 'pad', 'pluck', 'fx']))
   })
 
-  it('drum kits cover the GM keys with lofi drum params in range', () => {
+  it('drum kits cover the GM keys with drum synth params in range', () => {
     expect(DRUM_KITS.length).toBeGreaterThanOrEqual(4)
     for (const k of DRUM_KITS) {
       const keys = k.drums.map((d) => d.key)
       expect(new Set(keys).size).toBe(keys.length)
       for (const key of [36, 37, 38, 39, 42, 45, 46, 47]) expect(keys).toContain(key)
-      for (const d of k.drums) inRange(LOFI_DRUM, d.params)
+      for (const d of k.drums) inRange(DRUM_SYNTH, d.params)
     }
   })
 

@@ -448,7 +448,7 @@ client diverged, so we don't.
 
 - **Drum grid**: a MIDI clip with `view: 'drums'` opens a step grid instead of the piano roll (same notes, same
   looping, same export). Rows are the track's instruments whose range is a single note (`keyLo === keyHi`), in
-  synths-lane order; wide-range synths get no row. "+ add drum" adds a lofi drum on the lowest unused key from 36 up.
+  synths-lane order; wide-range synths get no row. "+ add drum" adds a drum synth (kind 9) on the lowest unused key from 36 up.
   A cell toggles a one-step, velocity-1 note. Notes at pitches without a single-note instrument are hidden but kept.
 - **Several instruments per track**: a note goes to every non-bypassed instrument whose range contains its pitch;
   their outputs are summed before the track's effect chain.

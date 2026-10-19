@@ -212,7 +212,7 @@ export function drumGrid(deps: DrumGridDeps) {
       }
       return row
     })
-    const add = h('button', { className: 'dg-add', title: 'add a lofi drum on the next free key', disabled: readOnly, onclick: () => addDrum(doc, c.trackId) }, '+ add drum')
+    const add = h('button', { className: 'dg-add', title: 'add a drum on the next free key', disabled: readOnly, onclick: () => addDrum(doc, c.trackId) }, '+ add drum')
     add.onpointerdown = (e) => e.stopPropagation()
     const empty = drums.length ? null : h('div', { className: 'dg-empty' }, 'This track has no drums yet. Add one, or load a kit from the devices tab.')
     names.replaceChildren(...nameRows, add)

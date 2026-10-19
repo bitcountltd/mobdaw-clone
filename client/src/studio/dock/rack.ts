@@ -1,18 +1,22 @@
 // The dock's devices tab: the focused track's rack, a row of hardware-like panels that scrolls sideways. A MIDI track's
 // instruments come first (its drums as one kit panel of pads, then any synths), then the effects in chain order; the
 // master shows the effects on the whole mix. Presets come from content/presets.ts, and anything from the browser can
-// be dropped onto the rack.
+// be dropped onto the rack. Pressing a drum's pad selects it: a drum synth then shows all its params in the drum
+// editor next to the kit (ui/drumEditor.ts), with its sounds from content/drumSounds.ts.
 import {
-  DEVICES, EFFECTS, FINNWAVE, LOFI_DRUM, MASTER_TRACK, SIMPLE_FILTER, addDevice, addDrum, deleteDevice, getDevices, getTracks, isDrum, orderBetween,
+  DEVICES, DRUM_SYNTH, EFFECTS, FINNWAVE, MASTER_TRACK, SIMPLE_FILTER, addDevice, addDrum, deleteDevice, getDevices, getTracks, isDrum, orderBetween,
   setParam, trackColor, updateDevice, type AwarenessState, type Device, type ParamTarget,
 } from '@mobdaw/shared'
 import {
   DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, addEffectPreset, addInstrument, applyInstrumentPreset, clampParams, replaceDrumKit,
   type InstrumentCategory,
 } from '../../content/presets'
+import { applyDrumSound, soundMatching, soundNearest, soundStep } from '../../content/drumPick'
+import { DRUM_CATEGORIES, DRUM_SOUNDS, drumSound, type DrumSound } from '../../content/drumSounds'
 import { h } from '../../dom'
 import { icon } from '../../theme/icons'
 import { deviceCard, drumPad, type CardDeps } from '../../ui/devices'
+import { drumEditor } from '../../ui/drumEditor'
 import type { FilterChange, FilterMember } from '../../ui/filterCurve'
 import { popoverPanel } from '../../ui/popover'
 import { applyDrop, canDrop, hasPayload, readDragPayload } from '../drops'
@@ -30,6 +34,7 @@ function sectionMenu(anchor: HTMLElement, sections: { label: string; items: Menu
     ...s.items.map((it) => h('button', { className: `item${it.on ? ' current' : ''}`, role: 'menuitem', title: it.title, onclick: () => (close(), it.run()) },
       h('span', {}, it.label), it.hint ? h('span', { className: 'kbd-hint' }, it.hint) : null)))))
   body.style.setProperty('--cols', String(cols))
+  body.style.setProperty('--cols-narrow', String(Math.min(cols, 2)))
   body.addEventListener('keydown', (e) => {
     const btns = [...body.querySelectorAll<HTMLButtonElement>('button')]
     const i = btns.indexOf(document.activeElement as HTMLButtonElement)
@@ -46,6 +51,10 @@ const CATEGORIES: [InstrumentCategory, string][] = [['keys', 'Keys'], ['bass', '
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 type Card = ReturnType<typeof deviceCard> | ReturnType<typeof drumPad>
 
+/** The drum a track's drum editor shows: the one picked on it, else its first drum synth, else its first drum. */
+export const selectedDrum = (drums: Device[], picked: string | undefined): Device | undefined =>
+  drums.find((d) => d.id === picked) ?? drums.find((d) => d.type === DRUM_SYNTH) ?? drums[0]
+
 export function mountRack(st: Studio) {
   const { doc, undo, readOnly } = st
   const cards = new Map<string, Card>()
@@ -58,10 +67,17 @@ export function mountRack(st: Studio) {
   const pads = h('div', { className: 'kit-pads' })
   const kitName = h('span', { className: 'kit-count dim' })
   const kitMenu = h('button', { className: 'unit-preset', title: 'replace the drums with a kit', disabled: readOnly }, h('span', {}, 'load kit'), icon('chevron-down', 12))
-  const kitAdd = h('button', { className: 'btn sm', title: 'add a lofi drum on the next free key', disabled: readOnly }, icon('plus', 14), 'drum')
+  const kitAdd = h('button', { className: 'btn sm', title: 'add a drum on the next free key', disabled: readOnly }, icon('plus', 14), 'drum')
   const kit = h('div', { className: 'unit kit' },
     h('div', { className: 'unit-head' }, h('span', { className: 'unit-name static' }, 'Drum kit'), kitName, kitMenu, h('span', { className: 'grow' }), kitAdd),
     pads)
+  // the kit and the drum editor of its selected drum sit together (no signal arrow between them)
+  const kitWrap = h('div', { className: 'kit-wrap' }, kit)
+  /** The drum each track's editor shows (by track id; in memory only). */
+  const selDrum = new Map<string, string>()
+  /** The sound last put on each drum (by device id): the arrows step on from it after its values are changed. */
+  const lastSound = new Map<string, string>()
+  let editor: { id: string; card: ReturnType<typeof drumEditor> } | null = null
   const addSynth = slot('add an instrument', () => instrumentMenu(addSynth))
   const synths = h('div', { className: 'rack-row' })
   const synthSec = h('div', { className: 'rack-sec' }, header('Instrument'), synths)
@@ -92,7 +108,7 @@ export function mountRack(st: Studio) {
     sectionMenu(anchor, [
       ...CATEGORIES.map(([cat, label]) => ({ label, items: INSTRUMENT_PRESETS.filter((x) => x.category === cat).map((p) => ({ label: p.name, run: pick(() => addInstrument(doc, id, p)) })) })),
       { label: 'Drum kits', items: DRUM_KITS.map((k) => ({ label: k.name, hint: count(k.drums.length, 'drum'), run: pick(() => replaceDrumKit(doc, id, k)) })) },
-      { label: 'Start from scratch', items: [{ label: 'Blank synth', title: 'a Finnwave synth on its default settings', run: pick(() => addDevice(doc, id, FINNWAVE)) }, { label: 'One lofi drum', run: pick(() => addDrum(doc, id)) }] },
+      { label: 'Start from scratch', items: [{ label: 'Blank synth', title: 'a Finnwave synth on its default settings', run: pick(() => addDevice(doc, id, FINNWAVE)) }, { label: 'One drum', title: 'a drum synth on the next free key', run: pick(() => addDrum(doc, id)) }] },
     ], 4)
   }
   function effectMenu(anchor: HTMLElement) {
@@ -108,13 +124,57 @@ export function mountRack(st: Studio) {
     if (!id || id === MASTER_TRACK) return
     sectionMenu(kitMenu, [{ label: 'Replace the drums with', items: DRUM_KITS.map((k) => ({ label: k.name, hint: count(k.drums.length, 'drum'), run: pick(() => replaceDrumKit(doc, id, k)) })) }], 1)
   }
-  kitAdd.onclick = () => { const id = target(); if (id && id !== MASTER_TRACK) addDrum(doc, id) }
+  kitAdd.onclick = () => {
+    const id = target()
+    if (!id || id === MASTER_TRACK) return
+    undo.stopCapturing()
+    selDrum.set(id, addDrum(doc, id)) // (the new drum opens in the editor)
+    undo.stopCapturing()
+  }
+
+  // --- drum sounds
+  let auditionOff: (() => void) | null = null
+  /** Play a drum briefly (after its sound changed). */
+  function hear(dev: Device) {
+    auditionOff?.()
+    const k = dev.keyLo ?? 60
+    st.pb?.noteLive(dev.trackId, k, 1, true)
+    const t = setTimeout(() => auditionOff?.(), 350)
+    auditionOff = () => { clearTimeout(t); st.pb?.noteLive(dev.trackId, k, 1, false); auditionOff = null }
+  }
+  function useSound(deviceId: string, s: DrumSound) {
+    pick(() => applyDrumSound(doc, deviceId, s))()
+    lastSound.set(deviceId, s.id)
+    const dev = getDevices(doc).find((x) => x.id === deviceId)
+    if (dev) hear(dev)
+  }
+  /** The sound a drum is: the one its values match, else the one last put on it, else the nearest. */
+  const soundOf = (dev: Device) => soundMatching(dev) ?? drumSound(lastSound.get(dev.id) ?? '') ?? soundNearest(dev)
+  function stepSound(deviceId: string, dir: 1 | -1) {
+    const dev = getDevices(doc).find((x) => x.id === deviceId)
+    const s = dev && soundStep(soundOf(dev), dir)
+    if (s) useSound(deviceId, s)
+  }
 
   /** The preset menu of a device, and the preset its values match. */
   function presets(dev: Device): { menu: ((anchor: HTMLElement) => void) | null; current: string | null } {
     const def = DEVICES[dev.type]
     if (!def) return { menu: null, current: null }
     const reset = { label: 'Default settings', run: () => commitMany(dev.id, Object.fromEntries(def.params.map((p) => [p.id, p.def]))) }
+    if (dev.type === DRUM_SYNTH) {
+      // exactly a sound, or a kit's take on one ("Studio kick · edited")
+      const exact = soundMatching(dev)
+      const cur = exact ?? soundNearest(dev)
+      return {
+        current: exact ? exact.name : cur ? `${cur.name} · edited` : null,
+        menu: (a) => {
+          const secs = DRUM_CATEGORIES.map(([cat, label]) => ({
+            label, items: DRUM_SOUNDS.filter((x) => x.category === cat).map((x) => ({ label: x.name, on: x.id === cur?.id, run: () => useSound(dev.id, x) })),
+          })).filter((x) => x.items.length)
+          sectionMenu(a, [...secs, { label: 'Start over', items: [{ ...reset, title: 'every param back to its default (the name stays)' }] }], Math.min(4, secs.length + 1))
+        },
+      }
+    }
     if (dev.type === FINNWAVE) {
       const cur = INSTRUMENT_PRESETS.find((p) => p.name === dev.name && same(dev, p.params))?.name ?? null
       return {
@@ -191,6 +251,19 @@ export function mountRack(st: Studio) {
       draw()
     },
     audition: (trackId, pitch, on) => st.pb?.noteLive(trackId, pitch, 1, on),
+    mirror: (d, p, v) => {
+      const c = cards.get(d)
+      if (c && 'show' in c) c.show(p, v)
+      if (editor?.id === d) editor.card.show(p, v)
+    },
+    selectDrum: (d) => {
+      const dev = getDevices(doc).find((x) => x.id === d)
+      if (!dev || selDrum.get(dev.trackId) === d) return
+      selDrum.set(dev.trackId, d)
+      draw()
+      editor?.card.el.scrollIntoView?.({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+    },
+    stepSound,
   }
 
   function findRuns(list: Device[]) {
@@ -233,6 +306,7 @@ export function mountRack(st: Studio) {
     const mine = shown ? getDevices(doc).filter((d) => d.trackId === id) : []
     const ids = new Set(mine.map((d) => d.id))
     for (const [cid, c] of cards) if (!ids.has(cid)) { c.el.remove(); cards.delete(cid) }
+    if (!shown || track?.kind !== 'midi') dropEditor()
     if (!shown) return
     const midi = track?.kind === 'midi'
     synthSec.hidden = !midi
@@ -245,8 +319,9 @@ export function mountRack(st: Studio) {
     if (midi) {
       place(pads, drums, null, null, true)
       kitName.textContent = drums.length ? count(drums.length, 'drum') : ''
-      place(synths, others, others.length || drums.length ? null : addSynth, drums.length ? kit : null)
-      if (!drums.length) kit.remove()
+      drawEditor(id!, drums)
+      place(synths, others, others.length || drums.length ? null : addSynth, drums.length ? kitWrap : null)
+      if (!drums.length) kitWrap.remove()
       ;(synthSec.querySelector('.rack-rail span') as HTMLElement).textContent = drums.length && !others.length ? 'Drums' : 'Instrument'
     }
     findRuns(effects)
@@ -255,9 +330,33 @@ export function mountRack(st: Studio) {
     fxSec.classList.toggle('empty', !effects.length)
   }
 
+  /**
+   * The selected drum (the one picked on this track, else its first drum synth, else its first drum) and, when it is a
+   * drum synth, its editor after the kit.
+   */
+  function drawEditor(trackId: string, drums: Device[]) {
+    const sel = selectedDrum(drums, selDrum.get(trackId))
+    for (const d of drums) {
+      const c = cards.get(d.id)
+      if (c && 'select' in c) c.select(d.id === sel?.id && sel.type === DRUM_SYNTH)
+    }
+    if (!sel || sel.type !== DRUM_SYNTH) return dropEditor()
+    if (editor?.id !== sel.id) {
+      dropEditor()
+      editor = { id: sel.id, card: drumEditor(sel, cardDeps) }
+      kitWrap.append(editor.card.el)
+    }
+    editor.card.update(sel, st.remoteDrags.get(sel.id) ?? NO_DRAGS, st.auto.info(sel.id))
+  }
+  function dropEditor() {
+    editor?.card.el.remove()
+    editor = null
+  }
+
   /** The playhead moved: repaint the controls a lane drives. */
   function refresh() {
     for (const [id, c] of cards) if (st.auto.infos.has(id)) c.refresh(st.auto.info(id))
+    if (editor && st.auto.infos.has(editor.id)) editor.card.refresh(st.auto.info(editor.id))
   }
 
   // drops from the browser land on the focused track (or the master)
@@ -285,5 +384,5 @@ export function mountRack(st: Studio) {
     st.on('tick', refresh),
   ]
   draw()
-  return { el, tools, destroy: () => offs.forEach((f) => f()) }
+  return { el, tools, destroy: () => { auditionOff?.(); offs.forEach((f) => f()) } }
 }

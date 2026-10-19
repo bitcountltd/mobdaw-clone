@@ -1,5 +1,5 @@
 import {
-  FINNWAVE, LOFI_DRUM, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getTempo, getTracks, metaMap, samplesPerBar, type MidiClip,
+  FINNWAVE, isDrum, addMidiClip, addNote, addTrack, getClips, getDevices, getNotes, getTempo, getTracks, metaMap, samplesPerBar, type MidiClip,
 } from '@mobdaw/shared'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
@@ -147,12 +147,12 @@ describe('files to clips', () => {
     expect(r.tracks).toHaveLength(2)
     const devs = getDevices(doc)
     expect(devs.filter((d) => d.trackId === r.tracks[0]).map((d) => [d.type, d.name])).toEqual([[FINNWAVE, 'String section']])
-    expect(devs.filter((d) => d.trackId === r.tracks[1]).every((d) => d.type === LOFI_DRUM)).toBe(true)
+    expect(devs.filter((d) => d.trackId === r.tracks[1]).every((d) => isDrum(d))).toBe(true)
     const clips = getClips(doc) as MidiClip[]
     expect(clips.map((c) => [c.start, c.bpm, c.ppq, c.lengthTicks, c.view ?? null])).toEqual([[0, 90, 960, 2880, null], [0, 90, 960, 2880, 'drums']])
     const notes = getNotes(doc)
     expect(notes.find((n) => n.clipId === clips[0].id)).toMatchObject({ tick: 960, durTicks: 960, pitch: 60, velocity: 1 })
-    expect(notes.find((n) => n.clipId === clips[1].id)?.pitch).toBe(46) // a crash onto the open hat
+    expect(notes.find((n) => n.clipId === clips[1].id)?.pitch).toBe(49) // the first kit has a crash
   })
   it('drops onto a MIDI track as one clip at the nearest bar, keeping the project tempo', () => {
     const doc = blank(120)

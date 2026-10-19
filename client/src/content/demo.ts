@@ -8,7 +8,7 @@
 //   bars 29-32  outro   A's chords once more, resolving to Fmaj9; the drums thin out and the master reverb opens up
 // The loop region (off) covers A and A', bars 5-20; a song marker starts each section. The piano's voicings move by step from chord to chord.
 import type * as Y from 'yjs'
-import { DELAY, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum, addMarker, setLoop } from '@mobdaw/shared'
+import { DELAY, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO, COMPRESSOR, addDevice, addDrum, addMarker, setLoop } from '@mobdaw/shared'
 import { MASTER_TRACK, automate, barPos, clip, initProject, rng, track, type ClipWriter, type Song } from './compose'
 import { GM, addDrumKit, addEffectPreset, addInstrument, drumKit, effectPreset, instrumentPreset } from './presets'
 
@@ -50,7 +50,7 @@ export function buildDemo(doc: Y.Doc) {
     const nudge = (beat: number, ticks = 10) => Math.max(0, beat + ((r() - 0.5) * 2 * ticks) / 960)
 
     // --- tracks (top to bottom), colours from TRACK_COLORS
-    const drums = track(s, 'drums', 'midi', { color: 4, gain: 1 })
+    const drums = track(s, 'drums', 'midi', { color: 4, gain: 0.7 })
     const bass = track(s, 'bass', 'midi', { color: 2, gain: 0.65 })
     const keys = track(s, 'rhodes', 'midi', { color: 0, gain: 0.6, pan: -0.1 })
     const pad = track(s, 'pad', 'midi', { color: 1, gain: 0.4, pan: 0.1 })
@@ -68,7 +68,7 @@ export function buildDemo(doc: Y.Doc) {
     addInstrument(doc, lead, instrumentPreset('flute-lead')!)
     addDevice(doc, lead, DELAY, {}, { 0: 0.25, 1: Math.round((0.75 * 60000) / DEMO_BPM), 2: 0.38, 3: 0.3, 4: 0.2, 5: 0, 6: 2600, 7: 0 })
     addDevice(doc, lead, REVERB, {}, { 0: 0.22, 1: 0.6, 2: 0.5, 3: 20 })
-    addDrum(doc, dust, { key: 60, name: 'crackle', params: { 0: 4500, 1: 0.1, 2: 3, 3: 0.6 } })
+    addDrum(doc, dust, { key: 60, name: 'crackle', type: LOFI_DRUM, params: { 0: 4500, 1: 0.1, 2: 3, 3: 0.6 } })
     // master: glue compression, then a little room
     addEffectPreset(doc, MASTER_TRACK, { id: 'demo-master', name: 'demo master', devices: [{ type: COMPRESSOR, params: { 0: -18, 1: 2.5, 2: 25, 3: 180, 4: 2 } }] })
     const masterVerb = addEffectPreset(doc, MASTER_TRACK, effectPreset('small-room')!)[0]

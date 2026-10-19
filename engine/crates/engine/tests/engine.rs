@@ -1758,3 +1758,51 @@ fn looping_render_matches_the_straight_render_of_each_pass() {
         assert!(err < 1e-3, "pass {k}: max error {err}");
     }
 }
+
+// ---- drum synth ------------------------------------------------------------------------------
+
+#[test]
+fn drum_synths_choke_their_group_and_a_wide_range_one_follows_the_key() {
+    let kit = |choke: f32| {
+        let mut e = Engine::new(SR);
+        e.track_upsert(1, 1, 1.0, 0.0, false, false, false);
+        // an open hat (long) on 46 and a closed hat on 42
+        for (h, key, decay) in [(1u32, 46u32, 2000.0f32), (2, 42, 40.0)] {
+            e.device_upsert(h, 1, 9, h as f64, false);
+            e.device_keys(h, key, key);
+            e.param_set(h, 0, 3.0);
+            e.param_set(h, 4, decay);
+            e.param_set(h, 21, choke);
+        }
+        e.clip_midi_upsert(1, 1, 0, 120.0, 960, 100_000.0, 0.0);
+        e.note_upsert(1, 1, 0.0, 10.0, 46, 1.0);
+        e.note_upsert(2, 1, 960.0, 10.0, 42, 1.0); // half a second later
+        e.play(0);
+        render(&mut e, 72_000).0
+    };
+    let open = kit(0.0);
+    let cut = kit(1.0);
+    assert_eq!(open[..24_000], cut[..24_000], "the same until the closed hat");
+    // the closed hat is over by 1.2 s; without the choke the open hat still rings
+    assert!(rms(&open[57_600..62_400]) > 1e-3);
+    assert!(rms(&cut[57_600..62_400]) == 0.0);
+
+    // tuned: on a key range, C5 sounds an octave over C4
+    let tuned = |pitch: u32| {
+        let mut e = Engine::new(SR);
+        e.track_upsert(1, 1, 1.0, 0.0, false, false, false);
+        e.device_upsert(1, 1, 9, 1.0, false);
+        e.device_keys(1, 0, 127);
+        for (p, v) in [(1u32, 200.0f32), (2, 0.0), (4, 3000.0), (6, 0.0), (15, 0.0)] {
+            e.param_set(1, p, v);
+        }
+        e.clip_midi_upsert(1, 1, 0, 120.0, 960, 100_000.0, 0.0);
+        e.note_upsert(1, 1, 0.0, 10.0, pitch, 1.0);
+        e.play(0);
+        let l = render(&mut e, 24_000).0;
+        let ups = (4800..24_000).filter(|&i| l[i - 1] <= 0.0 && l[i] > 0.0).count();
+        ups as f64 * SR as f64 / 19_200.0
+    };
+    assert!((tuned(60) - 200.0).abs() < 2.0, "{}", tuned(60));
+    assert!((tuned(72) - 400.0).abs() < 3.0, "{}", tuned(72));
+}

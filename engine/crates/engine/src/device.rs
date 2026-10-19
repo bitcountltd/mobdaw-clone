@@ -1,6 +1,6 @@
 //! Devices: the effect/instrument processors in a track's chain.
 
-use dsp::{CompParams, Compressor, DelayParams, LofiDrum, Ramp, Reverb, Svf, Synth, TapeDelay, TremParams, Tremolo};
+use dsp::{CompParams, Compressor, DelayParams, DrumSynth, LofiDrum, Ramp, Reverb, Svf, Synth, TapeDelay, TremParams, Tremolo};
 
 pub const KIND_FILTER: u32 = 1;
 pub const KIND_SYNTH: u32 = 2;
@@ -10,6 +10,7 @@ pub const KIND_TREMOLO: u32 = 5;
 pub const KIND_DELAY: u32 = 6;
 pub const KIND_LOFI_DRUM: u32 = 7;
 pub const KIND_EQ: u32 = 8;
+pub const KIND_DRUM_SYNTH: u32 = 9;
 
 const SMOOTH_MS: f64 = 10.0;
 
@@ -39,6 +40,7 @@ pub enum DeviceKind {
     Tremolo(Box<TremoloDevice>),
     Delay(Box<DelayDevice>),
     Lofi(Box<LofiDrum>),
+    Drum(Box<DrumSynth>),
     Eq(Box<EqDevice>),
 }
 
@@ -52,6 +54,7 @@ impl Device {
             KIND_TREMOLO => DeviceKind::Tremolo(Box::new(TremoloDevice::new(sample_rate))),
             KIND_DELAY => DeviceKind::Delay(Box::new(DelayDevice::new(sample_rate))),
             KIND_LOFI_DRUM => DeviceKind::Lofi(Box::new(LofiDrum::new(sample_rate))),
+            KIND_DRUM_SYNTH => DeviceKind::Drum(Box::new(DrumSynth::new(sample_rate))),
             KIND_EQ => DeviceKind::Eq(Box::new(EqDevice::new(sample_rate))),
             _ => DeviceKind::Unknown,
         };
@@ -59,7 +62,7 @@ impl Device {
     }
 
     pub fn is_instrument(&self) -> bool {
-        matches!(self.kind, DeviceKind::Synth(_) | DeviceKind::Lofi(_))
+        matches!(self.kind, DeviceKind::Synth(_) | DeviceKind::Lofi(_) | DeviceKind::Drum(_))
     }
 
     /// Whether this is a sounding (not bypassed) instrument whose note range holds `pitch`.
@@ -73,7 +76,27 @@ impl Device {
         match &mut self.kind {
             DeviceKind::Synth(s) => s.note_on(pitch, velocity, release_at),
             DeviceKind::Lofi(d) => d.note_on(velocity, start),
+            // a drum synth on a key range wider than one note is a tuned instrument: it follows the key from C4
+            DeviceKind::Drum(d) => {
+                let semis = if self.key_lo == self.key_hi { 0.0 } else { pitch as f32 - 60.0 };
+                d.note_on(velocity, semis, start)
+            }
             _ => {}
+        }
+    }
+
+    /// The drum synth's choke group (0: none, or not a drum synth).
+    pub fn choke_group(&self) -> u32 {
+        match &self.kind {
+            DeviceKind::Drum(d) if !self.bypass => d.choke_group(),
+            _ => 0,
+        }
+    }
+
+    /// Cut a drum synth's ringing hit (another drum of its choke group played).
+    pub fn choke(&mut self) {
+        if let DeviceKind::Drum(d) = &mut self.kind {
+            d.choke();
         }
     }
 
@@ -104,6 +127,7 @@ impl Device {
         match &mut self.kind {
             DeviceKind::Synth(s) => s.release_all(),
             DeviceKind::Lofi(d) => d.release_all(),
+            DeviceKind::Drum(d) => d.release_all(),
             _ => {}
         }
     }
@@ -125,6 +149,7 @@ impl Device {
             DeviceKind::Tremolo(t) => t.set_param(param, value),
             DeviceKind::Delay(d) => d.set_param(param, value),
             DeviceKind::Lofi(d) => d.set_param(param, value),
+            DeviceKind::Drum(d) => d.set_param(param, value),
             DeviceKind::Eq(e) => e.set_param(param, value),
             DeviceKind::Unknown => {}
         }
@@ -152,6 +177,7 @@ impl Device {
             DeviceKind::Tremolo(t) => t.set_param_smooth(param, value, s),
             DeviceKind::Delay(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Lofi(d) => d.set_param_smooth(param, value, s),
+            DeviceKind::Drum(d) => d.set_param_smooth(param, value, s),
             DeviceKind::Eq(e) => e.set_param_smooth(param, value, s),
             DeviceKind::Unknown => {}
         }
@@ -169,6 +195,7 @@ impl Device {
             DeviceKind::Delay(d) => d.mix.is_moving() || d.feedback.is_moving() || d.drive.is_moving() || d.cutoff_log2.is_moving() || d.resonance.is_moving(),
             DeviceKind::Synth(s) => s.is_ramping(),
             DeviceKind::Lofi(d) => d.is_ramping(),
+            DeviceKind::Drum(d) => d.is_ramping(),
             DeviceKind::Eq(e) => e.out_db.is_moving() || e.bands.iter().any(|b| b.freq_log2.is_moving() || b.gain_db.is_moving() || b.damping.is_moving()),
             DeviceKind::Unknown => false,
         }
@@ -180,6 +207,7 @@ impl Device {
         match &self.kind {
             DeviceKind::Synth(s) => !s.is_active(),
             DeviceKind::Lofi(d) => !d.is_active() && !d.is_ramping(),
+            DeviceKind::Drum(d) => !d.is_active() && !d.is_ramping(),
             _ => false,
         }
     }
@@ -202,7 +230,7 @@ impl Device {
             DeviceKind::Reverb(v) => v.zero_run >= v.reverb.tail_samples(v.size_max),
             DeviceKind::Delay(d) => d.is_asleep(),
             DeviceKind::Eq(e) => e.bands.iter().all(|b| b.st == [[0.0; 2]; 2]),
-            DeviceKind::Synth(_) | DeviceKind::Lofi(_) => false,
+            DeviceKind::Synth(_) | DeviceKind::Lofi(_) | DeviceKind::Drum(_) => false,
         }
     }
 
@@ -227,6 +255,7 @@ impl Device {
             DeviceKind::Tremolo(_) => matches!(param, 0 | 1 | 3),
             DeviceKind::Delay(_) => matches!(param, 0 | 2 | 4 | 6 | 7),
             DeviceKind::Lofi(_) => matches!(param, dsp::lofidrum::P_CUTOFF | dsp::lofidrum::P_RESONANCE | dsp::lofidrum::P_GAIN),
+            DeviceKind::Drum(_) => DrumSynth::is_smoothed(param),
             DeviceKind::Eq(_) => param <= 12,
             DeviceKind::Unknown => false,
         }
@@ -243,6 +272,7 @@ impl Device {
             DeviceKind::Tremolo(t) => t.reset(),
             DeviceKind::Delay(d) => d.reset(),
             DeviceKind::Lofi(d) => d.reset(),
+            DeviceKind::Drum(d) => d.reset(),
             DeviceKind::Eq(e) => e.reset(),
             DeviceKind::Unknown => {}
         }
@@ -288,6 +318,7 @@ impl Device {
                     }
                 }
             }
+            DeviceKind::Drum(d) => d.render_add(l, r),
             DeviceKind::Unknown => {}
         }
     }

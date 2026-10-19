@@ -468,6 +468,43 @@ decay envelope → gain. A one-shot.
   sample), so the same hit at the same place renders the same samples on every client and in every bounce.
 - Output is mono, written to both channels.
 
+**kind 9: Drum synth** (instrument). `dsp::drumsynth`: a pitched **body** in one of five models, filtered **noise** and
+a **click**, summed into drive, a tilt EQ, level and pan. The default drum (`addDrum`); its sound library is
+`client/src/content/drumSounds.ts`. The lofi drum stays for old projects and the metronome.
+
+| param | id | range | default | notes |
+|---|---|---|---|---|
+| model | 0 | 0..4 | 0 | 0 analog, 1 fm, 2 modal, 3 metal, 4 string (see below). Read per control block. |
+| pitch | 1 | 20..8000 Hz | 55 | The body's resting pitch (the lowest mode / square / string). |
+| bend | 2 | -24..48 st | 12 | The pitch starts this far off and sweeps to `pitch`; negative rises. Soft hits bend less. |
+| bend time | 3 | 1..1000 ms | 45 | The sweep falls to 10% in this time (exponential in semitones). |
+| decay | 4 | 5..5000 ms | 350 | The body falls 60 dB over this time (modal: the lowest mode; higher modes ring shorter). |
+| character | 5 | 0..1 | 0.2 | Per model: analog wave (sine → triangle → rounded square), fm ratio (0.5·2^(4c), 0.5..8), modal material (membrane → harmonic → free bar → bell), metal spread (0..0.2 two squares, the 808 cowbell; 0.6 the 808's ratios), string damping. |
+| timbre | 6 | 0..1 | 0.3 | Per model: analog overtone (a second partial at 1.5 + t, faster decay), fm index (9t², decaying over 0.3 × decay), modal strike (mode weights k^-(2.2-2.6t)), metal band-pass (pitch × 2^(1+5.5t)), string snare (sign-flip probability t/2: the Karplus-Strong drum). |
+| body | 7 | 0..1.5 | 1 | Body level. Smoothed. |
+| noise | 8 | 0..1.5 | 0 | Noise level. Smoothed. |
+| noise filter | 9 | 0..2 | 1 | 0 low-pass, 1 band-pass, 2 high-pass (SVF). |
+| noise freq | 10 | 40..18000 Hz | 5000 | Darker on soft hits (up to an octave at full velocity sensitivity). |
+| noise res | 11 | 0..1 | 0.2 | Damping from Butterworth to Q ≈ 12. |
+| noise decay | 12 | 2..3000 ms | 150 | 60 dB over this time (or the gate / swell length). |
+| noise shape | 13 | 0..3 | 0 | 0 decay; 1 gate (held, then a 4 ms fade); 2 clap (three ~9 ms bursts about 10 ms apart, seeded jitter, then the tail); 3 swell (rises 60 dB over the decay, then cuts). |
+| sweep | 14 | -1..1 | 0 | The noise cutoff starts `4·sweep` octaves off and settles over half the noise decay. |
+| click | 15 | 0..1.5 | 0.3 | An impulse plus a few ms of noise. Smoothed. |
+| click tone | 16 | 0..1 | 0.5 | Band-limits the click around 300 Hz·2^(6t): a thump (8 ms) to a tick (2 ms). |
+| drive | 17 | 0..1 | 0 | `tanh_rational` saturation, normalized so a full-scale input stays full scale. Smoothed. |
+| color | 18 | -1..1 | 0 | Tilt about 700 Hz: lows ×2^(-c/2), highs ×2^c. Smoothed. |
+| velocity | 19 | 0..1 | 0.5 | Sensitivity: level ∝ vel^(2s) (0 none, 0.5 linear, 1 square law); soft hits also bend and click less and have darker noise. |
+| pan | 20 | -1..1 | 0 | Constant power (-3 dB in the centre). Smoothed. |
+| choke | 21 | 0..4 | 0 | Choke group (0 none): when a drum synth of the track plays, the track's other drum synths in its group fade out over 160 samples (closed hat cuts the open hat). |
+| level | 22 | 0..2 | 0.8 | Smoothed. |
+
+- **Monophonic.** A new hit restarts the voice; the old tail fades out over 64 samples. Stop / seek fade it the same way.
+- **Tuned.** On a key range wider than one note the body and noise follow the key: semitones from C4 (60) are added to the pitch.
+- **Deterministic.** All randomness (noise, clap jitter, metal phases, the string's excitation) is seeded from the note's
+  start position.
+- Output is stereo (panned). The models and their sources are described at the top of `drumsynth.rs`; the sound library
+  is rendered and measured by `engine/crates/dsp/tests/drum_presets.rs`.
+
 ## Host messages (worklet port, main → processor)
 `{ type: 'call', fn: string, args: number[] }`
 - The processor calls `exports[fn](enginePtr, ...args)`.

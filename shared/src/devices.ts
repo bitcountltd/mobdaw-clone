@@ -21,6 +21,12 @@ export const TREMOLO = 5
 export const DELAY = 6
 export const LOFI_DRUM = 7
 export const EQ = 8
+export const DRUM_SYNTH = 9
+
+/** The drum synth's tone models (param 0), in order. */
+export const DRUM_MODELS = ['analog', 'fm', 'modal', 'metal', 'string'] as const
+/** What the drum synth's `character` (5) and `timbre` (6) knobs do in each model. */
+export const DRUM_MACROS: [string, string][] = [['wave', 'overtone'], ['ratio', 'index'], ['material', 'strike'], ['spread', 'bright'], ['damping', 'snare']]
 
 const EQ_BANDS = [
   { name: 'low', hz: 100 },
@@ -96,6 +102,38 @@ export const DEVICES: Record<number, DeviceDef> = {
       { id: 1, name: 'resonance', min: 0, max: 1, def: 0.3, scale: 'lin' },
       { id: 2, name: 'decay', min: 1, max: 2000, def: 60, scale: 'pow', unit: 'ms' },
       { id: 3, name: 'gain', min: 0, max: 2, def: 0.5, scale: 'lin' },
+    ],
+  },
+  [DRUM_SYNTH]: {
+    type: DRUM_SYNTH, name: 'Drum synth', instrument: true,
+    params: [
+      // body: the pitched tone, in one of five models
+      { id: 0, name: 'model', min: 0, max: 4, def: 0, scale: 'lin', options: [...DRUM_MODELS] },
+      { id: 1, name: 'pitch', min: 20, max: 8000, def: 55, scale: 'log', unit: 'hz' },
+      { id: 2, name: 'bend', min: -24, max: 48, def: 12, scale: 'lin', unit: 'st' },
+      { id: 3, name: 'bend time', min: 1, max: 1000, def: 45, scale: 'log', unit: 'ms' },
+      { id: 4, name: 'decay', min: 5, max: 5000, def: 350, scale: 'log', unit: 'ms' },
+      { id: 5, name: 'character', min: 0, max: 1, def: 0.2, scale: 'lin' },
+      { id: 6, name: 'timbre', min: 0, max: 1, def: 0.3, scale: 'lin' },
+      { id: 7, name: 'body', min: 0, max: 1.5, def: 1, scale: 'lin' },
+      // noise: filtered white noise under its own envelope
+      { id: 8, name: 'noise', min: 0, max: 1.5, def: 0, scale: 'lin' },
+      { id: 9, name: 'noise filter', min: 0, max: 2, def: 1, scale: 'lin', options: ['lowpass', 'bandpass', 'highpass'] },
+      { id: 10, name: 'noise freq', min: 40, max: 18000, def: 5000, scale: 'log', unit: 'hz' },
+      { id: 11, name: 'noise res', min: 0, max: 1, def: 0.2, scale: 'lin' },
+      { id: 12, name: 'noise decay', min: 2, max: 3000, def: 150, scale: 'log', unit: 'ms' },
+      { id: 13, name: 'noise shape', min: 0, max: 3, def: 0, scale: 'lin', options: ['decay', 'gate', 'clap', 'swell'] },
+      { id: 14, name: 'sweep', min: -1, max: 1, def: 0, scale: 'lin' },
+      // click: the transient
+      { id: 15, name: 'click', min: 0, max: 1.5, def: 0.3, scale: 'lin' },
+      { id: 16, name: 'click tone', min: 0, max: 1, def: 0.5, scale: 'lin' },
+      // out
+      { id: 17, name: 'drive', min: 0, max: 1, def: 0, scale: 'lin' },
+      { id: 18, name: 'color', min: -1, max: 1, def: 0, scale: 'lin' },
+      { id: 19, name: 'velocity', min: 0, max: 1, def: 0.5, scale: 'lin' },
+      { id: 20, name: 'pan', min: -1, max: 1, def: 0, scale: 'lin' },
+      { id: 21, name: 'choke', min: 0, max: 4, def: 0, scale: 'lin', options: ['off', 'A', 'B', 'C', 'D'] },
+      { id: 22, name: 'level', min: 0, max: 2, def: 0.8, scale: 'lin' },
     ],
   },
   [FINNWAVE]: {

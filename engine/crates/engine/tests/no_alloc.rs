@@ -59,6 +59,16 @@ fn process_never_allocates_across_a_busy_scene() {
         e.device_upsert(400 + t, t, 2, 1.0, false);
         e.device_upsert(900 + t, t, 7, 1.5, false); // lofi drum on the low keys, layered with the synth
         e.device_keys(900 + t, 36, 50);
+        // drum synths in every model and noise shape, two sharing a choke group
+        for k in 0..5u32 {
+            let h = 950 + t * 10 + k;
+            e.device_upsert(h, t, 9, 1.6 + k as f64 * 0.01, false);
+            e.device_keys(h, 36 + k * 2, 36 + k * 2);
+            e.param_set(h, 0, k as f32);
+            e.param_set(h, 8, 0.6);
+            e.param_set(h, 13, (k % 4) as f32);
+            e.param_set(h, 21, if k < 2 { 1.0 } else { 0.0 });
+        }
         e.clip_midi_upsert(500 + t, t, 0, 100.0 + t as f64, 960, 30_000.0, 0.0);
         e.clip_midi_upsert(600 + t, t, 40_000, 140.0, 480, 30_000.0, 2_500.0);
         for n in 0..120u32 {

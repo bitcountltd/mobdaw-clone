@@ -1,10 +1,11 @@
-// The browser (left panel): instruments, drum kits, effects, effect chains and the project's audio, each a drag source
+// The browser (left panel): instruments, drum kits, single drum sounds, effects, effect chains and the project's audio, each a drag source
 // (drops.ts). Double-click or Enter puts the item on the selected track. ↑ / ↓ move through the list, ← / → fold a
 // section, and typing in the search field filters everything. The keyboard button in the header turns the computer
 // keyboard instrument on and off (⇧K).
 import { EFFECTS, MASTER_TRACK, getSamples, getTracks, type SampleMeta } from '@mobdaw/shared'
 import { peaksFromBase64 } from '../../audio/probe'
 import { DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, type InstrumentCategory } from '../../content/presets'
+import { DRUM_CATEGORIES, DRUM_SOUNDS } from '../../content/drumSounds'
 import { h } from '../../dom'
 import { iconButton, tooltip } from '../../theme/controls'
 import { icon, type IconName } from '../../theme/icons'
@@ -80,6 +81,10 @@ export function mountBrowser(st: Studio) {
     { id: 'kits', title: 'Drum kits', items: () => DRUM_KITS.map((k): Item => ({
       key: `k:${k.id}`, name: k.name, meta: `${k.drums.length} drums`, icon: 'drum', color: 'var(--tc-5)', payload: { kind: 'kit', id: k.id }, audition: 'kit',
     })) },
+    // (no audition: trying one would add a drum to the track each time)
+    { id: 'drums', title: 'Drum sounds', items: () => DRUM_CATEGORIES.flatMap(([cat, label]) => DRUM_SOUNDS.filter((s) => s.category === cat).map((s): Item => ({
+      key: `d:${s.id}`, name: s.name, icon: 'drum', color: 'var(--tc-5)', payload: { kind: 'drum', id: s.id }, sub: label,
+    }))) },
     { id: 'fx', title: 'Effects', items: () => EFFECTS.map((d): Item => ({
       key: `e:${d.type}`, name: d.name.charAt(0).toUpperCase() + d.name.slice(1), icon: 'effect', color: 'var(--tc-7)', payload: { kind: 'effect', type: d.type },
     })) },

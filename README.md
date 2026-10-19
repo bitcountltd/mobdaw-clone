@@ -16,7 +16,7 @@ Free and open source under the [Apache License 2.0](LICENSE.md). Invite-only for
   across the whole mix.
 - **Click tracks you build.** The metronome is a real track: a drum grid with its own sounds and
   patterns, not a beep with a tempo knob.
-- **Real instruments and effects.** Synths, lofi drums, filter / eq, reverb, compressor, tremolo and
+- **Real instruments and effects.** Synths, a drum synth with 150+ sounds and 20 kits, filter / eq, reverb, compressor, tremolo and
   tape delay on every track and on the master bus, in a native-speed Rust/wasm engine running in an
   AudioWorklet.
 - **Soundscapes.** Granular, looping sound beds from your own recordings.

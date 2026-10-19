@@ -24,7 +24,7 @@ export function aboutColumn(): { el: HTMLElement; toggle(): void } {
       h('li', {}, h('strong', {}, 'looping built in. '), 'a foot-pedal loop station that is part of the timeline, not a bolt-on: loops land quantized, layer onto new tracks, and end up as ordinary clips you can edit. clips can loop, too.'),
       h('li', {}, h('strong', {}, 'deep automation. '), 'draw automation on any effect or instrument parameter, per track or across the whole mix.'),
       h('li', {}, h('strong', {}, 'click tracks you build. '), 'the metronome is a real track: a drum grid with its own sounds and patterns, not a beep you can only speed up.'),
-      h('li', {}, h('strong', {}, 'real instruments and effects. '), 'synths, lofi drums, filter / eq, reverb, compressor, tremolo and tape delay, on every track and on the master bus, running in a native-speed audio engine.'),
+      h('li', {}, h('strong', {}, 'real instruments and effects. '), 'synths, a drum synth with 150+ sounds and 20 kits, filter / eq, reverb, compressor, tremolo and tape delay, on every track and on the master bus, running in a native-speed audio engine.'),
       h('li', {}, h('strong', {}, 'soundscapes. '), 'granular, looping sound beds built from your own recordings.'),
       h('li', {}, h('strong', {}, 'made to play together. '), 'live cursors, chat, and recording that never collides with a bandmate\'s take.'),
       h('li', {}, h('strong', {}, 'yours. '), 'free and open source. export to audio, or take your whole project as a file.')),

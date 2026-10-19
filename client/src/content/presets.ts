@@ -1,23 +1,22 @@
-// Built-in sounds: finnwave patches, lofi drum kits and effect chains, plus helpers that put them on a track.
+// Built-in sounds: finnwave patches, drum kits (built from the drum synth's library, content/drumSounds.ts) and effect
+// chains, plus helpers that put them on a track.
 //
-// How the params were chosen (engine/crates/dsp/src/finnwave.rs, lofidrum.rs):
+// How the finnwave params were chosen (engine/crates/dsp/src/finnwave.rs):
 // - finnwave's `rolloff` b sets harmonic k to e^(-kb): ~0.05 is a buzzy, saw-like spectrum, ~0.3 a bright reed, ~1 a soft
 //   flute-like tone, 3 nearly a sine. `env→rolloff` adds `amount·(1 − env)` to b, so a note is brightest at the envelope's
 //   peak and darkens as it decays (a plucked string or an electric piano), and a slow attack opens up as it swells (brass,
 //   pads). Loudness stays within ~2× across rolloffs, except near-sines, which get a little more gain.
-// - the lofi drum is white noise through a resonant low-pass under an exponential decay. With high resonance the filter
-//   rings at its cutoff, so a low cutoff gives a pitched thump (kick, toms), a mid cutoff a woodblock (rim), and a high
-//   cutoff with no resonance a burst of hiss (hats, snare, clap). Narrow, low filters pass less of the noise, so they need
-//   more gain.
 import type * as Y from 'yjs'
 import {
-  COMPRESSOR, DELAY, DEVICES, EQ, FINNWAVE, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO,
+  COMPRESSOR, DELAY, DEVICES, DRUM_SYNTH, EQ, FINNWAVE, REVERB, SIMPLE_FILTER, TREMOLO,
   addDevice, addDrum, deleteDevice, devicesMap, getDevices, isDrum, setParam, updateDevice,
 } from '@mobdaw/shared'
+import { soundParams, type DrumTweak } from './drumSounds'
 
 export type InstrumentCategory = 'keys' | 'bass' | 'lead' | 'pad' | 'pluck' | 'fx'
 export type InstrumentPreset = { id: string; name: string; type: number; params: Record<string, number>; category: InstrumentCategory }
-export type Drum = { name: string; key: number; params: Record<string, number> }
+/** A kit's drum: a drum synth on `key`, from library sound `sound` (with the kit's tweaks in `params`). */
+export type Drum = { name: string; key: number; sound: string; params: Record<string, number> }
 export type DrumKit = { id: string; name: string; drums: Drum[] }
 export type EffectPreset = { id: string; name: string; devices: { type: number; params: Record<string, number> }[] }
 
@@ -52,62 +51,375 @@ export const INSTRUMENT_PRESETS: InstrumentPreset[] = [
   inst('drone', 'Dark drone', 'fx', { rolloff: 2.4, env: 0.4, attack: 2500, decay: 5000, sustain: 1, release: 6000, gain: 0.9 }),
 ]
 
-/** lofi drum params by name. */
-type Ld = { cutoff: number; res: number; decay: number; gain: number }
-const ld = (p: Ld): Record<string, number> => ({ 0: p.cutoff, 1: p.res, 2: p.decay, 3: p.gain })
-const drum = (name: string, key: number, p: Ld): Drum => ({ name, key, params: ld(p) })
+/** A kit's drum: a library sound (content/drumSounds.ts), on a key, with the kit's own tweaks. */
+const drum = (name: string, key: number, sound: string, tweak: DrumTweak = {}): Drum => ({ name, key, sound, params: soundParams(sound, tweak) })
 
 /** General MIDI drum keys the kits use. */
-export const GM = { kick: 36, rim: 37, snare: 38, clap: 39, lowTom: 45, closedHat: 42, openHat: 46, midTom: 47, shaker: 70 } as const
+export const GM = {
+  kick: 36, rim: 37, snare: 38, clap: 39, snare2: 40, floorTom: 41, closedHat: 42, floorTom2: 43, pedalHat: 44, lowTom: 45,
+  openHat: 46, midTom: 47, midTom2: 48, crash: 49, highTom: 50, ride: 51, china: 52, rideBell: 53, tambourine: 54, splash: 55,
+  cowbell: 56, crash2: 57, vibraslap: 58, bongoHigh: 60, bongoLow: 61, congaMute: 62, congaOpen: 63, congaLow: 64,
+  timbaleHigh: 65, timbaleLow: 66, agogoHigh: 67, agogoLow: 68, cabasa: 69, shaker: 70, guiro: 73, claves: 75,
+  woodHigh: 76, woodLow: 77, triangleMute: 80, triangleOpen: 81,
+} as const
 
+// Stereo placement shared by the kits: the drummer's view, hats a little right, toms sweeping left to right.
+const HAT = 0.25, CYM_L = -0.35, CYM_R = 0.4, TOM = [0.35, 0.15, -0.1, -0.3]
+
+/**
+ * The kits. Every kit has the core keys (kick, rim, snare, clap, closed and open hat, two toms) so a GM pattern plays on any
+ * of them; most go on to cymbals and percussion. The first is the default for new drum tracks and MIDI imports.
+ */
 export const DRUM_KITS: DrumKit[] = [
   {
     id: 'tape', name: 'Tape kit', drums: [
-      drum('kick', GM.kick, { cutoff: 58, res: 1, decay: 380, gain: 2 }),
-      drum('rim', GM.rim, { cutoff: 1700, res: 0.96, decay: 45, gain: 0.7 }),
-      drum('snare', GM.snare, { cutoff: 4200, res: 0.25, decay: 170, gain: 1.2 }),
-      drum('clap', GM.clap, { cutoff: 1900, res: 0.35, decay: 120, gain: 1 }),
-      drum('closed hat', GM.closedHat, { cutoff: 11000, res: 0.1, decay: 38, gain: 0.5 }),
-      drum('low tom', GM.lowTom, { cutoff: 105, res: 0.9, decay: 380, gain: 1.1 }),
-      drum('open hat', GM.openHat, { cutoff: 9500, res: 0.15, decay: 320, gain: 0.3 }),
-      drum('mid tom', GM.midTom, { cutoff: 150, res: 0.9, decay: 320, gain: 0.9 }),
+      drum('kick', GM.kick, 'kick-acoustic', { color: -0.25 }),
+      drum('sidestick', GM.rim, 'sidestick', { color: -0.2 }),
+      drum('snare', GM.snare, 'snare-acoustic', { color: -0.2, drive: 0.1 }),
+      drum('clap', GM.clap, 'clap-hand', { color: -0.2 }),
+      drum('closed hat', GM.closedHat, 'hat-closed', { pan: HAT, color: -0.3 }),
+      drum('pedal hat', GM.pedalHat, 'hat-pedal', { pan: HAT, color: -0.3 }),
+      drum('open hat', GM.openHat, 'hat-open', { pan: HAT, color: -0.3 }),
+      drum('floor tom', GM.floorTom, 'tom-floor', { pan: TOM[3], color: -0.2 }),
+      drum('low tom', GM.lowTom, 'tom-low', { pan: TOM[2], color: -0.2 }),
+      drum('mid tom', GM.midTom, 'tom-mid', { pan: TOM[1], color: -0.2 }),
+      drum('high tom', GM.highTom, 'tom-high', { pan: TOM[0], color: -0.2 }),
+      drum('crash', GM.crash, 'crash', { pan: CYM_L, color: -0.3 }),
+      drum('ride', GM.ride, 'ride', { pan: CYM_R, color: -0.3 }),
+      drum('tambourine', GM.tambourine, 'tambourine', { pan: 0.5, color: -0.3 }),
+      drum('shaker', GM.shaker, 'shaker', { pan: -0.4, color: -0.2 }),
     ],
   },
   {
-    id: '808ish', name: '808ish', drums: [
-      drum('kick', GM.kick, { cutoff: 48, res: 1, decay: 950, gain: 2 }),
-      drum('rim', GM.rim, { cutoff: 2400, res: 0.98, decay: 30, gain: 0.7 }),
-      drum('snare', GM.snare, { cutoff: 6500, res: 0.2, decay: 140, gain: 1 }),
-      drum('clap', GM.clap, { cutoff: 2300, res: 0.3, decay: 160, gain: 0.85 }),
-      drum('closed hat', GM.closedHat, { cutoff: 16000, res: 0.05, decay: 28, gain: 0.5 }),
-      drum('low tom', GM.lowTom, { cutoff: 90, res: 0.97, decay: 600, gain: 0.9 }),
-      drum('open hat', GM.openHat, { cutoff: 15000, res: 0.05, decay: 420, gain: 0.22 }),
-      drum('mid tom', GM.midTom, { cutoff: 130, res: 0.97, decay: 520, gain: 0.75 }),
+    id: '808ish', name: '808', drums: [
+      drum('kick', GM.kick, 'kick-808'),
+      drum('rim', GM.rim, 'rim-808'),
+      drum('snare', GM.snare, 'snare-808'),
+      drum('clap', GM.clap, 'clap-808'),
+      drum('closed hat', GM.closedHat, 'hat-808-closed', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-808-open', { pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-808-low', { pan: TOM[3] }),
+      drum('mid tom', GM.midTom, 'tom-808-mid', { pan: TOM[1] }),
+      drum('high tom', GM.highTom, 'tom-808-high', { pan: TOM[0] }),
+      drum('cymbal', GM.crash, 'cym-808', { pan: CYM_L }),
+      drum('cowbell', GM.cowbell, 'cowbell-808', { pan: 0.3 }),
+      drum('claves', GM.claves, 'claves-808', { pan: -0.3 }),
+      drum('maracas', GM.shaker, 'maracas-808', { pan: 0.4 }),
+      drum('high conga', GM.congaOpen, 'conga-808-high', { pan: 0.35 }),
+      drum('mid conga', GM.congaMute, 'conga-808-mid', { pan: 0.1 }),
+      drum('low conga', GM.congaLow, 'conga-808-low', { pan: -0.15 }),
+    ],
+  },
+  {
+    id: '909', name: '909', drums: [
+      drum('kick', GM.kick, 'kick-909'),
+      drum('rim', GM.rim, 'rim-808', { pitch: 480, drive: 0.6 }),
+      drum('snare', GM.snare, 'snare-909'),
+      drum('clap', GM.clap, 'clap-909'),
+      drum('closed hat', GM.closedHat, 'hat-909-closed', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-909-open', { pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-909-low', { pan: TOM[3] }),
+      drum('mid tom', GM.midTom, 'tom-909-low', { pitch: 125, pan: TOM[1] }),
+      drum('high tom', GM.highTom, 'tom-909-high', { pan: TOM[0] }),
+      drum('crash', GM.crash, 'crash', { drive: 0.3, pan: CYM_L }),
+      drum('ride', GM.ride, 'ride-fm', { pan: CYM_R }),
+    ],
+  },
+  {
+    id: '606', name: '606', drums: [
+      drum('kick', GM.kick, 'kick-606'),
+      drum('rim', GM.rim, 'rim-808', { pitch: 520, decay: 25 }),
+      drum('snare', GM.snare, 'snare-606'),
+      drum('clap', GM.clap, 'clap-tight'),
+      drum('closed hat', GM.closedHat, 'hat-606-closed', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-606-open', { pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-808-mid', { pitch: 120, decay: 300, pan: TOM[2] }),
+      drum('high tom', GM.midTom, 'tom-808-high', { pitch: 190, decay: 260, pan: TOM[0] }),
+      drum('cymbal', GM.crash, 'cym-808', { pitch: 240, decay: 1300, pan: CYM_L }),
+    ],
+  },
+  {
+    id: 'rhythm-box', name: 'Rhythm box', drums: [
+      drum('kick', GM.kick, 'kick-cr78'),
+      drum('rim', GM.rim, 'rimclick'),
+      drum('snare', GM.snare, 'snare-cr78'),
+      drum('clap', GM.clap, 'snap', { color: -0.3 }),
+      drum('hat', GM.closedHat, 'hat-noise', { color: -0.3, pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-noise-open', { ndecay: 250, color: -0.3, pan: HAT }),
+      drum('low bongo', GM.lowTom, 'conga-808-mid', { pan: -0.25 }),
+      drum('high bongo', GM.midTom, 'conga-808-high', { pitch: 420, pan: 0.25 }),
+      drum('cymbal', GM.crash, 'cym-808', { color: -0.4, pan: CYM_L }),
+      drum('tambourine', GM.tambourine, 'tambourine', { color: -0.4, pan: 0.45 }),
+      drum('cowbell', GM.cowbell, 'cowbell-808', { color: -0.3, pan: 0.3 }),
+      drum('guiro', GM.guiro, 'scratch', { pan: -0.4 }),
+      drum('claves', GM.claves, 'claves', { pan: -0.3 }),
+      drum('maracas', GM.shaker, 'maracas-808', { pan: 0.4 }),
+    ],
+  },
+  {
+    id: 'linn', name: '80s drum machine', drums: [
+      drum('kick', GM.kick, 'kick-linn'),
+      drum('sidestick', GM.rim, 'sidestick'),
+      drum('snare', GM.snare, 'snare-linn'),
+      drum('clap', GM.clap, 'clap-909', { nfreq: 1200 }),
+      drum('closed hat', GM.closedHat, 'hat-closed', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-open', { decay: 600, ndecay: 450, pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-low', { pan: TOM[3] }),
+      drum('mid tom', GM.midTom, 'tom-mid', { pan: TOM[1] }),
+      drum('high tom', GM.highTom, 'tom-high', { pan: TOM[0] }),
+      drum('crash', GM.crash, 'crash', { pan: CYM_L }),
+      drum('ride', GM.ride, 'ride', { pan: CYM_R }),
+      drum('tambourine', GM.tambourine, 'tambourine', { pan: 0.45 }),
+      drum('cowbell', GM.cowbell, 'cowbell', { pan: 0.3 }),
+      drum('conga', GM.congaOpen, 'conga-open', { pan: 0.35 }),
+    ],
+  },
+  {
+    id: 'rock', name: 'Arena rock', drums: [
+      drum('kick', GM.kick, 'kick-rock'),
+      drum('rimshot', GM.rim, 'rim-acoustic'),
+      drum('snare', GM.snare, 'snare-rock'),
+      drum('clap', GM.clap, 'clap-big'),
+      drum('gated snare', GM.snare2, 'snare-gated'),
+      drum('closed hat', GM.closedHat, 'hat-closed', { pan: HAT }),
+      drum('pedal hat', GM.pedalHat, 'hat-pedal', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-open', { pan: HAT }),
+      drum('floor tom', GM.floorTom, 'tom-floor', { drive: 0.25, pan: TOM[3] }),
+      drum('low tom', GM.lowTom, 'tom-low', { drive: 0.2, pan: TOM[2] }),
+      drum('mid tom', GM.midTom, 'tom-mid', { drive: 0.2, pan: TOM[1] }),
+      drum('high tom', GM.highTom, 'tom-high', { drive: 0.2, pan: TOM[0] }),
+      drum('crash', GM.crash, 'crash', { pan: CYM_L }),
+      drum('crash 2', GM.crash2, 'crash-dark', { pan: 0.55 }),
+      drum('china', GM.china, 'china', { pan: -0.6 }),
+      drum('ride', GM.ride, 'ride', { pan: CYM_R }),
+      drum('ride bell', GM.rideBell, 'ride-bell', { pan: CYM_R }),
+      drum('splash', GM.splash, 'splash', { pan: -0.15 }),
+    ],
+  },
+  {
+    id: 'jazz', name: 'Jazz brushes', drums: [
+      drum('kick', GM.kick, 'kick-jazz'),
+      drum('cross-stick', GM.rim, 'sidestick', { pitch: 700, color: -0.2 }),
+      drum('brush', GM.snare, 'snare-brush'),
+      drum('snap', GM.clap, 'snap'),
+      drum('swish', GM.snare2, 'snare-brush-swish'),
+      drum('closed hat', GM.closedHat, 'hat-closed', { decay: 110, timbre: 0.6, color: -0.35, pan: HAT }),
+      drum('pedal hat', GM.pedalHat, 'hat-pedal', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-half', { color: -0.3, pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-low', { pitch: 130, timbre: 0.3, click: 0.3, pan: TOM[3] }),
+      drum('high tom', GM.midTom, 'tom-high', { pitch: 205, timbre: 0.3, click: 0.3, pan: TOM[0] }),
+      drum('crash', GM.crash, 'crash-dark', { pan: CYM_L }),
+      drum('ride', GM.ride, 'ride', { timbre: 0.5, color: -0.25, pan: CYM_R }),
+      drum('ride bell', GM.rideBell, 'ride-bell', { color: -0.2, pan: CYM_R }),
     ],
   },
   {
     id: 'dusty', name: 'Dusty', drums: [
-      drum('kick', GM.kick, { cutoff: 70, res: 0.97, decay: 280, gain: 2 }),
-      drum('rim', GM.rim, { cutoff: 1200, res: 0.92, decay: 55, gain: 0.6 }),
-      drum('snare', GM.snare, { cutoff: 2600, res: 0.35, decay: 210, gain: 1.1 }),
-      drum('clap', GM.clap, { cutoff: 1500, res: 0.4, decay: 140, gain: 0.9 }),
-      drum('closed hat', GM.closedHat, { cutoff: 6500, res: 0.2, decay: 45, gain: 0.4 }),
-      drum('low tom', GM.lowTom, { cutoff: 120, res: 0.85, decay: 300, gain: 1 }),
-      drum('open hat', GM.openHat, { cutoff: 6000, res: 0.2, decay: 260, gain: 0.3 }),
-      drum('mid tom', GM.midTom, { cutoff: 170, res: 0.85, decay: 260, gain: 0.9 }),
-      drum('shaker', GM.shaker, { cutoff: 8000, res: 0, decay: 70, gain: 0.25 }),
+      drum('kick', GM.kick, 'kick-lofi'),
+      drum('rim', GM.rim, 'sidestick', { color: -0.6, drive: 0.2 }),
+      drum('snare', GM.snare, 'snare-lofi'),
+      drum('clap', GM.clap, 'clap-lofi'),
+      drum('closed hat', GM.closedHat, 'hat-lofi', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-lofi', { decay: 380, ndecay: 300, pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-lofi', { pitch: 100, pan: TOM[3] }),
+      drum('mid tom', GM.midTom, 'tom-lofi', { pan: TOM[1] }),
+      drum('shaker', GM.shaker, 'shaker', { color: -0.5, pan: -0.35 }),
+      drum('crackle', 60, 'vinyl-pop'),
+    ],
+  },
+  {
+    id: 'trap', name: 'Trap', drums: [
+      drum('808', GM.kick, 'kick-trap'),
+      drum('rim', GM.rim, 'rim-808'),
+      drum('snare', GM.snare, 'snare-trap'),
+      drum('clap', GM.clap, 'clap-big', { ndecay: 300 }),
+      drum('closed hat', GM.closedHat, 'hat-trap', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-trap', { decay: 300, ndecay: 260, pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-808-low', { pan: TOM[3] }),
+      drum('high tom', GM.midTom, 'tom-808-high', { pan: TOM[0] }),
+      drum('crash', GM.crash, 'cym-reverse', { pan: CYM_L }),
+      drum('perc', GM.cowbell, 'zap', { pan: 0.3 }),
+      drum('snap', GM.claves, 'snap', { pan: -0.3 }),
+    ],
+  },
+  {
+    id: 'techno', name: 'Techno', drums: [
+      drum('kick', GM.kick, 'kick-techno'),
+      drum('rim', GM.rim, 'rim-808', { drive: 0.7 }),
+      drum('snare', GM.snare, 'snare-808-snappy'),
+      drum('clap', GM.clap, 'clap-909', { ndecay: 380 }),
+      drum('closed hat', GM.closedHat, 'hat-909-closed', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-909-open', { pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-909-low', { pan: TOM[3] }),
+      drum('high tom', GM.midTom, 'tom-909-high', { pan: TOM[0] }),
+      drum('crash', GM.crash, 'crash', { drive: 0.4, pan: CYM_L }),
+      drum('ride', GM.ride, 'ride-fm', { pan: CYM_R }),
+      drum('cowbell', GM.cowbell, 'cowbell-808', { drive: 0.6, pan: 0.3 }),
+      drum('shaker', GM.shaker, 'shaker-short', { pan: -0.4 }),
+      drum('glitch', 60, 'glitch', { pan: 0.2 }),
+    ],
+  },
+  {
+    id: 'house', name: 'House', drums: [
+      drum('kick', GM.kick, 'kick-house'),
+      drum('rim', GM.rim, 'rim-808'),
+      drum('snare', GM.snare, 'snare-808'),
+      drum('clap', GM.clap, 'clap-909', { ndecay: 300 }),
+      drum('closed hat', GM.closedHat, 'hat-909-closed', { decay: 45, pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-909-open', { decay: 350, ndecay: 300, pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-808-low', { pan: TOM[3] }),
+      drum('high tom', GM.midTom, 'tom-808-high', { pan: TOM[0] }),
+      drum('crash', GM.crash, 'crash', { pan: CYM_L }),
+      drum('ride', GM.ride, 'ride', { pan: CYM_R }),
+      drum('tambourine', GM.tambourine, 'tambourine', { pan: 0.45 }),
+      drum('shaker', GM.shaker, 'shaker', { pan: -0.4 }),
+      drum('high conga', GM.congaOpen, 'conga-808-high', { pan: 0.35 }),
+      drum('low conga', GM.congaLow, 'conga-808-low', { pan: -0.2 }),
     ],
   },
   {
     id: 'minimal', name: 'Minimal click', drums: [
-      drum('kick', GM.kick, { cutoff: 90, res: 0.8, decay: 110, gain: 2 }),
-      drum('rim', GM.rim, { cutoff: 3200, res: 1, decay: 20, gain: 0.8 }),
-      drum('snare', GM.snare, { cutoff: 5000, res: 0.6, decay: 60, gain: 0.7 }),
-      drum('clap', GM.clap, { cutoff: 2800, res: 0.5, decay: 50, gain: 0.7 }),
-      drum('closed hat', GM.closedHat, { cutoff: 18000, res: 0.4, decay: 14, gain: 0.7 }),
-      drum('low tom', GM.lowTom, { cutoff: 180, res: 1, decay: 120, gain: 0.9 }),
-      drum('open hat', GM.openHat, { cutoff: 17000, res: 0.3, decay: 110, gain: 0.25 }),
-      drum('mid tom', GM.midTom, { cutoff: 260, res: 1, decay: 100, gain: 1 }),
+      drum('kick', GM.kick, 'kick-tight'),
+      drum('rim', GM.rim, 'rimclick'),
+      drum('snare', GM.snare, 'snare-606', { decay: 60, ndecay: 80 }),
+      drum('snap', GM.clap, 'snap'),
+      drum('closed hat', GM.closedHat, 'hat-noise', { ndecay: 25, pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-noise-open', { ndecay: 180, pan: HAT }),
+      drum('low tom', GM.lowTom, 'karplus-tom', { pan: TOM[3] }),
+      drum('high tom', GM.midTom, 'karplus-tom', { pitch: 180, pan: TOM[0] }),
+      drum('blip', GM.cowbell, 'blip', { pan: 0.3 }),
+      drum('wood', GM.woodHigh, 'woodblock-high', { pan: -0.3 }),
+      drum('drop', GM.claves, 'drip', { pan: 0.4 }),
+    ],
+  },
+  {
+    id: 'electro', name: 'Electro', drums: [
+      drum('kick', GM.kick, 'kick-simmons'),
+      drum('rim', GM.rim, 'rim-808'),
+      drum('snare', GM.snare, 'snare-electro'),
+      drum('clap', GM.clap, 'clap-808'),
+      drum('closed hat', GM.closedHat, 'hat-808-closed', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-808-open', { pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-electro', { pan: TOM[3] }),
+      drum('mid tom', GM.midTom, 'tom-electro', { pitch: 150, pan: TOM[1] }),
+      drum('high tom', GM.highTom, 'tom-electro-high', { pan: TOM[0] }),
+      drum('crash', GM.crash, 'cym-808', { pan: CYM_L }),
+      drum('cowbell', GM.cowbell, 'cowbell-808', { pan: 0.3 }),
+      drum('zap', 60, 'zap', { pan: -0.3 }),
+      drum('laser', 61, 'laser', { pan: 0.3 }),
+    ],
+  },
+  {
+    id: 'industrial', name: 'Industrial', drums: [
+      drum('kick', GM.kick, 'kick-hard'),
+      drum('clank', GM.rim, 'metal-hit', { decay: 400 }),
+      drum('snare', GM.snare, 'snare-karplus', { drive: 0.6 }),
+      drum('clap', GM.clap, 'clap-big', { drive: 0.6 }),
+      drum('closed hat', GM.closedHat, 'hat-fm', { pan: HAT }),
+      drum('open hat', GM.openHat, 'hat-fm', { decay: 300, ndecay: 250, pan: HAT }),
+      drum('low tom', GM.lowTom, 'tom-electro', { drive: 0.7, pan: TOM[3] }),
+      drum('high tom', GM.midTom, 'tom-electro-high', { drive: 0.7, pan: TOM[0] }),
+      drum('crash', GM.crash, 'china', { pan: CYM_L }),
+      drum('bit', GM.cowbell, 'bit-hit', { pan: 0.3 }),
+      drum('glitch', 60, 'glitch', { pan: -0.3 }),
+      drum('impact', 61, 'impact'),
+    ],
+  },
+  {
+    id: 'latin', name: 'Latin percussion', drums: [
+      drum('kick', GM.kick, 'kick-jazz', { decay: 400 }),
+      drum('rim', GM.rim, 'rimclick'),
+      drum('timbale', GM.snare, 'timbale'),
+      drum('clap', GM.clap, 'clap-hand'),
+      drum('shaker', GM.closedHat, 'shaker-short', { pan: 0.3 }),
+      drum('long shaker', GM.openHat, 'shaker', { ndecay: 120, pan: 0.3 }),
+      drum('tumba', GM.lowTom, 'tumba', { pan: -0.35 }),
+      drum('conga', GM.midTom, 'conga-open', { pan: -0.1 }),
+      drum('cowbell', GM.cowbell, 'cowbell', { pan: 0.2 }),
+      drum('bongo high', GM.bongoHigh, 'bongo-high', { pan: 0.25 }),
+      drum('bongo low', GM.bongoLow, 'bongo-low', { pan: 0.15 }),
+      drum('conga slap', GM.congaMute, 'conga-slap', { pan: -0.1 }),
+      drum('conga open', GM.congaOpen, 'conga-open', { pitch: 240, pan: -0.1 }),
+      drum('tumba open', GM.congaLow, 'tumba', { pan: -0.35 }),
+      drum('timbale high', GM.timbaleHigh, 'timbale', { pitch: 470, pan: 0.4 }),
+      drum('timbale low', GM.timbaleLow, 'timbale', { pitch: 360, pan: 0.3 }),
+      drum('agogo high', GM.agogoHigh, 'agogo-high', { pan: -0.4 }),
+      drum('agogo low', GM.agogoLow, 'agogo-low', { pan: -0.4 }),
+      drum('guiro', GM.guiro, 'scratch', { pan: 0.45 }),
+      drum('claves', GM.claves, 'claves', { pan: -0.25 }),
+      drum('wood high', GM.woodHigh, 'woodblock-high', { pan: 0.35 }),
+      drum('wood low', GM.woodLow, 'woodblock-low', { pan: 0.35 }),
+      drum('triangle mute', GM.triangleMute, 'triangle-mute', { pan: 0.5 }),
+      drum('triangle', GM.triangleOpen, 'triangle', { pan: 0.5 }),
+    ],
+  },
+  {
+    id: 'west-africa', name: 'West African', drums: [
+      drum('djembe bass', GM.kick, 'djembe-bass'),
+      drum('bell', GM.rim, 'agogo-low', { pitch: 760, pan: 0.35 }),
+      drum('djembe slap', GM.snare, 'djembe-slap', { pan: -0.1 }),
+      drum('clap', GM.clap, 'clap-hand'),
+      drum('shaker', GM.closedHat, 'shaker-short', { pan: 0.3 }),
+      drum('long shaker', GM.openHat, 'shaker', { ndecay: 150, pan: 0.3 }),
+      drum('talking drum', GM.lowTom, 'talking-drum', { pan: -0.3 }),
+      drum('djembe tone', GM.midTom, 'djembe-tone', { pan: -0.1 }),
+      drum('dundun', GM.floorTom, 'frame-drum', { pitch: 90, decay: 450, pan: 0.2 }),
+      drum('bell high', GM.cowbell, 'agogo-high', { pan: 0.4 }),
+      drum('udu', GM.congaLow, 'udu', { pan: -0.2 }),
+      drum('slit drum', GM.woodLow, 'slit-drum', { pan: 0.25 }),
+    ],
+  },
+  {
+    id: 'tabla', name: 'Tabla & hand drums', drums: [
+      drum('ge', GM.kick, 'bayan-ge', { pan: -0.2 }),
+      drum('te', GM.rim, 'tabla-te', { pan: 0.2 }),
+      drum('na', GM.snare, 'tabla-na', { pan: 0.2 }),
+      drum('snap', GM.clap, 'snap'),
+      drum('shaker', GM.closedHat, 'shaker-short', { pan: 0.35 }),
+      drum('tin', GM.openHat, 'tabla-tin', { pan: 0.2 }),
+      drum('ke', GM.lowTom, 'bayan-ke', { pan: -0.2 }),
+      drum('frame drum', GM.midTom, 'frame-drum', { pan: -0.35 }),
+      drum('cajón bass', GM.floorTom, 'cajon-bass'),
+      drum('cajón slap', GM.snare2, 'cajon-slap'),
+      drum('udu', GM.congaLow, 'udu', { pan: -0.3 }),
+      drum('tambourine', GM.tambourine, 'tambourine', { pan: 0.45 }),
+    ],
+  },
+  {
+    id: 'orchestra', name: 'Orchestral', drums: [
+      drum('bass drum', GM.kick, 'taiko', { pitch: 50, decay: 2200, click: 0.5 }),
+      drum('woodblock', GM.rim, 'woodblock-high', { pan: 0.3 }),
+      drum('snare', GM.snare, 'snare-piccolo', { pitch: 260, decay: 220, ndecay: 260 }),
+      drum('clash', GM.clap, 'crash-dark', { decay: 3500, pan: 0.2 }),
+      drum('triangle mute', GM.closedHat, 'triangle-mute', { pan: 0.45 }),
+      drum('triangle', GM.openHat, 'triangle', { pan: 0.45 }),
+      drum('timpani low', GM.floorTom, 'timpani', { pitch: 87, pan: -0.35 }),
+      drum('timpani', GM.lowTom, 'timpani', { pan: -0.2 }),
+      drum('timpani high', GM.midTom, 'timpani', { pitch: 131, pan: -0.05 }),
+      drum('cymbal', GM.crash, 'crash-dark', { pan: 0.3 }),
+      drum('gong', GM.china, 'gong', { pan: -0.4 }),
+      drum('tambourine', GM.tambourine, 'tambourine', { pan: 0.5 }),
+      drum('bell', GM.rideBell, 'bell', { pan: 0.4 }),
+      drum('glockenspiel', GM.triangleOpen, 'glockenspiel', { pan: 0.35 }),
+    ],
+  },
+  {
+    id: 'fx', name: 'FX & glitch', drums: [
+      drum('kick', GM.kick, 'kick-fm'),
+      drum('blip', GM.rim, 'blip'),
+      drum('snare', GM.snare, 'bit-hit', { pitch: 330 }),
+      drum('glitch', GM.clap, 'glitch'),
+      drum('tick', GM.closedHat, 'hat-fm', { pan: HAT }),
+      drum('riser', GM.openHat, 'noise-riser', { ndecay: 900, pan: HAT }),
+      drum('zap', GM.lowTom, 'zap', { pan: -0.3 }),
+      drum('laser', GM.midTom, 'laser', { pan: 0.3 }),
+      drum('reverse', GM.crash, 'cym-reverse', { pan: CYM_L }),
+      drum('drop', GM.highTom, 'drip', { pan: 0.4 }),
+      drum('rise', GM.ride, 'rise', { pan: -0.4 }),
+      drum('metal', GM.china, 'metal-hit', { pan: 0.2 }),
+      drum('pop', GM.rideBell, 'vinyl-pop'),
+      drum('sub drop', GM.crash2, 'sub-drop'),
+      drum('impact', GM.splash, 'impact'),
     ],
   },
 ]
@@ -184,13 +496,15 @@ export function addDrumKit(doc: Y.Doc, trackId: string, kit: DrumKit): string[] 
   doc.transact(() => {
     const byKey = new Map(getDevices(doc).filter((d) => d.trackId === trackId && isDrum(d)).map((d) => [d.keyLo, d.id]))
     for (const d of kit.drums) {
-      const params = clampParams(LOFI_DRUM, d.params)
+      const params = clampParams(DRUM_SYNTH, d.params)
       const have = byKey.get(d.key)
-      if (have && devicesMap(doc).get(have)?.get('type') === LOFI_DRUM) {
+      if (have && devicesMap(doc).get(have)?.get('type') === DRUM_SYNTH) {
         for (const [id, v] of Object.entries(params)) setParam(doc, have, Number(id), v)
         updateDevice(doc, have, { name: d.name })
         ids.push(have)
       } else {
+        // another kind of drum on the key (an old lofi drum) gives way to the kit's
+        if (have) deleteDevice(doc, have)
         const id = addDrum(doc, trackId, { key: d.key, name: d.name, params })
         byKey.set(d.key, id)
         ids.push(id)

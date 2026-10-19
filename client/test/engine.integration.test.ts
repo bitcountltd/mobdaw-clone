@@ -7,7 +7,7 @@ import { addAudioClip, addClickTrack, addDevice, addDrum, addLane, addMidiClip, 
 import { Bridge } from '../src/audio/bridge'
 import { CallQueue } from '../src/audio/schedule'
 import { readMeters } from '../src/audio/meters'
-import { setLoop } from '@mobdaw/shared'
+import { LOFI_DRUM, setLoop } from '@mobdaw/shared'
 
 const SR = 48000
 const wasm = readFileSync(new URL('../src/audio/wasm/engine.wasm', import.meta.url))
@@ -138,7 +138,7 @@ describe('bridge + real engine.wasm', () => {
     const doc = new Y.Doc()
     const m = addTrack(doc, 'midi', 'midi')
     const synth = addDevice(doc, m, 2, { keyLo: 60, keyHi: 127 })
-    const drum = addDrum(doc, m, { key: 40, params: { 3: 1 } })
+    const drum = addDrum(doc, m, { key: 40, type: LOFI_DRUM, params: { 3: 1 } }) // (the lofi drum: this is about key ranges, not the drum's sound)
     const c = addMidiClip(doc, { trackId: m, start: 0, loopTicks: 960, lengthTicks: 3840 })
     addNote(doc, { clipId: c, tick: 0, durTicks: 480, pitch: 40, velocity: 1 })
     const { sink, render } = host()
@@ -157,6 +157,29 @@ describe('bridge + real engine.wasm', () => {
     updateClip(doc, c, { loopTicks: 0 })
     bridge.destroy()
   })
+
+  it('every kit plays through the wasm engine: each drum sounds, and none clips', async () => {
+    const { DRUM_KITS, addDrumKit } = await import('../src/content/presets')
+    for (const kit of DRUM_KITS) {
+      const doc = new Y.Doc()
+      const m = addTrack(doc, 'midi', 'midi')
+      addDrumKit(doc, m, kit)
+      const c = addMidiClip(doc, { trackId: m, start: 0, lengthTicks: 960 * kit.drums.length })
+      kit.drums.forEach((d, i) => addNote(doc, { clipId: c, tick: i * 960, durTicks: 240, pitch: d.key, velocity: 1 }))
+      const { sink, render } = host()
+      const bridge = new Bridge(doc, sink, async () => null, SR, () => 0)
+      await tick()
+      bridge.play(0)
+      // one hit per beat at 120 bpm: half a second each
+      for (const d of kit.drums) {
+        const peak = render(SR / 2)
+        // a swell (reverse cymbal, riser) is still rising after half a second
+        if (d.params['13'] !== 3) expect(peak, `${kit.name}: ${d.name}`).toBeGreaterThan(0.01)
+        expect(peak, `${kit.name}: ${d.name}`).toBeLessThan(1.5)
+      }
+      bridge.destroy()
+    }
+  }, 60_000)
 
   it('automation: a drawn cutoff lane opens the filter, and deleting the lane gives the knob back', async () => {
     const doc = new Y.Doc()

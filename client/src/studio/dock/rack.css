@@ -142,3 +142,49 @@
 .pick-menu .item:hover { background: var(--line); }
 .pick-menu .item.current { color: var(--accent); font-weight: 600; }
 .pick-menu .kbd-hint { margin-left: auto; padding-left: 12px; font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
+@media (max-width: 640px) {
+  .pick-menu { grid-template-columns: repeat(var(--cols-narrow, 1), minmax(128px, 1fr)); }
+}
+
+/* the drum kit's selected pad, and the drum editor beside the kit */
+.studio .kit-wrap { position: relative; display: flex; flex: none; gap: 6px; align-items: stretch; }
+.studio .rack-row > .kit-wrap + .unit::before { content: ''; position: absolute; left: -12px; top: 15px; border: 4px solid transparent; border-left-color: var(--faint); }
+.studio .dpad.t9 .dpad-face { cursor: pointer; }
+.studio .dpad.selected { background: color-mix(in srgb, var(--tc) 13%, rgba(0, 0, 0, .18)); border-color: color-mix(in srgb, var(--tc) 65%, transparent); }
+.studio .dpad.selected .dpad-face { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), 0 0 0 1px color-mix(in srgb, var(--tc) 80%, transparent), 0 1px 0 rgba(0, 0, 0, .45); }
+.studio .unit.drum-ed { min-width: 0; }
+.studio .unit.drum-ed::after { content: ''; position: absolute; left: -7px; top: 50%; width: 6px; height: 18px; margin-top: -9px; border-radius: 2px 0 0 2px;
+  background: color-mix(in srgb, var(--tc) 55%, #2b2d32); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1); } /* a little bracket: it belongs to the kit */
+.studio .drum-ed .unit-head { gap: 4px; padding-left: 8px; padding-right: 6px; }
+.studio .ded-mark { flex: none; width: 8px; height: 8px; border-radius: 2px; background: var(--tc); box-shadow: 0 0 6px color-mix(in srgb, var(--tc) 50%, transparent); }
+.studio .drum-ed .unit-name { max-width: 140px; }
+.studio .ded-key { font-variant-numeric: tabular-nums; }
+.studio .ded-sound { display: flex; flex: 0 1 auto; min-width: 0; align-items: center; gap: 1px; margin-left: 6px; }
+.studio .ded-sound .unit-preset { margin-left: 0; max-width: 150px; }
+.studio .ded-sound [hidden] { display: none; }
+.studio .ded-step { width: 20px; height: 22px; color: var(--dim); }
+.studio .ded-step.prev svg { transform: rotate(180deg); }
+.studio .ded-play { width: 24px; height: 22px; color: var(--dim); }
+.studio .ded-play.on { background: var(--tc); color: var(--on-accent); }
+.studio .ded-body { gap: 0; padding-top: 6px; }
+.studio .ded-body > .unit-groups + .unit-groups { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(0, 0, 0, .3); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .025); }
+.studio .drum-ed .pc { min-width: 42px; }
+.studio .drum-ed .pc.choice .pc-select { min-width: 78px; }
+.studio .ded-drawbox { justify-content: flex-start; }
+.studio .pc.quiet { opacity: .5; transition: opacity var(--t-fast) linear; }
+.studio .pc.quiet:hover, .studio .pc.quiet:focus-within { opacity: 1; }
+
+/* the drum synth's drawing of a hit */
+.studio .ddraw { display: block; overflow: visible; }
+.studio .dd-body { fill: none; stroke: var(--tc); stroke-width: 1.5; stroke-linejoin: round; }
+.studio .dd-body-fill { fill: color-mix(in srgb, var(--tc) 16%, transparent); }
+.studio .dd-noise { fill: none; stroke: rgba(235, 230, 220, .62); stroke-width: 1.1; stroke-linejoin: round; }
+.studio .dd-bend { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 2; opacity: .85; }
+.studio .dd-click { fill: none; stroke: var(--accent); stroke-width: 1.4; stroke-linejoin: round; }
+.studio .dd-span { fill: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; }
+
+/* Drum synth pads: the editor beside the kit has every knob, so the pads are just faces, two rows deep, and the kit
+   stays narrow enough to keep the editor in view. Lofi drums keep their knobs (they have no editor). */
+.studio .kit-pads:has(.dpad.t9) { display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, auto); grid-auto-columns: 92px; align-content: start; }
+.studio .kit-pads:has(.dpad.t9) .dpad { width: auto; }
+.studio .dpad.t9 .dpad-knobs { display: none; }

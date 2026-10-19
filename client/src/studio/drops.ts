@@ -2,6 +2,8 @@
 // The payload travels as JSON under DND_MIME. During dragover only the type list is readable, so use `hasPayload`.
 import { DEVICES, MASTER_TRACK, addAudioClip, addDevice, getClips, getDevices, getSamples, getTracks, isDrum, type TrackKind } from '@mobdaw/shared'
 import type * as Y from 'yjs'
+import { addDrumSound } from '../content/drumPick'
+import { drumSound } from '../content/drumSounds'
 import { addDrumKit, addEffectPreset, addInstrument, applyInstrumentPreset, drumKit, effectPreset, instrumentPreset } from '../content/presets'
 import { hasFullRangeInstrument, isDrumTrack } from './arrange/kinds'
 import type { Studio } from './studio'
@@ -10,6 +12,7 @@ export const DND_MIME = 'application/x-mobdaw'
 export type DropPayload =
   | { kind: 'instrument'; id: string } // an INSTRUMENT_PRESETS id
   | { kind: 'kit'; id: string } // a DRUM_KITS id
+  | { kind: 'drum'; id: string } // a DRUM_SOUNDS id: one drum, added to the track's kit
   | { kind: 'effect'; type: number } // a single device type from DEVICES
   | { kind: 'chain'; id: string } // an EFFECT_PRESETS id
   | { kind: 'sample'; hash: string } // project audio (samples map)
@@ -34,7 +37,7 @@ export function readDragPayload(e: DragEvent): DropPayload | null {
 
 /** The track kind a payload needs (null: any). */
 export function payloadTrackKind(p: DropPayload): TrackKind | null {
-  if (p.kind === 'instrument' || p.kind === 'kit') return 'midi'
+  if (p.kind === 'instrument' || p.kind === 'kit' || p.kind === 'drum') return 'midi'
   if (p.kind === 'sample') return 'audio'
   return null
 }
@@ -50,9 +53,9 @@ export function landsOn(doc: Y.Doc, p: DropPayload, trackId: string): boolean {
   if (!t) return false
   const need = payloadTrackKind(p)
   if (need && need !== t.kind) return false
-  if (t.role === 'click' && (p.kind === 'instrument' || p.kind === 'kit')) return false
+  if (t.role === 'click' && (p.kind === 'instrument' || p.kind === 'kit' || p.kind === 'drum')) return false
   const devices = getDevices(doc)
-  if (p.kind === 'kit') return !hasFullRangeInstrument(trackId, devices)
+  if (p.kind === 'kit' || p.kind === 'drum') return !hasFullRangeInstrument(trackId, devices)
   if (p.kind === 'instrument') {
     const pre = instrumentPreset(p.id)
     // the same synth already there changes its sound; a drum track gets a track of its own for the synth
@@ -98,6 +101,12 @@ export function applyDrop(st: Studio, p: DropPayload, target: DropTarget = {}): 
         const kit = drumKit(p.id)
         if (!kit) return
         addDrumKit(doc, make(st.trackName('drums')), kit)
+        break
+      }
+      case 'drum': {
+        const s = drumSound(p.id)
+        if (!s) return
+        addDrumSound(doc, make(st.trackName('drums')), s)
         break
       }
       case 'effect': {

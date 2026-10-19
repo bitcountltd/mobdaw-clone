@@ -364,6 +364,21 @@ fn tape_at(refs: &[(u32, u32)], clips: &HandleMap<Clip>, sources: &HandleMap<Sou
 
 /// Set a device param from `lane` for the segment `[at, at + len)`: its value at the start, ramping
 /// to the value the lane reaches at the end (nothing moves while stopped).
+/// Cut the drums of `chain` in the choke groups `groups` (a bit per group, 1..4) that did not just take `pitch`
+/// themselves: an open hat stops when the closed hat plays.
+fn choke_others(chain: &[Slot], devices: &mut HandleMap<Device>, pitch: u32, groups: u32) {
+    if groups == 0 {
+        return;
+    }
+    for s in chain.iter().filter(|s| s.instrument) {
+        let d = devices.get_index_mut(s.dev as usize);
+        let g = d.choke_group();
+        if g > 0 && groups & (1 << g) != 0 && !d.takes_note(pitch) {
+            d.choke();
+        }
+    }
+}
+
 fn apply_lane(d: &mut Device, lane: &Lane, at: i64, len: usize, playing: bool) {
     let Some(v0) = lane.value_at(at) else { return };
     let v1 = if playing { lane.value_end(at + len as i64).unwrap_or(v0) } else { v0 };
@@ -509,16 +524,19 @@ impl Engine {
     pub fn note_live(&mut self, h: u32, pitch: u32, velocity: f32, on: bool) {
         let at = self.main.position;
         let Some(t) = self.tracks.get(h) else { return };
+        let mut choked = 0u32;
         for s in &t.chain {
             let d = self.devices.get_index_mut(s.dev as usize);
             if d.takes_note(pitch) {
                 if on {
                     d.note_on(pitch, velocity, i64::MAX, at);
+                    choked |= (1 << d.choke_group()) & !1;
                 } else {
                     d.note_off(pitch);
                 }
             }
         }
+        choke_others(&t.chain, &mut self.devices, pitch, choked);
     }
 
     // ---- output ---------------------------------------------------------------------------
@@ -1423,12 +1441,15 @@ impl Engine {
                             if let Clip::Midi(mc) = clips.get_index(ci as usize) {
                                 let notes = clip_notes(note_index, ch);
                                 mc.fire_at(notes, at, sr, &mut |pitch, vel, off, start| {
+                                    let mut choked = 0u32;
                                     for s in &t.chain {
                                         let d = devices.get_index_mut(s.dev as usize);
                                         if d.takes_note(pitch) {
                                             d.note_on(pitch, vel, off, start);
+                                            choked |= (1 << d.choke_group()) & !1;
                                         }
                                     }
+                                    choke_others(&t.chain, devices, pitch, choked);
                                 });
                                 next = next.min(mc.next_note_on_after(notes, at, sr));
                             }

@@ -7,7 +7,7 @@
 // a knob plays the value live and shows it to collaborators, and lets go into the doc as one undo step; a param a lane
 // drives follows the lane and can't be dragged; other users' drags show on the knobs; instruments have a key range.
 import {
-  COMPRESSOR, DELAY, DEVICES, EQ, FINNWAVE, KEY_MAX, KEY_MIN, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO, filterHasGain,
+  COMPRESSOR, DELAY, DEVICES, DRUM_SYNTH, EQ, FINNWAVE, KEY_MAX, KEY_MIN, LOFI_DRUM, REVERB, SIMPLE_FILTER, TREMOLO, filterHasGain,
   type Device, type ParamDef, type ParamTarget,
 } from '@mobdaw/shared'
 import { h } from '../dom'
@@ -18,6 +18,7 @@ import { FILTER_COLORS, filterCurve, type FilterChange, type FilterLocks, type F
 import { noteName, parseNote } from './noteName'
 import { popover, type MenuItem } from './popover'
 import { dragToReorder } from './reorder'
+import { DRUM_GROUPS, drumDrawing, drumKnobName } from './drumParts'
 
 export type CardDeps = {
   readOnly: boolean
@@ -54,6 +55,12 @@ export type CardDeps = {
   setCollapsed(deviceId: string, on: boolean): void
   /** Play a drum or note on the device's track (on / off). */
   audition?(trackId: string, pitch: number, on: boolean): void
+  /** A control is moving a param live: the device's other views (a drum's pad and its editor) follow it. */
+  mirror?(deviceId: string, paramId: number, value: number): void
+  /** Drums: a pad's face was pressed (the rack selects it for the drum editor). */
+  selectDrum?(deviceId: string): void
+  /** Drum synth: step to the previous / next sound in the current sound's category (and hear it). */
+  stepSound?(deviceId: string, dir: 1 | -1): void
 }
 
 export const fmt = (p: ParamDef, v: number) => {
@@ -66,7 +73,7 @@ export const fmt = (p: ParamDef, v: number) => {
 /** Short knob labels where the catalogue's names are long. */
 const SHORT: Record<string, string> = { 'env→rolloff': 'env amt', resonance: 'res', predelay: 'pre-delay', threshold: 'thresh' }
 /** Each device's knob groups (param ids), in order; params left out go in a last group. */
-type Group = { label?: string; ids: number[]; draw?: 'adsr' | 'comp' }
+export type Group = { label?: string; ids: number[]; draw?: 'adsr' | 'comp' | 'drum' }
 const LAYOUT: Record<number, Group[]> = {
   [FINNWAVE]: [{ label: 'tone', ids: [0, 1] }, { label: 'envelope', ids: [2, 3, 4, 5], draw: 'adsr' }, { label: 'out', ids: [6] }],
   [LOFI_DRUM]: [{ label: 'tone', ids: [0, 1] }, { label: 'body', ids: [2, 3] }],
@@ -75,29 +82,33 @@ const LAYOUT: Record<number, Group[]> = {
   [TREMOLO]: [{ ids: [2, 0, 1, 3] }],
   [DELAY]: [{ label: 'echo', ids: [1, 2, 0] }, { label: 'tape', ids: [3, 4] }, { label: 'tone', ids: [5, 6, 7] }],
   [SIMPLE_FILTER]: [{ ids: [0, 1, 2, 3] }],
+  // a drum synth over a key range is tuned percussion, shown as a normal panel (as a drum it gets a pad and the drum editor)
+  [DRUM_SYNTH]: DRUM_GROUPS.map((g, i) => ({ ...g, draw: i === 0 ? 'drum' as const : undefined })),
 }
 const EQ_BANDS = ['low', 'bell 1', 'bell 2', 'high']
 const EQ_MODES = [6, 5, 5, 7] // low shelf, bell, bell, high shelf (engine device.rs, kind 8)
 const EQ_COLORS = ['#e0896a', '#d9a648', '#58b4a8', '#6c9bd6']
 const SVGNS = 'http://www.w3.org/2000/svg'
-const svg = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}) => {
+export const svg = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}) => {
   const e = document.createElementNS(SVGNS, tag)
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v))
   return e
 }
 
 /** One param's control: a knob, or (for choices) a segmented switch / a compact select. */
-type Ctl = {
+export type Ctl = {
   p: ParamDef
   el: HTMLElement
   /** The element whose click / right-click offers automation (null: choices can't be automated). */
   label: HTMLElement | null
   set(v: number): void
+  /** Change the shown name (the drum synth's knobs whose meaning follows its model). */
+  rename(name: string): void
   disable(d: boolean): void
   active(): boolean
 }
 
-function paramCtl(p: ParamDef, o: { size: number; name?: string; disabled: boolean; input(v: number): void; change(v: number): void }): Ctl {
+function paramCtl(p: ParamDef, o: { size: number; name?: string; bipolar?: boolean; disabled: boolean; input(v: number): void; change(v: number): void }): Ctl {
   if (p.options) {
     const name = h('span', { className: 'pc-name' }, o.name ?? p.name)
     if (p.options.length <= 3) {
@@ -106,20 +117,23 @@ function paramCtl(p: ParamDef, o: { size: number; name?: string; disabled: boole
       const el = h('div', { className: 'pc choice' }, seg.el, name)
       const disable = (d: boolean) => seg.el.querySelectorAll('button').forEach((b) => (b.disabled = d))
       disable(o.disabled)
-      return { p, el, label: null, set: (v) => seg.set(String(Math.round(v))), disable, active: () => false }
+      return { p, el, label: null, set: (v) => seg.set(String(Math.round(v))), rename: (t) => (name.textContent = t), disable, active: () => false }
     }
     const sel = h('select', { className: 'pc-select', disabled: o.disabled }, ...p.options.map((label, i) => h('option', { value: String(i) }, label))) as HTMLSelectElement
     sel.onchange = () => (o.input(Number(sel.value)), o.change(Number(sel.value)))
     sel.onkeydown = (e) => e.stopPropagation()
     const el = h('div', { className: 'pc choice' }, sel, name)
-    return { p, el, label: null, set: (v) => (sel.value = String(Math.round(v))), disable: (d) => (sel.disabled = d), active: () => document.activeElement === sel }
+    return {
+      p, el, label: null, set: (v) => (sel.value = String(Math.round(v))), rename: (t) => (name.textContent = t),
+      disable: (d) => (sel.disabled = d), active: () => document.activeElement === sel,
+    }
   }
   const value = h('span', { className: 'pc-value' })
   let k: Knob
   let dragging = false
   k = knob({
     value: p.def, min: p.min, max: p.max, def: p.def, scale: p.scale, label: o.name ?? SHORT[p.name] ?? p.name, size: o.size,
-    format: (v) => fmt(p, v), title: p.name, disabled: o.disabled,
+    format: (v) => fmt(p, v), title: p.name, disabled: o.disabled, bipolar: o.bipolar,
     onInput: (v) => { dragging = true; value.textContent = fmt(p, v); o.input(v) },
     onChange: (v) => { dragging = false; value.textContent = fmt(p, v); o.change(v) },
   })
@@ -141,9 +155,80 @@ function paramCtl(p: ParamDef, o: { size: number; name?: string; disabled: boole
   return {
     p, el, label,
     set: (v) => { k.set(v); if (!dragging) value.textContent = fmt(p, v) },
+    rename: (t) => { if (label.textContent !== t) (label.textContent = t, k.el.setAttribute('aria-label', t)) },
     disable: (d) => k.setDisabled(d),
     active: () => dragging,
   }
+}
+
+/**
+ * A device's params as controls, with the plumbing every view of a device shares: a drag plays the value live, shows it
+ * to collaborators (and to the device's other views, `deps.mirror`) and lets go into the doc as one undo step; a
+ * knob's label offers automation; `update` shows the doc, other users' drags and the lanes (a param a lane drives
+ * follows the lane and can't be dragged). `redraw` runs whenever a shown value changes; `held` keeps still a param
+ * that something else (the filter curve) is moving.
+ */
+export function paramSet(dev: Device, deps: CardDeps, o: { redraw?(): void; held?(pid: number): boolean } = {}) {
+  const def = DEVICES[dev.type]
+  const id = dev.id
+  const kind = def?.instrument ? 'synth' : 'effect'
+  /** What each param currently shows (doc, automation, a remote drag or this view's own drag). */
+  const shown = new Map<number, number>()
+  /** Params a lane drives. */
+  const driven = new Set<number>()
+  const ctls = new Map<number, Ctl>()
+  const redraw = () => o.redraw?.()
+  const pdef = (pid: number) => def!.params.find((p) => p.id === pid)!
+  const val = (pid: number) => shown.get(pid) ?? def?.params.find((p) => p.id === pid)?.def ?? 0
+  const make = (p: ParamDef, size = 36, name?: string, bipolar?: boolean) => {
+    const c = paramCtl(p, {
+      size, name, bipolar, disabled: deps.readOnly,
+      input: (v) => {
+        shown.set(p.id, v)
+        deps.live(id, p.id, v)
+        deps.drag([{ deviceId: id, paramId: p.id, value: v }])
+        deps.mirror?.(id, p.id, v)
+        redraw()
+      },
+      change: (v) => {
+        shown.set(p.id, v)
+        deps.commit(id, p.id, v)
+        deps.drag(null)
+        redraw()
+      },
+    })
+    if (c.label) deps.autoMenu(c.label, { scope: dev.trackId, kind, owner: id, param: String(p.id) })
+    ctls.set(p.id, c)
+    return c.el
+  }
+  function update(d: Device, remote: Map<number, number>, auto: Map<string, AutoInfo>) {
+    driven.clear()
+    for (const p of def?.params ?? []) {
+      const c = ctls.get(p.id)
+      const a = auto.get(String(p.id))
+      const drive = !!a?.on && a.value != null
+      if (drive) driven.add(p.id)
+      const v = (drive ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def
+      if (!c) { shown.set(p.id, v); continue } // (no control here, but drawings may use it)
+      c.label?.classList.toggle('auto', !!a)
+      c.el.classList.toggle('driven', drive)
+      c.disable(deps.readOnly || drive)
+      // a driven control follows the lane even mid-drag
+      if (drive || (!c.active() && !o.held?.(p.id))) {
+        shown.set(p.id, v)
+        c.set(v)
+      }
+    }
+  }
+  /** Another view of this device is moving a param: follow it (unless this view is moving it too, or a lane drives it). */
+  function show(pid: number, v: number) {
+    const c = ctls.get(pid)
+    if (driven.has(pid) || c?.active()) return
+    shown.set(pid, v)
+    c?.set(v)
+    redraw()
+  }
+  return { ctls, shown, driven, val, pdef, make, update, show }
 }
 
 /** The finnwave's envelope as a little drawing: attack, decay to the sustain level, a held stretch, release. */
@@ -188,9 +273,9 @@ function compDrawing() {
 
 /** The header shared by the panels: grip, power, name (click: its menu), preset menu, collapse, remove. */
 /** What kind of device a renamed panel is, in dim text after its name ("synth", "Reverb"). */
-const typeLabel = (type: number) => (type === FINNWAVE ? 'synth' : type === LOFI_DRUM ? 'drum' : DEVICES[type]?.name ?? '')
+const typeLabel = (type: number) => (type === FINNWAVE ? 'synth' : type === LOFI_DRUM || type === DRUM_SYNTH ? 'drum' : DEVICES[type]?.name ?? '')
 
-function unitHead(dev: Device, deps: CardDeps, el: HTMLElement, more: () => MenuItem[] = () => []) {
+export function unitHead(dev: Device, deps: CardDeps, el: HTMLElement, more: () => MenuItem[] = () => []) {
   const def = DEVICES[dev.type]
   const kind = def?.instrument ? 'instrument' : 'effect'
   const typeEl = h('span', { className: 'unit-type' })
@@ -268,36 +353,12 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   const head = unitHead(dev, deps, el, () => def?.instrument && !deps.readOnly ? [{ label: rangeOpen ? 'hide the key range' : 'key range…', run: () => { rangeOpen = !rangeOpen; drawRange() } }] : [])
   let current = dev
 
-  /** What each param currently shows (doc, automation, a remote drag or this panel's own drag). */
-  const shown = new Map<number, number>()
-  const val = (pid: number) => shown.get(pid) ?? def?.params.find((p) => p.id === pid)?.def ?? 0
-  /** Params a lane drives (the curve can't move those). */
-  const driven = new Set<number>()
   let nodeDrag: Map<number, number> | null = null
-  const ctls = new Map<number, Ctl>()
-  const extras: (() => void)[] = [] // drawings that follow the values
-
-  const make = (p: ParamDef, size = 36, name?: string) => {
-    const c = paramCtl(p, {
-      size, name, disabled: deps.readOnly,
-      input: (v) => {
-        shown.set(p.id, v)
-        deps.live(id, p.id, v)
-        deps.drag([{ deviceId: id, paramId: p.id, value: v }])
-        redraw()
-      },
-      change: (v) => {
-        shown.set(p.id, v)
-        deps.commit(id, p.id, v)
-        deps.drag(null)
-        redraw()
-      },
-    })
-    if (c.label) deps.autoMenu(c.label, { scope: dev.trackId, kind: def?.instrument ? 'synth' : 'effect', owner: id, param: String(p.id) })
-    ctls.set(p.id, c)
-    return c.el
-  }
-  const pdef = (pid: number) => def!.params.find((p) => p.id === pid)!
+  const extras: (() => void)[] = [] // drawings (and labels) that follow the values
+  const ps = paramSet(dev, deps, { redraw: () => redraw(), held: (pid) => nodeDrag?.get(pid) != null })
+  /** `driven`: params a lane drives (the curve can't move those). */
+  const { shown, driven, ctls, val, pdef } = ps
+  const make = (p: ParamDef, size = 36, name?: string) => ps.make(p, size, name)
 
   // --- the filter curve (a simple filter shows its whole run; the EQ its four bands)
   let curve: ReturnType<typeof filterCurve> | null = null
@@ -368,9 +429,20 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     const rest = def.params.filter((p) => !used.has(p.id)).map((p) => p.id)
     const row = h('div', { className: 'unit-groups' })
     for (const g of rest.length ? [...groups, { ids: rest }] : groups) {
-      const knobs = h('div', { className: 'unit-knobs' }, ...g.ids.map((pid) => make(pdef(pid), dev.type === FINNWAVE ? 38 : 36)))
+      const drum = dev.type === DRUM_SYNTH
+      const knobs = h('div', { className: 'unit-knobs' }, ...g.ids.map((pid) => drum
+        ? ps.make(pdef(pid), 36, drumKnobName(pid, 0), pdef(pid).min < 0)
+        : make(pdef(pid), dev.type === FINNWAVE ? 38 : 36)))
       const box = h('div', { className: 'unit-group' })
       if (g.label) box.append(h('div', { className: 'unit-glabel' }, g.label))
+      if (g.draw === 'drum') {
+        const d = drumDrawing()
+        extras.push(() => {
+          d.draw(val)
+          for (const pid of [5, 6]) ctls.get(pid)?.rename(drumKnobName(pid, val(0)))
+        })
+        box.append(h('div', { className: 'unit-draw' }, d.el))
+      }
       if (g.draw === 'adsr') {
         const d = adsrDrawing()
         extras.push(() => d.draw(val(2), val(3), val(4), val(5)))
@@ -424,23 +496,7 @@ export function deviceCard(dev: Device, deps: CardDeps) {
     head.update(d)
     showKeys(d.keyLo ?? KEY_MIN, d.keyHi ?? KEY_MAX)
     drawRange()
-    driven.clear()
-    for (const p of def?.params ?? []) {
-      const c = ctls.get(p.id)
-      if (!c) continue
-      const a = auto.get(String(p.id))
-      const drive = !!a?.on && a.value != null
-      if (drive) driven.add(p.id)
-      c.label?.classList.toggle('auto', !!a)
-      c.el.classList.toggle('driven', drive)
-      c.disable(deps.readOnly || drive)
-      const v = (drive ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def
-      const free = drive || (!c.active() && nodeDrag?.get(p.id) == null) // a driven control follows the lane even mid-drag
-      if (free) {
-        shown.set(p.id, v)
-        c.set(v)
-      }
-    }
+    ps.update(d, remote, auto)
     redraw()
   }
   update(dev, new Map())
@@ -454,31 +510,35 @@ export function deviceCard(dev: Device, deps: CardDeps) {
   }
 }
 
-/** A drum in a kit panel: a pad to hear it (its name and key), on/off, and its four knobs. */
+/** The knobs a pad shows: a lofi drum's four, a drum synth's macros (the drum editor has the rest). */
+const PAD_KNOBS: Record<number, [number, string][]> = {
+  [LOFI_DRUM]: [[0, 'tone'], [1, 'res'], [2, 'decay'], [3, 'level']],
+  [DRUM_SYNTH]: [[1, 'pitch'], [4, 'decay'], [8, 'noise'], [22, 'level']],
+}
+
+/**
+ * A drum in a kit panel: a pad to hear it (its name and key), on/off, and a few knobs. Pressing the face plays the drum
+ * and selects it (`deps.selectDrum`: the rack opens the drum editor on it).
+ */
 export function drumPad(dev: Device, deps: CardDeps) {
   const def = DEVICES[dev.type]
   const id = dev.id
   let current = dev
   const name = h('span', { className: 'dpad-name' })
   const key = h('input', { className: 'dpad-key', title: 'the key this drum plays on (c2, f#3…)', spellcheck: false, disabled: deps.readOnly })
-  const face = h('div', { className: 'dpad-face', title: 'click to hear it; double-click the name to rename' }, name, key)
+  const editable = dev.type === DRUM_SYNTH
+  const face = h('div', { className: 'dpad-face', title: `click to hear it${editable ? ' and edit it' : ''}; double-click the name to rename` }, name, key)
   const power = h('button', { className: 'unit-power sm', title: 'drum on / off', role: 'switch', disabled: deps.readOnly, onclick: () => deps.bypass(id, !current.bypass) }, h('i', { className: 'lamp' }))
   const remove = h('button', { className: 'dpad-remove icon-btn sm', title: 'remove this drum', disabled: deps.readOnly, onclick: () => deps.remove(id) }, icon('close', 12))
-  const ctls = new Map<number, Ctl>()
-  const knobs = h('div', { className: 'dpad-knobs' }, ...(def?.params ?? []).map((p) => {
-    const c = paramCtl(p, {
-      size: 26, name: ({ cutoff: 'tone', resonance: 'res', decay: 'decay', gain: 'level' } as Record<string, string>)[p.name], disabled: deps.readOnly,
-      input: (v) => (deps.live(id, p.id, v), deps.drag([{ deviceId: id, paramId: p.id, value: v }])),
-      change: (v) => (deps.commit(id, p.id, v), deps.drag(null)),
-    })
-    if (c.label) deps.autoMenu(c.label, { scope: dev.trackId, kind: 'synth', owner: id, param: String(p.id) })
-    ctls.set(p.id, c)
-    return c.el
-  }))
-  const el = h('div', { className: 'dpad', 'data-device': id }, h('div', { className: 'dpad-top' }, power, remove), face, knobs)
+  const ps = paramSet(dev, deps)
+  const wanted = PAD_KNOBS[dev.type] ?? (def?.params ?? []).slice(0, 4).map((p): [number, string] => [p.id, SHORT[p.name] ?? p.name])
+  const knobs = h('div', { className: 'dpad-knobs' }, ...wanted.map(([pid, label]) => ps.make(ps.pdef(pid), 26, label)))
+  const el = h('div', { className: `dpad t${dev.type}`, 'data-device': id }, h('div', { className: 'dpad-top' }, power, remove), face, knobs)
 
   face.onpointerdown = (e) => {
-    if (e.button !== 0 || (e.target as HTMLElement) === key || !deps.audition) return
+    if (e.button !== 0 || (e.target as HTMLElement) === key) return
+    deps.selectDrum?.(id)
+    if (!deps.audition) return
     const k = current.keyLo ?? KEY_MIN
     face.classList.add('down')
     deps.audition(current.trackId, k, true)
@@ -499,6 +559,7 @@ export function drumPad(dev: Device, deps: CardDeps) {
     e.stopPropagation()
     if (deps.readOnly) return
     popover(el, [
+      ...(editable && deps.selectDrum ? [{ label: 'edit', run: () => deps.selectDrum!(id), icon: 'settings' as const }] : []),
       { label: 'rename', run: () => deps.rename(id), icon: 'edit' },
       { label: current.bypass ? 'turn on' : 'turn off', run: () => deps.bypass(id, !current.bypass), icon: 'power' },
       'sep',
@@ -515,16 +576,14 @@ export function drumPad(dev: Device, deps: CardDeps) {
     if (document.activeElement !== key) key.value = noteName(d.keyLo ?? KEY_MIN)
     power.setAttribute('aria-checked', String(!d.bypass))
     el.classList.toggle('bypassed', !!d.bypass)
-    for (const p of def?.params ?? []) {
-      const c = ctls.get(p.id)!
-      const a = auto.get(String(p.id))
-      const drive = !!a?.on && a.value != null
-      c.label?.classList.toggle('auto', !!a)
-      c.el.classList.toggle('driven', drive)
-      c.disable(deps.readOnly || drive)
-      if (drive || !c.active()) c.set((drive ? a!.value : null) ?? remote.get(p.id) ?? d.params?.[p.id] ?? p.def)
-    }
+    ps.update(d, remote, auto)
   }
   update(dev, new Map())
-  return { el, update, refresh: (auto: Map<string, AutoInfo>) => update(current, lastRemote, auto), member: () => null, redrawCurve: () => {}, dragMove: () => {}, dragEnd: () => {} }
+  return {
+    el, update, refresh: (auto: Map<string, AutoInfo>) => update(current, lastRemote, auto), member: () => null, redrawCurve: () => {}, dragMove: () => {}, dragEnd: () => {},
+    /** Highlight it as the drum the editor shows. */
+    select(on: boolean) { el.classList.toggle('selected', on); face.setAttribute('aria-pressed', String(on)) },
+    /** The editor is moving one of its params. */
+    show: ps.show,
+  }
 }

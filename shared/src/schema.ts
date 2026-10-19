@@ -12,7 +12,7 @@
 //   samples Y.Map  hash -> plain object SampleMeta
 //   chat    Y.Array of plain ChatMessage, append-only; outside the undo scope
 import * as Y from 'yjs'
-import { DEVICES, LOFI_DRUM } from './devices.ts'
+import { DEVICES, DRUM_SYNTH, LOFI_DRUM } from './devices.ts'
 import type { ParamTarget } from './params.ts'
 
 export const SCHEMA_VERSION = 2
@@ -396,11 +396,14 @@ export function nextDrumKey(doc: Y.Doc, trackId: string): number {
   return k
 }
 
-/** Add a lofi drum to a MIDI track's synths lane on a single note (default: the lowest unused one from 36), named after it. */
-export function addDrum(doc: Y.Doc, trackId: string, o: { key?: number; name?: string; params?: Record<string, number> } = {}): string {
+/**
+ * Add a drum (a drum synth unless `type` says otherwise) to a MIDI track's synths lane on a single note (default: the lowest
+ * unused one from 36), named after it.
+ */
+export function addDrum(doc: Y.Doc, trackId: string, o: { key?: number; name?: string; type?: number; params?: Record<string, number> } = {}): string {
   const key = o.key ?? nextDrumKey(doc, trackId)
   const name = o.name ?? DRUM_NAMES[(key - DRUM_KEY_FIRST) % DRUM_NAMES.length] ?? 'drum'
-  return addDevice(doc, trackId, LOFI_DRUM, { name, keyLo: key, keyHi: key }, o.params)
+  return addDevice(doc, trackId, o.type ?? DRUM_SYNTH, { name, keyLo: key, keyHi: key }, o.params)
 }
 
 /** The pattern length of a MIDI clip in ticks: its loop when it loops, else its whole length. */
@@ -424,8 +427,8 @@ export function addClickTrack(doc: Y.Doc): string {
   doc.transact(() => {
     id = addTrack(doc, 'click', 'midi', orderBetween(undefined, getTracks(doc)[0]?.order), 'click')
     const accent = 37, tick = 36
-    addDrum(doc, id, { key: accent, name: 'accent', params: { 0: 3500, 1: 0.8, 2: 40, 3: 0.8 } })
-    addDrum(doc, id, { key: tick, name: 'tick', params: { 0: 1500, 1: 0.65, 2: 35, 3: 0.6 } })
+    addDrum(doc, id, { key: accent, name: 'accent', type: LOFI_DRUM, params: { 0: 3500, 1: 0.8, 2: 40, 3: 0.8 } })
+    addDrum(doc, id, { key: tick, name: 'tick', type: LOFI_DRUM, params: { 0: 1500, 1: 0.65, 2: 35, 3: 0.6 } })
     const ppq = DEFAULT_PPQ
     const clip = addMidiClip(doc, { trackId: id, start: 0, bpm: 120, ppq, lengthTicks: 16 * ppq, loopTicks: 4 * ppq, forever: true, view: 'drums' })
     for (let beat = 0; beat < 4; beat++) addNote(doc, { clipId: clip, tick: beat * ppq, durTicks: ppq / 4, pitch: tick, velocity: 1 })
