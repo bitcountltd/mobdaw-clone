@@ -3,12 +3,14 @@
 //   marker lane   a flag per song marker, its section a faint band to the next one. Click a flag: go there; drag it:
 //                 move it (to bars; shift = the snap grid, alt = free); double-click: rename; right-click: its menu.
 //                 Double-click empty lane: add a marker there.
-//   loop strip    drag on empty ruler: draw a loop region (snapped; alt = free). Drag the brace's ends to resize it, its
-//                 body to move it. Double-click: loop on / off. Right-click anywhere: the loop menu (+ add marker).
+//   loop strip    drag on empty ruler: draw a loop region. Drag the brace's ends to resize it, its body to move it.
+//                 Double-click: loop on / off. Right-click anywhere: the loop menu (+ add marker). The region always
+//                 snaps to the grid (1/16 when snap is off, and alt does not free it): a loop off the beat throws every
+//                 repeat out of time.
 //   lower part    click or drag: move the playhead.
 // The ticks are drawn on one canvas the size of the visible window (redrawn on scroll); the loop brace and the
 // playheads are a few positioned elements.
-import { clipLength, getClips, getLoop, loopAround, loopBetween, metaMap, setLoop, toggledLoop, type LoopRegion } from '@mobdaw/shared'
+import { clipLength, getClips, getLoop, loopAround, loopBetween, metaMap, setLoop, snapToGrid, toggledLoop, type GridSize, type LoopRegion } from '@mobdaw/shared'
 import { h } from '../../dom'
 import { fmt } from '../../ui/transport'
 import { popover } from '../../ui/popover'
@@ -41,12 +43,15 @@ export function selectionRange(st: Studio): { start: number; end: number } | nul
   return { start: Math.min(...clips.map((c) => c.start)), end: Math.max(...clips.map((c) => c.start + clipLength(c, st.rate))) }
 }
 
+/** The loop region's grid: the snap grid, or 1/16 when snap is off. */
+const loopGrid = (st: Studio): GridSize => st.ui.grid || 0.25
+
 /** L: loop on / off; with no region yet, one over the selection or the 4 bars around the playhead. */
 export function toggleLoop(st: Studio) {
   if (st.readOnly) return
   const t = st.tempo()
   st.undo.stopCapturing()
-  setLoop(st.doc, toggledLoop(getLoop(st.doc), st.position(), t, st.rate, selectionRange(st), stepSamples(st.ui.grid, t, st.rate)))
+  setLoop(st.doc, toggledLoop(getLoop(st.doc), st.position(), t, st.rate, selectionRange(st), stepSamples(loopGrid(st), t, st.rate)))
   st.undo.stopCapturing()
 }
 
@@ -84,7 +89,9 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     addEventListener('pointerup', done)
     addEventListener('pointercancel', done)
   }
-  const minLen = () => stepSamples(st.ui.grid, st.tempo(), st.rate)
+  const minLen = () => stepSamples(loopGrid(st), st.tempo(), st.rate)
+  /** A loop edge on the loop grid (never free: see the header). */
+  const snapLoop = (smp: number) => snapToGrid(Math.max(0, smp), loopGrid(st), st.tempo(), st.rate)
   const write = (l: LoopRegion | null) => setLoop(doc, l)
   /** A one-off loop change (menu, double-click): its own undo step. */
   const writeOnce = (l: LoopRegion | null) => { st.undo.stopCapturing(); write(l); st.undo.stopCapturing() }
@@ -98,23 +105,24 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     if (!st.readOnly && loop && (t === hl || t === hr)) {
       // resize from one end; dragging past the other end swaps them
       const fixed = t === hl ? loop.end : loop.start
-      return drag(e, (m) => write(loopBetween(fixed, st.snap(at(m.clientX), m), minLen(), loop.on)))
+      return drag(e, (m) => write(loopBetween(fixed, snapLoop(at(m.clientX)), minLen(), loop.on)))
     }
     if (!st.readOnly && loop && t === brace) {
-      const from = at(e.clientX), len = loop.end - loop.start
+      const from = at(e.clientX)
       return drag(e, (m) => {
-        const start = Math.max(0, st.snap(loop.start + at(m.clientX) - from, m))
-        write({ start, end: start + len, on: loop.on })
+        // both ends snap, so moving a region that is off the grid squares it up
+        const start = snapLoop(loop.start + at(m.clientX) - from)
+        write(loopBetween(start, snapLoop(start + loop.end - loop.start), minLen(), loop.on))
       })
     }
     if (!st.readOnly && y >= 0 && y < STRIP + 1) {
       // draw a new region (it appears once the pointer has moved a little)
-      const x0 = e.clientX, a = st.snap(at(e.clientX), e)
+      const x0 = e.clientX, a = snapLoop(at(e.clientX))
       let drawn = false
       return drag(e, (m) => {
         if (!drawn && Math.abs(m.clientX - x0) < 4) return
         drawn = true
-        write(loopBetween(a, st.snap(at(m.clientX), m), minLen(), true))
+        write(loopBetween(a, snapLoop(at(m.clientX)), minLen(), true))
       })
     }
     st.seek(at(e.clientX))
@@ -134,7 +142,7 @@ export function mountRuler(st: Studio, scroll: HTMLElement) {
     const loop = getLoop(doc)
     const sel = selectionRange(st)
     const t = st.tempo()
-    const step = stepSamples(st.ui.grid, t, st.rate)
+    const step = stepSamples(loopGrid(st), t, st.rate)
     const here = at(e.clientX)
     popover(el, [
       { label: 'add marker here', hint: 'I', run: () => marks.add(here, e.altKey) },
