@@ -10,7 +10,7 @@ Inventory of what mobdaw provisions for **https://daw.bitcount.com/**. There are
 
 Every resource is tagged `project=mobdaw-demo` where the type supports tags. How-to: [`docs/deploy-daw.bitcount.com.md`](docs/deploy-daw.bitcount.com.md).
 
-> **Status: live (2026-10-19).** Both stacks are created. The server runs release `20261019-074913-d87eb3c`; the client is the cloud build (`VITE_CLOUD=1`).
+> **Status: live (2026-10-19).** Both stacks are created. The server runs release `20261019-081306-372ce2b`; the client is the cloud build (`VITE_CLOUD=1`).
 
 ## Site stack: `mobdaw-daw-bitcount`
 
