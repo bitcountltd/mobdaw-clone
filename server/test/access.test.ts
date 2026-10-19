@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { addAudioClip, addChatMessage, addMonths, addTrack, chatLog, getTracks } from '@mobdaw/shared'
+import { addAudioClip, addChatMessage, addMonths, addTrack, chatDocName, chatLog, getTracks } from '@mobdaw/shared'
 import { audit } from '../src/audit.ts'
 import { openDb } from '../src/db.ts'
 import { createStorage, objectKey } from '../src/storage/index.ts'
@@ -136,8 +136,8 @@ describe('public projects', () => {
     a.provider.awareness!.setLocalStateField('user', { username: 'owner' })
     addTrack(a.doc, 'Real')
     await until(() => names(g).includes('Real'))
-    await until(() => [...g.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'owner')) // sees others
     await new Promise((r) => setTimeout(r, 300))
+    expect([...g.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'owner')).toBe(false) // nor sees others
     expect(names(a)).toEqual(['Real'])
     expect([...a.provider.awareness!.getStates().values()].some((s: any) => s.user?.username === 'guest')).toBe(false)
     const gone = kicked(g)
@@ -186,8 +186,11 @@ describe('copy', () => {
     const a = connect(t.port, src, admin.token!)
     await until(() => a.provider.synced)
     addTrack(a.doc, 'Drums')
-    addChatMessage(a.doc, { username: ADMIN, color: '#fff' }, 'just between us')
     await until(() => a.provider.unsyncedChanges === 0)
+    const chat = connect(t.port, src, admin.token!, chatDocName(src))
+    await until(() => chat.provider.synced)
+    addChatMessage(chat.doc, { username: ADMIN, color: '#fff' }, 'just between us')
+    await until(() => chat.provider.unsyncedChanges === 0)
 
     const copy = await alice.post(`/api/projects/${src}/copy`, { name: 'Mine' }) // a viewer may copy
     expect(copy.status).toBe(201)
@@ -198,10 +201,11 @@ describe('copy', () => {
     const b = connect(t.port, copy.body.id, alice.token!)
     await until(() => b.provider.synced)
     expect(names(b)).toEqual(['Drums'])
-    expect(chatLog(b.doc).length).toBe(0) // the chat stays with the original
-    expect(chatLog(a.doc).length).toBe(1)
-    a.provider.destroy()
-    b.provider.destroy()
+    const bChat = connect(t.port, copy.body.id, alice.token!, chatDocName(copy.body.id))
+    await until(() => bChat.provider.synced)
+    expect(chatLog(bChat.doc).length).toBe(0) // the chat stays with the original
+    expect(chatLog(chat.doc).length).toBe(1)
+    for (const c of [a, b, chat, bChat]) c.provider.destroy()
 
     expect((await client(t.base).post(`/api/projects/${src}/copy`)).status).toBe(401) // not signed in
     expect((await admit(t.base, admin, 'carol').then((c) => c.post(`/api/projects/${src}/copy`))).status).toBe(404)

@@ -1,5 +1,6 @@
 // mountStudio: builds the studio layout (docs/redesign.md §3) around one Studio and mounts the views:
 //   topbar / browser (left) | arrangement (+ chat) / dock / status bar
+import * as Y from 'yjs'
 import { h } from '../dom'
 import type { Session } from '../project/session'
 import { chatPanel } from '../ui/chat'
@@ -24,9 +25,9 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
   const st = new Studio(s, readOnly)
   let unread = (_n: number) => {}
   let chatOpened = (_open: boolean) => {}
-  const chat = chatPanel({ doc: s.doc, user: s.user, readOnly, onUnread: (n) => unread(n), onOpenChange: (o) => chatOpened(o) })
-  // (watchers, in through a public link, don't read the collaborators' chat)
-  const top = mountTopbar(st, { projectName, renameProject, cloud, chat: s.local || s.watching ? undefined : chat })
+  const chat = chatPanel({ doc: s.chat?.doc ?? new Y.Doc(), user: s.user, readOnly, onUnread: (n) => unread(n), onOpenChange: (o) => chatOpened(o) })
+  // (members only: not on this device, nor for watchers, in through a public link)
+  const top = mountTopbar(st, { projectName, renameProject, cloud, chat: s.chat ? chat : undefined })
   unread = top.setUnread
   chatOpened = (o) => {
     top.chatOpened(o)
@@ -85,7 +86,7 @@ export function mountStudio(s: Session, projectName: string, readOnly = false, r
     }),
   ]
   layout()
-  void s.synced.then(() => chat.markSeen())
+  void s.chat?.synced.then(() => chat.markSeen())
 
   return {
     el,

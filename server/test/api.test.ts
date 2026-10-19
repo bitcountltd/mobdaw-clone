@@ -132,13 +132,21 @@ describe('projects', () => {
     expect((await alice.get('/api/projects')).body).toEqual([])
 
     expect((await admin.post(`/api/projects/${p.id}/members`, { username: 'nobody' })).body.error).toBe('not_admitted')
-    expect((await stranger.get('/api/users')).status).toBe(401)
+    expect((await stranger.get('/api/users/alice')).status).toBe(401)
 
     const shared = await admin.post(`/api/projects/${p.id}/members`, { username: 'Alice' })
     expect(shared.status).toBe(200)
     expect(shared.body.members.map((m: any) => m.username)).toEqual([ADMIN, 'alice'])
     expect((await alice.get(`/api/projects/${p.id}`)).body.role).toBe('editor')
-    expect((await alice.get('/api/users')).body.map((u: any) => u.username)).toContain('alice')
+    // usernames: an exact lookup, no list
+    expect((await alice.get(`/api/users/${ADMIN}`)).body).toEqual({ username: ADMIN })
+    expect((await alice.get('/api/users/ALICE')).body).toEqual({ username: 'alice' })
+    expect((await alice.get('/api/users/nobody')).status).toBe(404)
+    expect((await alice.get('/api/users/ali')).status).toBe(404) // no prefix match
+    expect((await alice.get('/api/users/%25')).status).toBe(404) // (nor a LIKE pattern)
+    const list = await alice.get('/api/users')
+    expect(list.status).not.toBe(200)
+    expect(JSON.stringify(list.body ?? '')).not.toContain(ADMIN)
 
     // editors can't manage members; owner can't be removed
     expect((await alice.post(`/api/projects/${p.id}/members`, { username: ADMIN })).status).toBe(403)

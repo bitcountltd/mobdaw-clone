@@ -1,5 +1,5 @@
-import { HocuspocusProvider } from '@hocuspocus/provider'
-import { docName, undoScope, userColor, type AwarenessState } from '@mobdaw/shared'
+import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider'
+import { chatDocName, docName, undoScope, userColor, type AwarenessState } from '@mobdaw/shared'
 import type { Awareness } from 'y-protocols/awareness'
 import * as Y from 'yjs'
 import { getToken } from '../api'
@@ -20,6 +20,8 @@ export type Session = {
   userId: number | null
   /** Resolves once the document is loaded (from the server, or from this device). */
   synced: Promise<void>
+  /** The project's chat, a document of its own that only members can open (none for a watcher or on this device). */
+  chat?: { doc: Y.Doc; synced: Promise<void> }
   setLocal(patch: Partial<Omit<AwarenessState, 'user'>>): void
   remoteStates(): AwarenessState[]
   destroy(): void
@@ -33,12 +35,18 @@ export type Session = {
 export function openSession(projectId: string, me: { id: number | null; username: string }, watching = me.id === null): Session {
   const doc = new Y.Doc()
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const provider = new HocuspocusProvider({
-    url: `${proto}//${location.host}${import.meta.env.BASE_URL}collab`,
-    name: docName(projectId),
-    document: doc,
-    token: getToken(),
-  })
+  // One socket for the project and its chat.
+  const socket = new HocuspocusProviderWebsocket({ url: `${proto}//${location.host}${import.meta.env.BASE_URL}collab` })
+  const open = (name: string, document: Y.Doc) => {
+    const p = new HocuspocusProvider({ websocketProvider: socket, name, document, token: getToken() })
+    p.attach()
+    return p
+  }
+  const provider = open(docName(projectId), doc)
+  const chatDoc = watching ? null : new Y.Doc()
+  const chatProvider = chatDoc && open(chatDocName(projectId), chatDoc)
+  // (nothing to show of anyone there: presence is the project's)
+  chatProvider?.awareness?.setLocalState(null)
   const awareness = provider.awareness!
   const user: AwarenessState['user'] = { username: me.username, color: userColor(me.username) }
   // Presence is a write too.
@@ -46,9 +54,11 @@ export function openSession(projectId: string, me: { id: number | null; username
   else awareness.setLocalStateField('user', user)
   // Local edits have origin null (tracked by default); remote updates carry the provider as origin.
   const undo = new Y.UndoManager(undoScope(doc), { captureTimeout: 500 })
-  const synced = new Promise<void>((resolve) => (provider.synced ? resolve() : provider.on('synced', () => resolve())))
+  const whenSynced = (p: HocuspocusProvider) => new Promise<void>((resolve) => (p.synced ? resolve() : p.on('synced', () => resolve())))
+  const synced = whenSynced(provider)
   return {
     projectId, doc, provider, local: false, watching, awareness, undo, user, userId: me.id, synced,
+    chat: chatDoc && chatProvider ? { doc: chatDoc, synced: whenSynced(chatProvider) } : undefined,
     setLocal: (patch) => {
       if (watching) return
       for (const [k, v] of Object.entries(patch)) awareness.setLocalStateField(k, v)
@@ -58,7 +68,10 @@ export function openSession(projectId: string, me: { id: number | null; username
     destroy() {
       undo.destroy()
       provider.destroy()
+      chatProvider?.destroy()
+      socket.destroy()
       doc.destroy()
+      chatDoc?.destroy()
     },
   }
 }

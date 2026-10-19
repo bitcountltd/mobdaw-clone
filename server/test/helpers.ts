@@ -64,10 +64,10 @@ export async function login(base: string, username: string, password = pw(userna
   return client(base, r.body.token)
 }
 
-export function connect(port: number, project: string, token: string) {
+export function connect(port: number, project: string, token: string, name = `project:${project}`) {
   const doc = new Y.Doc()
   // WebSocketPolyfill is forwarded to the socket but missing from the provider's config type.
-  const config = { url: `ws://127.0.0.1:${port}/collab`, name: `project:${project}`, document: doc, token, WebSocketPolyfill: WebSocket }
+  const config = { url: `ws://127.0.0.1:${port}/collab`, name, document: doc, token, WebSocketPolyfill: WebSocket }
   const provider = new HocuspocusProvider(config)
   return { doc, provider }
 }

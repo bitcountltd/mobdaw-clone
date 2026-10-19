@@ -1,7 +1,7 @@
 // A cloud project's people: who is in it and in what role. The owner can change roles, remove people and add someone;
 // everyone else sees the list. Used by the project settings in the studio and by the share dialog on the home page.
 import { userColor, type ProjectDetail } from '@mobdaw/shared'
-import { api } from '../api'
+import { ApiError, api } from '../api'
 import { h } from '../dom'
 import { iconButton } from '../theme/controls'
 import './members.css'
@@ -32,7 +32,7 @@ export function peopleList(o: {
     fn().then((d) => (o.onChange?.(d), load()), (e) => (el.removeAttribute('aria-busy'), o.onError(e)))
   }
 
-  function show(d: ProjectDetail, usernames: string[]) {
+  function show(d: ProjectDetail) {
     el.removeAttribute('aria-busy')
     const canEdit = o.owner && !o.locked
     const rows = d.members.map((m) => {
@@ -48,22 +48,40 @@ export function peopleList(o: {
         role, remove)
     })
     let add: HTMLElement | null = null
+    let note: HTMLElement | null = null
     if (canEdit) {
-      const others = usernames.filter((u) => !d.members.some((m) => m.username === u))
-      if (!others.length) add = h('p', { className: 'dim people-note' }, 'Everyone with an account is already in this project.')
-      else {
-        const pick = h('select', { 'aria-label': 'person to add' }, h('option', { value: '' }, 'add someone…'), ...others.map((u) => h('option', { value: u }, u)))
-        const role = roleSelect('editor', false)
-        const go = h('button', { className: 'btn', type: 'button', disabled: true, onclick: () => pick.value && act(() => api.addMember(o.projectId, { username: pick.value, role: role.value as Role })) }, 'add')
-        pick.onchange = () => (go.disabled = !pick.value)
-        add = h('div', { className: 'people-add' }, pick, role, go)
+      // (by exact username: the server doesn't list accounts)
+      const name = h('input', { type: 'text', placeholder: 'add someone by username', 'aria-label': 'username to add', autocomplete: 'off', spellcheck: false })
+      const role = roleSelect('editor', false)
+      note = h('p', { className: 'dim people-note', hidden: true, role: 'status' })
+      const say = (t: string) => ((note!.textContent = t), (note!.hidden = !t))
+      const go = h('button', { className: 'btn', type: 'button', disabled: true }, 'add')
+      const submit = () => {
+        const u = name.value.trim().toLowerCase()
+        if (!u) return
+        if (d.members.some((m) => m.username === u)) return say(`${u} is already in this project.`)
+        go.disabled = true
+        api.user(u).then(
+          (found) => act(() => api.addMember(o.projectId, { username: found.username, role: role.value as Role })),
+          (e) => {
+            go.disabled = false
+            if (e instanceof ApiError && e.status === 404) say(`No account is called ${u}.`)
+            else if (e instanceof ApiError && e.status === 429) say('Too many tries: wait a minute.')
+            else o.onError(e)
+          })
       }
+      go.onclick = submit
+      name.oninput = () => ((go.disabled = !name.value.trim()), say(''))
+      name.onkeydown = (e) => {
+        if (e.key !== 'Escape') e.stopPropagation() // not a studio shortcut (Escape still closes the dialog)
+        if (e.key === 'Enter') submit()
+      }
+      add = h('div', { className: 'people-add' }, name, role, go)
     }
-    el.replaceChildren(...rows, add ?? '')
+    el.replaceChildren(...rows, add ?? '', note ?? '')
   }
   const load = () =>
-    Promise.all([api.project(o.projectId), o.owner ? api.users() : Promise.resolve([])])
-      .then(([d, users]) => show(d, users.map((u) => u.username)), (e) => (el.removeAttribute('aria-busy'), o.onError(e)))
+    api.project(o.projectId).then(show, (e) => (el.removeAttribute('aria-busy'), o.onError(e)))
   void load()
   return el
 }

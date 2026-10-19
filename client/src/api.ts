@@ -48,7 +48,8 @@ export const api = {
     store.remove(TOKEN_KEY)
     await post('/auth/logout').catch(() => {})
   },
-  users: () => get<UserInfo[]>('/users'),
+  /** The account with exactly this name; fails with 404 when there is none. */
+  user: (username: string) => get<UserInfo>(`/users/${encodeURIComponent(username)}`),
   invites: () => get<InviteInfo[]>('/invites'),
   createInvite: (b: CreateInviteRequest) => post<CreateInviteResponse>('/invites', b),
   projects: () => get<ProjectSummary[]>('/projects'),

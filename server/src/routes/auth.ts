@@ -12,6 +12,16 @@ import { PASSWORD_MAX, PASSWORD_MIN, USERNAME_RE, burnPasswordCheck, hashPasswor
 const MAX_FAILS = 8
 const FAIL_WINDOW_MS = 15 * 60_000
 const fails = new Map<string, number[]>()
+// Username lookups per account, likewise.
+const MAX_LOOKUPS = 30
+const LOOKUP_WINDOW_MS = 60_000
+const lookups = new Map<number, number[]>()
+const recentLookups = (id: number) => {
+  const now = Date.now()
+  const list = (lookups.get(id) ?? []).filter((t) => now - t < LOOKUP_WINDOW_MS)
+  list.length ? lookups.set(id, list) : lookups.delete(id)
+  return list
+}
 const recentFails = (u: string) => {
   const now = Date.now()
   const list = (fails.get(u) ?? []).filter((t) => now - t < FAIL_WINDOW_MS)
@@ -89,11 +99,15 @@ export function authRoutes(ctx: Ctx) {
 
   r.get('/me', requireSignedIn, (c) => c.json(getMe(ctx, c.var.session!.id)))
 
-  r.get('/users', requireSignedIn, (c) =>
-    c.json<UserInfo[]>(
-      (db.prepare('SELECT username FROM users ORDER BY username').all() as UserInfo[]).map((u) => ({ username: u.username })),
-    ),
-  )
+  // Whether an account goes by exactly this name (to add someone to a project). There is no list of accounts: the
+  // owner has to know the name, and guessing is slowed down.
+  r.get('/users/:username', requireSignedIn, (c) => {
+    const recent = recentLookups(c.var.session!.id)
+    if (recent.length >= MAX_LOOKUPS) return c.json({ error: 'too_many_attempts' }, 429)
+    lookups.set(c.var.session!.id, [...recent, Date.now()])
+    const u = findUser(db, c.req.param('username').trim().toLowerCase())
+    return u ? c.json<UserInfo>({ username: u.username }) : c.json({ error: 'not_found' }, 404)
+  })
 
   return r
 }

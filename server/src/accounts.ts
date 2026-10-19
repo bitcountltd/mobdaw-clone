@@ -1,4 +1,4 @@
-import { addMonths, docName } from '@mobdaw/shared'
+import { addMonths, chatDocName, docName } from '@mobdaw/shared'
 import { getUser, type Ctx } from './auth.ts'
 import { kick, kickUser, markMissing, type Collab } from './collab.ts'
 import { tx } from './db.ts'
@@ -63,7 +63,7 @@ function deleteCloudData(ctx: Ctx, userId: number): { projects: string[]; links:
   for (const id of projects) {
     db.prepare('DELETE FROM project_members WHERE project_id = ?').run(id)
     db.prepare('DELETE FROM project_samples WHERE project_id = ?').run(id)
-    db.prepare('DELETE FROM documents WHERE name = ?').run(docName(id))
+    db.prepare('DELETE FROM documents WHERE name IN (?, ?)').run(docName(id), chatDocName(id))
     db.prepare('DELETE FROM projects WHERE id = ?').run(id)
   }
   tombstoneAllUploads(db, userId) // the sweep then deletes the bytes and refunds the quota

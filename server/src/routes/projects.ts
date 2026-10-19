@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { Hono, type Context } from 'hono'
 import * as Y from 'yjs'
-import { chatLog, docName, projectPreview, type Member, type ProjectPreview, type ProjectDetail, type ProjectSummary, type Role } from '@mobdaw/shared'
+import { chatDocName, chatLog, docName, projectPreview, type Member, type ProjectPreview, type ProjectDetail, type ProjectSummary, type Role } from '@mobdaw/shared'
 import { accountBlocked, findUser, isAdmin, isDevUser, memberRole, projectRole, requireSignedInOrPublic, writeBlock, type Ctx, type Env } from '../auth.ts'
 import { kick, KICK_REASON, type Collab } from '../collab.ts'
 import { tx } from '../db.ts'
@@ -138,7 +138,7 @@ export function projectRoutes(ctx: Ctx, collab: Collab) {
     tx(db, () => {
       db.prepare('DELETE FROM project_members WHERE project_id = ?').run(id)
       db.prepare('DELETE FROM projects WHERE id = ?').run(id)
-      db.prepare('DELETE FROM documents WHERE name = ?').run(docName(id))
+      db.prepare('DELETE FROM documents WHERE name IN (?, ?)').run(docName(id), chatDocName(id))
       // Only the library links go: uploads stay with their owners (and keep counting toward their quota).
       db.prepare('DELETE FROM project_samples WHERE project_id = ?').run(id)
     })

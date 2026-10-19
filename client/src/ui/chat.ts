@@ -1,4 +1,4 @@
-// Chat sidebar: an SMS-style view of the doc's append-only `chat` array (synced and persisted with the project).
+// Chat sidebar: an SMS-style view of the project's chat document (its `chat` array; members only, see chatDocName).
 import { addChatMessage, chatLog, deleteChatMessage, type AwarenessState, type ChatMessage } from '@mobdaw/shared'
 import type * as Y from 'yjs'
 import { h } from '../dom'

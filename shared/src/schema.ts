@@ -130,6 +130,16 @@ export type AwarenessState = {
 }
 
 export const docName = (projectId: string) => `project:${projectId}`
+/**
+ * A project's chat lives in a document of its own, which only the project's members can open: anyone who can read
+ * the project (a public link) gets the project document, and nothing in it is private to the collaborators.
+ */
+export const chatDocName = (projectId: string) => `chat:${projectId}`
+/** The project a document belongs to, and which of its documents it is; null for any other name. */
+export function parseDocName(name: string): { projectId: string; kind: 'project' | 'chat' } | null {
+  const m = /^(project|chat):(.+)$/.exec(name)
+  return m ? { projectId: m[2], kind: m[1] as 'project' | 'chat' } : null
+}
 
 export function newId(): string {
   const b = crypto.getRandomValues(new Uint8Array(9))
@@ -155,6 +165,7 @@ export const devicesMap = (doc: Y.Doc) => doc.getMap<YM>('devices')
 export const lanesMap = (doc: Y.Doc) => doc.getMap<YM>('lanes')
 export const pointsMap = (doc: Y.Doc) => doc.getMap<YM>('points')
 export const samplesMap = (doc: Y.Doc) => doc.getMap<SampleMeta>('samples')
+/** In the chat document (chatDocName). Project documents had it too, before chat moved out: the server moves it. */
 export const chatLog = (doc: Y.Doc) => doc.getArray<ChatMessage>('chat')
 
 /** Types to pass to `new Y.UndoManager(undoScope(doc), { trackedOrigins })`. */
