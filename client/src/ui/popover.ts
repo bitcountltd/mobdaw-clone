@@ -12,14 +12,30 @@ export const closedBy = (e: Event) => closer === e
  * anchor itself that closes it also swallows the click that follows, so clicking a button again hides its menu
  * instead of re-opening it. Returns the function that closes it.
  */
+/** The menu open on each anchor, and when it opened. */
+const open = new WeakMap<HTMLElement, { close: () => void; at: number }>()
+/**
+ * How long a menu ignores presses after it opens. A quick click (a trackpad tap) can be followed within a frame or two by
+ * events of the same press, or the second press of a double click: they would close the menu as it appears (or, on its
+ * button, close it and swallow the next click so it seemed not to open at all).
+ */
+const SETTLE_MS = 180
+
 function showMenu(anchor: HTMLElement, menu: HTMLElement, at?: [x: number, y: number]) {
+  // the same button again straight away (a double click, a doubled event): the menu that just opened stays
+  const prev = open.get(anchor)
+  if (!at && prev && performance.now() - prev.at < SETTLE_MS * 2) return prev.close
+  prev?.close()
+  const opened = performance.now()
   const close = () => {
     menu.remove()
     removeEventListener('pointerdown', away, true)
     removeEventListener('keydown', esc, true)
+    if (open.get(anchor)?.close === close) open.delete(anchor)
   }
   const away = (e: Event) => {
     if (menu.contains(e.target as Node)) return
+    if (performance.now() - opened < SETTLE_MS) return
     closer = e
     close()
     if (at || (e as PointerEvent).button !== 0 || !anchor.contains(e.target as Node)) return
@@ -63,8 +79,8 @@ function showMenu(anchor: HTMLElement, menu: HTMLElement, at?: [x: number, y: nu
   addEventListener('pointerdown', away, true)
   addEventListener('keydown', esc, true)
   // a press already under way when it opened (the second half of a double click or tap) doesn't pick an entry
-  const opened = performance.now()
   menu.addEventListener('click', (e) => { if (performance.now() - opened < 250) (e.stopPropagation(), e.preventDefault()) }, true)
+  open.set(anchor, { close, at: opened })
   return close
 }
 
