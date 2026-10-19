@@ -2,7 +2,8 @@
 // a cell per step. Notes on keys with no drum row are kept, just not shown.
 //
 //   click an empty cell     add a hit (drag along the row to add more)
-//   click a hit             remove it          drag a hit up / down    its velocity
+//   click a hit             remove it (drag along the row to remove more)
+//   drag a hit up / down    its velocity
 //   alt + click a hit       cycle its velocity: full, ¾, ½, ¼
 //   click a drum's name     hear it
 //
@@ -58,6 +59,17 @@ export function drumGrid(deps: DrumGridDeps) {
     const tick = at % pattern
     return tick + stepT > pattern + 1e-6 ? null : tick
   }
+  /** The steps under the pointer from `x0` to `m`, every one in between included: a quick drag skips cells between moves. */
+  function stepsAlong(x0: number, m: { clientX: number }): number[] {
+    const w = Math.max(1, px(stepT) / 2)
+    const n = Math.ceil(Math.abs(m.clientX - x0) / w)
+    const out: number[] = []
+    for (let i = 1; i <= n; i++) {
+      const t = stepAt({ clientX: x0 + ((m.clientX - x0) * i) / n })
+      if (t != null && !out.includes(t)) out.push(t)
+    }
+    return out
+  }
   const hitsAt = (pitch: number, tick: number) => notes.filter((n) => n.pitch === pitch && n.tick >= tick && n.tick < tick + stepT)
 
   function press(e: PointerEvent, pitch: number) {
@@ -78,20 +90,37 @@ export function drumGrid(deps: DrumGridDeps) {
       return
     }
     if (here.some((n) => n.tick !== tick)) deps.status?.('this hit is off the step: click removes it, click again adds one on the step')
-    if (here.length) { // drag up / down for velocity; a plain click removes it
+    if (here.length) {
+      // The first move decides: onto another step erases along the row, up / down sets the velocity. A plain click removes it.
       const v0 = here[0].velocity
-      let moved = false
+      let mode: 'erase' | 'velocity' | null = null
+      const erased = new Set<number>()
+      const erase = (t: number) => {
+        if (erased.has(t)) return
+        erased.add(t)
+        const hits = hitsAt(pitch, t)
+        if (hits.length) doc.transact(() => hits.forEach((n) => deleteNote(doc, n.id)))
+      }
+      let lastX = e.clientX
       dragPointer(e, {
         onDrag: (m) => {
           const dy = e.clientY - m.clientY
-          if (!moved && Math.abs(dy) < 3) return
-          moved = true
+          if (!mode) {
+            if (stepsAlong(lastX, m).some((t) => t !== tick)) (mode = 'erase'), erase(tick)
+            else if (Math.abs(dy) >= 3) mode = 'velocity'
+            else return
+          }
+          if (mode === 'erase') {
+            stepsAlong(lastX, m).forEach(erase)
+            lastX = m.clientX
+            return
+          }
           const v = clampVelocity(v0 + dy / 90)
           doc.transact(() => here.forEach((n) => updateNote(doc, n.id, { velocity: v })))
           deps.status?.(`velocity ${Math.round(v * 127)}`)
         },
         onEnd: () => {
-          if (!moved) doc.transact(() => here.forEach((n) => deleteNote(doc, n.id)))
+          if (!mode) doc.transact(() => here.forEach((n) => deleteNote(doc, n.id)))
           undo.stopCapturing()
         },
       })
@@ -102,12 +131,15 @@ export function drumGrid(deps: DrumGridDeps) {
     addNote(doc, { clipId: c.id, tick, durTicks: stepT, pitch, velocity: 1 })
     deps.noteLive?.(c.trackId, pitch, 1, true)
     setTimeout(() => deps.noteLive?.(c.trackId, pitch, 1, false), 120)
+    let lastX = e.clientX
     dragPointer(e, {
       onDrag: (m) => {
-        const t = stepAt(m)
-        if (t == null || added.has(t)) return
-        added.add(t)
-        if (!hitsAt(pitch, t).length) addNote(doc, { clipId: c.id, tick: t, durTicks: stepT, pitch, velocity: 1 })
+        for (const t of stepsAlong(lastX, m)) {
+          if (added.has(t)) continue
+          added.add(t)
+          if (!hitsAt(pitch, t).length) addNote(doc, { clipId: c.id, tick: t, durTicks: stepT, pitch, velocity: 1 })
+        }
+        lastX = m.clientX
       },
       onEnd: () => undo.stopCapturing(),
     })
