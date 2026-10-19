@@ -72,6 +72,11 @@ export function drumGrid(deps: DrumGridDeps) {
   }
   const hitsAt = (pitch: number, tick: number) => notes.filter((n) => n.pitch === pitch && n.tick >= tick && n.tick < tick + stepT)
 
+  /** The hit this grid added last, and when: a second press on it straight after (a double tap or double click, or the
+   *  extra events some touch screens send) must not take it away again. */
+  let lastAdd = { pitch: -1, tick: -1, at: -Infinity }
+  const DOUBLE_MS = 400
+
   function press(e: PointerEvent, pitch: number) {
     e.stopPropagation()
     el.focus({ preventScroll: true })
@@ -81,6 +86,7 @@ export function drumGrid(deps: DrumGridDeps) {
     if (tick == null) return
     e.preventDefault()
     const here = hitsAt(pitch, tick)
+    if (here.length && lastAdd.pitch === pitch && lastAdd.tick === tick && e.timeStamp - lastAdd.at < DOUBLE_MS) return
     undo.stopCapturing()
     if (here.length && e.altKey) { // cycle the velocity
       const v = nextVelocity(here[0].velocity)
@@ -128,6 +134,7 @@ export function drumGrid(deps: DrumGridDeps) {
     }
     // add, and keep adding along the row while dragging
     const added = new Set<number>([tick])
+    lastAdd = { pitch, tick, at: e.timeStamp }
     addNote(doc, { clipId: c.id, tick, durTicks: stepT, pitch, velocity: 1 })
     deps.noteLive?.(c.trackId, pitch, 1, true)
     setTimeout(() => deps.noteLive?.(c.trackId, pitch, 1, false), 120)

@@ -122,7 +122,7 @@ export function mountRack(st: Studio) {
   kitMenu.onclick = () => {
     const id = target()
     if (!id || id === MASTER_TRACK) return
-    sectionMenu(kitMenu, [{ label: 'Replace the drums with', items: DRUM_KITS.map((k) => ({ label: k.name, hint: count(k.drums.length, 'drum'), run: pick(() => replaceDrumKit(doc, id, k)) })) }], 1)
+    sectionMenu(kitMenu, [{ label: 'Replace the drums with', items: DRUM_KITS.map((k) => ({ label: k.name, hint: count(k.drums.length, 'drum'), run: pick(() => replaceDrumKit(doc, id, k)) })) }], 2)
   }
   kitAdd.onclick = () => {
     const id = target()

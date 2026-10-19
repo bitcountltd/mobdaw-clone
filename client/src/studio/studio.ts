@@ -145,7 +145,7 @@ export class Studio {
     this.midi = new MidiRec(this)
 
     WATCHED.forEach((m) => m(this.doc).observeDeep(this.schedule))
-    s.awareness.on('change', this.schedule)
+    s.awareness.on('change', this.awarenessChanged)
     metaMap(this.doc).observe(this.rateChanged)
     this.offPeaks = onPeaks(this.schedule)
     addEventListener(EXPORT_MIDI_EVENT, this.onExportMidi) // (the export dialog's "export MIDI")
@@ -429,6 +429,16 @@ export class Studio {
   }
 
   // --- document sync
+  /**
+   * Collaborators' presence changed. Our own state (the playhead we broadcast ten times a second while playing, our
+   * selection, our drags) is nothing to re-read: refreshing on it redrew every view during playback, the drum grid's
+   * rows mid-click included.
+   */
+  private awarenessChanged = (c: { added: number[]; updated: number[]; removed: number[] }) => {
+    const me = this.s.awareness.clientID
+    if ([...c.added, ...c.updated, ...c.removed].every((id) => id === me)) return
+    this.schedule()
+  }
   private schedule = () => {
     if (!this.raf && !this.destroyed) this.raf = requestAnimationFrame(() => ((this.raf = 0), this.refresh()))
   }
@@ -499,7 +509,7 @@ export class Studio {
     this.rec.abandon()
     this.midi.abandon()
     WATCHED.forEach((m) => m(this.doc).unobserveDeep(this.schedule))
-    this.s.awareness.off('change', this.schedule)
+    this.s.awareness.off('change', this.awarenessChanged)
     metaMap(this.doc).unobserve(this.rateChanged)
     this.offPeaks()
     removeEventListener(EXPORT_MIDI_EVENT, this.onExportMidi)

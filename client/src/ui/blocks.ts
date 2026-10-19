@@ -59,12 +59,16 @@ export function dragPointer(
     pending = 0
     if (last) h.onDrag(last)
   }
+  // only the pointer that started the drag (another finger on a touch screen is its own gesture)
+  const mine = (m: PointerEvent) => m.pointerId === ev.pointerId
   const move = (m: PointerEvent) => {
+    if (!mine(m)) return
     last = m
     if (Math.abs(m.clientX - ev.clientX) > 3 || Math.abs(m.clientY - ev.clientY) > 3) moved = true
     if (!pending) pending = requestAnimationFrame(flush)
   }
-  const up = () => {
+  const up = (m: PointerEvent) => {
+    if (!mine(m)) return
     cancelAnimationFrame(pending)
     flush()
     removeEventListener('pointermove', move)

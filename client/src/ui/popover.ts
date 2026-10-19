@@ -38,14 +38,33 @@ function showMenu(anchor: HTMLElement, menu: HTMLElement, at?: [x: number, y: nu
   const m = menu.getBoundingClientRect()
   // anchored in the right half: line the menu up with the anchor's right edge instead
   let x = at ? at[0] : r.left + r.width / 2 > innerWidth / 2 ? r.right - m.width : r.left
-  let y = at ? at[1] : r.bottom + 4
   // keep it on screen, a little in from the edges (the chat sits at the right edge)
   x = Math.max(EDGE, Math.min(x, innerWidth - m.width - EDGE))
-  if (y + m.height > innerHeight - EDGE) y = Math.max(EDGE, innerHeight - m.height - EDGE)
+  let y: number
+  if (at) {
+    y = at[1]
+    if (y + m.height > innerHeight - EDGE) y = Math.max(EDGE, innerHeight - m.height - EDGE)
+  } else {
+    // below the anchor, else above it; never over it, or a second click on the anchor would land on an entry. Taller than
+    // either side: on the roomier side, scrolling.
+    const below = innerHeight - EDGE - (r.bottom + 4)
+    const above = r.top - 4 - EDGE
+    if (m.height <= below) y = r.bottom + 4
+    else if (m.height <= above) y = r.top - 4 - m.height
+    else {
+      const room = Math.max(below, above, 80)
+      menu.style.maxHeight = `${room}px`
+      menu.style.overflowY = 'auto'
+      y = below >= above ? r.bottom + 4 : r.top - 4 - room
+    }
+  }
   menu.style.left = `${x}px`
   menu.style.top = `${y}px`
   addEventListener('pointerdown', away, true)
   addEventListener('keydown', esc, true)
+  // a press already under way when it opened (the second half of a double click or tap) doesn't pick an entry
+  const opened = performance.now()
+  menu.addEventListener('click', (e) => { if (performance.now() - opened < 250) (e.stopPropagation(), e.preventDefault()) }, true)
   return close
 }
 
