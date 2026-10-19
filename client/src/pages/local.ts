@@ -2,6 +2,7 @@ import type { Me } from '@mobdaw/shared'
 import * as Y from 'yjs'
 import { CLOUD } from '../cloud'
 import { h } from '../dom'
+import { filePicker } from '../fileTypes'
 import { safeName, saveBlob } from '../download'
 import { describeError } from '../errors'
 import { listLocal, removeLocal, renameLocal, type LocalProject } from '../local/projects'
@@ -27,7 +28,7 @@ async function localPicture(id: string) {
 
 /** The file picker behind "import": opens a .mobdaw file as a new local project and lands in it. */
 export function importButton(label = 'import a project file', cls = 'btn'): HTMLElement {
-  const picker = h('input', { type: 'file', accept: `${PROJECT_FILE_EXT},application/x-mobdaw-project`, hidden: true })
+  const picker = filePicker(`${PROJECT_FILE_EXT},application/x-mobdaw-project`)
   const text = h('span', {}, label)
   const btn = h('button', { className: cls, title: `open a ${PROJECT_FILE_EXT} file as a new project on this device`, onclick: () => picker.click() }, icon('upload'), text)
   picker.onchange = async () => {

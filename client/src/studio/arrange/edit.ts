@@ -1,6 +1,7 @@
 // Arrangement editing shortcuts (registered with keys.ts): clipboard, duplicate, select all / none, nudge, and mute / solo
 // of the focused track. The doc work is in ../clipboard.ts; each edit is its own undo step.
 //   ⌘C copy   ⌘X cut   ⌘V paste (at the playhead, on the focused track)   ⌘D duplicate   ⌘A select all   esc select none
+//   Files on the system clipboard (audio or MIDI copied in Finder or the Files app) paste as clips, before copied clips.
 //   ← → nudge by a grid step (⇧: a bar)   M mute the focused track   ⇧S solo it
 import { MASTER_TRACK, clipsMap, getTracks, gridSamples, samplesPerBar, tracksMap, updateTrack } from '@mobdaw/shared'
 import {
@@ -32,7 +33,7 @@ export function registerArrangeKeys(st: Studio) {
 
   function paste() {
     const data = clipboard.get()
-    if (!data) return st.status('nothing to paste: copy some clips first')
+    if (!data) return st.status('nothing to paste: copy some clips, or audio or MIDI files')
     const ids = step(() => pasteClips(doc, data, { at: Math.round(st.position()), trackId: focused() }))
     if (!ids.length) return st.status('nothing could be pasted here (the audio is not in this project, or the tracks are gone)')
     st.select(ids)
@@ -49,7 +50,21 @@ export function registerArrangeKeys(st: Studio) {
     step(() => updateTrack(doc, id, { [field]: !tracksMap(doc).get(id)?.get(field) }))
   }
 
-  return registerKeys(st, [
+  // Pasted files: the browser's paste event carries them (from ⌘V, or the browser's paste target on touch screens). It
+  // fires right after the ⌘V keydown, so the shortcut waits a moment and pastes copied clips only if no files came.
+  let filesPastedAt = -Infinity
+  const onPaste = (e: ClipboardEvent) => {
+    const files = [...(e.clipboardData?.files ?? [])]
+    if (!files.length || st.readOnly) return
+    const t = e.target as Element | null
+    if (t?.closest?.('input, textarea, select, [contenteditable]:not(.paste-zone)')) return
+    e.preventDefault()
+    filesPastedAt = performance.now()
+    st.undo.stopCapturing()
+    void st.dropFiles(files, focused(), st.snap(Math.round(st.position())))
+  }
+  addEventListener('paste', onPaste)
+  const off = registerKeys(st, [
     { key: 'c', mods: { mod: true }, when: hasSel, run: () => {
       const d = copyClips(doc, st.ui.selection)
       clipboard.set(d)
@@ -61,7 +76,9 @@ export function registerArrangeKeys(st: Studio) {
       st.select([])
       if (d) say(d.items.length, 'cut')
     }, label: 'cut clips', group: 'Editing' },
-    { key: 'v', mods: { mod: true }, when: () => !!clipboard.get(), run: paste, label: 'paste clips at the playhead (on the selected track)', group: 'Editing' },
+    // passive, so the browser still turns the keystroke into a paste event (files on the clipboard win)
+    { key: 'v', mods: { mod: true }, passive: true, run: () => void setTimeout(() => { if (performance.now() - filesPastedAt > 250) paste() }, 0),
+      label: 'paste clips or files at the playhead (on the selected track)', group: 'Editing' },
     { key: 'd', mods: { mod: true }, when: hasSel, run: () => {
       const ids = step(() => duplicateClips(doc, editable(), st.rate))
       if (ids.length) st.select(ids)
@@ -76,6 +93,7 @@ export function registerArrangeKeys(st: Studio) {
     { key: 'm', run: () => toggleTrack('muted'), label: 'mute the selected track', group: 'Editing' },
     { key: 's', mods: { shift: true }, run: () => toggleTrack('soloed'), label: 'solo the selected track', group: 'Editing' },
   ])
+  return () => (off(), removeEventListener('paste', onPaste))
 }
 
 /** Tracks in order, for code that needs the index of one (the lanes' row moves). */

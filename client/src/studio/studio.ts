@@ -12,6 +12,7 @@ import { onPeaks } from '../audio/peaks'
 import { openPlayback, type Playback } from '../audio/playback'
 import type { Session } from '../project/session'
 import { importFile, PLAYBACK_MAX_BYTES } from '../samples'
+import { isAudioFile } from '../fileTypes'
 import { EXPORT_MIDI_EVENT, clipToSong, importSmf, isMidiFile, parseSmf, projectToSong, writeSmf } from '../content/midifile'
 import { safeName, saveBlob } from '../download'
 import { recoverTakes, sweepUnusedTakes, type TakeCtx } from '../takes'
@@ -349,9 +350,8 @@ export class Studio {
     if (trackId && tracksMap(doc).get(trackId)?.get('kind') === 'midi') trackId = null
     if (!files.length) return
     // (callers may pass everything dropped: what isn't audio is named in the status, not silently ignored)
-    const isAudio = (f: File) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac)$/i.test(f.name)
-    const skipped = files.filter((f) => !isAudio(f))
-    files = files.filter(isAudio)
+    const skipped = files.filter((f) => !isAudioFile(f))
+    files = files.filter(isAudioFile)
     const skipMsg = skipped.length === 1 ? `${skipped[0].name} isn't an audio or MIDI file.` : skipped.length ? `${skipped.length} files aren't audio or MIDI files.` : ''
     if (!files.length) return void (skipMsg && this.status(skipMsg))
     for (const f of files) {

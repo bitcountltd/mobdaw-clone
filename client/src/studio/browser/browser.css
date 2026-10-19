@@ -81,3 +81,6 @@
 /* the drawer's close button: only when the browser is a drawer (narrow screens) */
 .browser .browser-close { display: none; flex: none; }
 @media (max-width: 899px) { .browser .browser-close { display: inline-flex; } }
+/* the touch paste target (a contenteditable that never takes text): looks like the buttons around it */
+.browser-act.paste-zone { cursor: pointer; -webkit-user-select: text; user-select: text; outline: none; }
+.browser-act.paste-zone:focus { background: var(--line); color: var(--fg); box-shadow: inset 0 0 0 1px var(--accent); }

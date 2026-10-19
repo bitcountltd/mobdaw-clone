@@ -7,6 +7,7 @@ import { peaksFromBase64 } from '../../audio/probe'
 import { DRUM_KITS, EFFECT_PRESETS, INSTRUMENT_PRESETS, type InstrumentCategory } from '../../content/presets'
 import { DRUM_CATEGORIES, DRUM_SOUNDS } from '../../content/drumSounds'
 import { h } from '../../dom'
+import { filePicker, isTouch } from '../../fileTypes'
 import { iconButton, tooltip } from '../../theme/controls'
 import { icon, type IconName } from '../../theme/icons'
 import { applyDrop, canDrop, setDragPayload, type DropPayload } from '../drops'
@@ -42,8 +43,6 @@ const CATEGORY: Record<InstrumentCategory, { name: string; color: string }> = {
 const CAT_ORDER: InstrumentCategory[] = ['keys', 'bass', 'lead', 'pad', 'pluck', 'fx']
 const FOLD_KEY = 'mobdaw.browser.folded'
 
-const audioFiles = (list: FileList | null | undefined) =>
-  [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac|aif|aiff|midi?)$/i.test(f.name)) // (MIDI files too: dropFiles makes clips of them)
 const fmtDur = (s: number) => (s < 60 ? `${s.toFixed(s < 10 ? 1 : 0)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`)
 
 /** A tiny waveform from a sample's stored peaks (0..255 per bucket). */
@@ -107,15 +106,31 @@ export function mountBrowser(st: Studio) {
   const list = h('div', { className: 'browser-list', role: 'tree', 'aria-label': 'sounds and effects' })
 
   // --- footer: import audio, connect MIDI
-  const picker = h('input', { type: 'file', accept: 'audio/*,.mid,.midi,audio/midi', multiple: true, hidden: true })
+  const picker = filePicker('audio/*,.mid,.midi,audio/midi', true)
   picker.onchange = () => {
-    const files = audioFiles(picker.files)
+    const files = [...(picker.files ?? [])] // dropFiles names whatever isn't audio or MIDI
     picker.value = ''
     if (files.length) void st.dropFiles(files, null, st.snap(st.position()))
   }
   const importBtn = h('button', { className: 'browser-act', type: 'button', disabled: st.readOnly, onclick: () => picker.click() }, icon('upload', 14), 'Import audio or MIDI…')
   const midiBtn = h('button', { className: 'browser-act', type: 'button', title: 'let MIDI keyboards play the selected instrument track', onclick: () => void connectMidi(st) }, icon('piano', 14), 'Connect MIDI keyboard')
-  const foot = h('div', { className: 'browser-foot' }, importBtn, midiBtn, picker)
+  // Touch screens have no ⌘V: a spot to tap, then tap again for the system's Paste (the studio's paste listener takes
+  // the files; nothing can be typed here, and inputmode none keeps the on-screen keyboard away).
+  const pasteZone = isTouch() && !st.readOnly
+    ? h('div', { className: 'browser-act paste-zone', contentEditable: 'true', inputMode: 'none', role: 'button', spellcheck: false,
+      title: 'copy audio or MIDI files (in the Files app), then tap here and choose Paste', 'aria-label': 'paste audio or MIDI files' })
+    : null
+  if (pasteZone) {
+    const label = 'Paste audio or MIDI'
+    pasteZone.append(icon('paste', 14), h('span', {}, label))
+    const span = pasteZone.lastElementChild as HTMLElement
+    pasteZone.addEventListener('beforeinput', (e) => e.preventDefault()) // a paste target, not a text field
+    pasteZone.addEventListener('keydown', (e) => e.stopPropagation())
+    pasteZone.addEventListener('focus', () => (span.textContent = 'Tap again, then Paste'))
+    pasteZone.addEventListener('blur', () => (span.textContent = label))
+    pasteZone.addEventListener('paste', () => setTimeout(() => pasteZone.blur(), 0))
+  }
+  const foot = h('div', { className: 'browser-foot' }, importBtn, ...(pasteZone ? [pasteZone] : []), midiBtn, picker)
 
   const el = h('div', { className: 'browser' }, head, list, foot)
 

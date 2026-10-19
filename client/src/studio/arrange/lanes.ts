@@ -11,6 +11,7 @@ import { drawWave, peaksFor, storedPeaks } from '../../audio/peaks'
 import { DRUM_KITS, addDrumKit } from '../../content/presets'
 import type { PreviewMode } from '../../audio/bridge'
 import { h } from '../../dom'
+import { filePicker } from '../../fileTypes'
 import { playable } from '../../samples'
 import { discardTake, hasStaged, isMine, myTakes, uploadAll, uploadTake } from '../../takes'
 import { autoRow } from '../../ui/automation'
@@ -47,9 +48,6 @@ const FADE_SHAPES = ['equal power', 'linear', 's-curve'] as const
 const fadeGain = (t: number, shape: number) => (shape === 1 ? t : shape === 2 ? (1 - Math.cos(Math.PI * t)) / 2 : Math.sin((t * Math.PI) / 2))
 
 const accepts = (trackKind: string, clipKind: string) => trackKind === clipKind
-export const audioFiles = (list: FileList | null | undefined) =>
-  [...(list ?? [])].filter((f) => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|m4a|aac|midi?)$/i.test(f.name)) // (and MIDI files: dropFiles makes clips of them)
-
 /** A scope's automation: one collapsible section holding a lane per automated param (hidden when there are none). */
 type AutoSec = { el: HTMLElement; toggle: HTMLButtonElement; box: HTMLElement; rows: Map<string, ReturnType<typeof autoRow>> }
 type Lane = {
@@ -118,9 +116,9 @@ export function mountLanes(st: Studio, frame: LanesFrame, headers: ReturnType<ty
   const laneBox = h('div', { className: 'lanes' })
   // Background menu "Upload": files go into the clicked track at the clicked position.
   let bgTarget: { trackId: string; at: number } | null = null
-  const bgPicker = h('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true })
+  const bgPicker = filePicker('audio/*', true)
   bgPicker.onchange = () => {
-    const files = audioFiles(bgPicker.files)
+    const files = [...(bgPicker.files ?? [])] // dropFiles names whatever isn't audio
     bgPicker.value = ''
     if (bgTarget && files.length) void st.dropFiles(files, bgTarget.trackId, bgTarget.at)
   }
